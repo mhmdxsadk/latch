@@ -86,7 +86,7 @@ Releases are cut with [Release Please](https://github.com/googleapis/release-ple
 and published with [GoReleaser](https://goreleaser.com): `linux` and `darwin`
 binaries for `amd64` and `arm64`, with checksums, SBOMs, cosign signatures and
 build-provenance attestations. A multi-arch container image is published to
-`ghcr.io/<owner>/latch`, but the recommended deployment is the native binary
+`ghcr.io/mhmdxsadk/latch`, but the recommended deployment is the native binary
 under systemd.
 
 ## License
