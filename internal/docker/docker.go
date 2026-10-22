@@ -32,8 +32,12 @@ const (
 	baseURL        = "http://docker"
 )
 
-// containerName mirrors the pattern enforced by config.
-var containerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+var (
+	// containerName mirrors the pattern enforced by config.
+	containerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+	// containerID is a full Docker container ID.
+	containerID = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
 
 // Health is the container health-check state.
 type Health struct {
@@ -174,6 +178,8 @@ func (e *Engine) Ping(ctx context.Context) error {
 
 // inspect is the only part of the inspect document that is ever decoded.
 type inspect struct {
+	ID    string `json:"Id"`
+	Name  string
 	State struct {
 		Status     string
 		Running    bool
@@ -213,6 +219,15 @@ func (e *Engine) inspect(ctx context.Context, name string) (inspect, error) {
 	defer resp.Body.Close()
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxInspectBody)).Decode(&in); err != nil {
 		return in, errors.New("docker: malformed inspect response")
+	}
+	// Docker also resolves a name as an ID prefix, so if the configured
+	// container is gone an unrelated container whose ID happens to start with
+	// the name would answer. Accept only an exact name or full-ID match.
+	if in.Name != "/"+name && in.ID != name {
+		return inspect{}, ErrNotFound
+	}
+	if !containerID.MatchString(in.ID) {
+		return inspect{}, errors.New("docker: malformed inspect response")
 	}
 	return in, nil
 }

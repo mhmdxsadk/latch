@@ -15,10 +15,13 @@ import (
 )
 
 const (
-	maxLines     = 1000
-	maxLogBytes  = 262144
-	maxFrame     = 1 << 20 // largest accepted multiplexed frame
-	maxLogSource = 8 << 20 // most bytes ever read from a logs body
+	maxLines    = 1000
+	maxLogBytes = 262144
+	maxFrame    = 1 << 20 // largest accepted multiplexed frame
+	// maxLogSource bounds the bytes read from a logs body. Memory does not
+	// grow with it (the collector keeps only the newest lines within
+	// maxBytes); it only bounds work when lines are pathologically long.
+	maxLogSource = 64 << 20
 )
 
 // csi matches ANSI CSI escape sequences.
@@ -34,11 +37,10 @@ func (e *Engine) Logs(ctx context.Context, container string, lines, maxBytes int
 	if err != nil {
 		return Logs{}, err
 	}
-	path, err := containerPath(container, "logs")
-	if err != nil {
-		return Logs{}, err
-	}
-	resp, cancel, err := e.get(ctx, path, fmt.Sprintf("stdout=1&stderr=1&timestamps=1&tail=%d", lines))
+	// Fetch by the verified full ID so a container recreated under the same
+	// name between the two requests cannot answer.
+	resp, cancel, err := e.get(ctx, "/containers/"+in.ID+"/logs",
+		fmt.Sprintf("stdout=1&stderr=1&timestamps=1&tail=%d", lines))
 	if err != nil {
 		return Logs{}, err
 	}
@@ -46,26 +48,33 @@ func (e *Engine) Logs(ctx context.Context, container string, lines, maxBytes int
 	defer resp.Body.Close()
 
 	src := &io.LimitedReader{R: resp.Body, N: maxLogSource}
-	var c collector
+	c := newCollector(lines, maxBytes)
 	if in.Config.Tty {
-		data, err := io.ReadAll(src)
-		if err != nil && src.N > 0 {
-			return Logs{}, errors.New("docker: reading logs failed")
+		buf := make([]byte, 32<<10)
+		for {
+			n, err := src.Read(buf)
+			c.add("tty", buf[:n], false)
+			if err != nil {
+				if err := readEnd(src, err); err != nil {
+					return Logs{}, err
+				}
+				break
+			}
 		}
-		c.add("tty", data)
-	} else if err := demux(src, &c); err != nil {
+	} else if err := demux(src, c); err != nil {
 		return Logs{}, err
 	}
-	c.flush()
-	out := bound(c.entries, lines, maxBytes)
-	out.Truncated = out.Truncated || src.N == 0
-	return out, nil
+	if src.N == 0 {
+		c.truncated = true
+	}
+	return c.result(), nil
 }
 
 // demux reads Docker's multiplexed stream (8-byte header per frame) into c.
 // Hitting the read cap ends the stream quietly; the caller marks truncation.
 func demux(src *io.LimitedReader, c *collector) error {
 	var hdr [8]byte
+	buf := make([]byte, 0, 32<<10)
 	for {
 		if _, err := io.ReadFull(src, hdr[:]); err != nil {
 			return readEnd(src, err)
@@ -74,7 +83,10 @@ func demux(src *io.LimitedReader, c *collector) error {
 		if size > maxFrame {
 			return errors.New("docker: oversized log frame")
 		}
-		buf := make([]byte, size)
+		if cap(buf) < int(size) {
+			buf = make([]byte, size)
+		}
+		buf = buf[:size]
 		if _, err := io.ReadFull(src, buf); err != nil {
 			if errors.Is(err, io.EOF) {
 				err = io.ErrUnexpectedEOF // EOF inside a frame is never clean
@@ -84,9 +96,9 @@ func demux(src *io.LimitedReader, c *collector) error {
 		switch hdr[0] {
 		case 0: // stdin: ignore
 		case 1:
-			c.add("stdout", buf)
+			c.add("stdout", buf, true)
 		case 2:
-			c.add("stderr", buf)
+			c.add("stderr", buf, true)
 		default:
 			return errors.New("docker: unknown log stream type")
 		}
@@ -102,91 +114,128 @@ func readEnd(src *io.LimitedReader, err error) error {
 	return errors.New("docker: reading logs failed")
 }
 
-// collector splits per-stream bytes into sanitized entries; a line may span frames.
+// partial is an unterminated line of one stream.
+type partial struct {
+	time string
+	buf  []byte // raw text after the timestamp; at most ~2*maxBytes
+	open bool   // a line has started
+}
+
+// collector turns stream bytes into sanitized entries, keeping only the
+// newest entries that fit within lines and maxBytes. Memory is bounded by
+// those limits regardless of how much the daemon sends.
 type collector struct {
-	pending map[string][]byte
-	entries []LogEntry
+	lines, maxBytes int
+	pending         map[string]*partial
+	entries         []LogEntry
+	total           int
+	truncated       bool
 }
 
-func (c *collector) add(stream string, data []byte) {
-	if c.pending == nil {
-		c.pending = map[string][]byte{}
+func newCollector(lines, maxBytes int) *collector {
+	return &collector{lines: lines, maxBytes: maxBytes, pending: map[string]*partial{}}
+}
+
+// add consumes one chunk of a stream. framed is true for multiplexed
+// streams, where Docker splits long lines into frames that each repeat the
+// timestamp; the repeat is dropped when continuing a line.
+func (c *collector) add(stream string, data []byte, framed bool) {
+	p := c.pending[stream]
+	if p == nil {
+		p = &partial{}
+		c.pending[stream] = p
 	}
-	buf := append(c.pending[stream], data...)
-	for {
-		i := bytes.IndexByte(buf, '\n')
+	if framed && p.open {
+		if _, rest, ok := cutTimestamp(data); ok {
+			data = rest
+		}
+	}
+	for len(data) > 0 {
+		i := bytes.IndexByte(data, '\n')
+		seg := data
+		if i >= 0 {
+			seg = data[:i]
+		}
+		if !p.open {
+			p.open = true
+			if ts, rest, ok := cutTimestamp(seg); ok {
+				p.time, seg = ts, rest
+			}
+		}
+		c.appendBounded(p, seg)
 		if i < 0 {
-			break
+			return
 		}
-		c.entries = append(c.entries, parseLine(stream, buf[:i]))
-		buf = buf[i+1:]
+		c.emit(stream, p)
+		data = data[i+1:]
 	}
-	c.pending[stream] = append([]byte(nil), buf...)
 }
 
-// flush emits any unterminated trailing lines.
-func (c *collector) flush() {
+// appendBounded appends to the pending line, keeping only its last maxBytes
+// (compacting occasionally so the cost stays linear).
+func (c *collector) appendBounded(p *partial, seg []byte) {
+	p.buf = append(p.buf, seg...)
+	if len(p.buf) > 2*c.maxBytes {
+		p.buf = append(p.buf[:0:0], p.buf[len(p.buf)-c.maxBytes:]...)
+		c.truncated = true
+	}
+}
+
+func (c *collector) emit(stream string, p *partial) {
+	text := strings.TrimSuffix(string(p.buf), "\r")
+	if len(text) > c.maxBytes {
+		text = tailBytes(text, c.maxBytes)
+		c.truncated = true
+	}
+	text = sanitize(text)
+	if len(text) > c.maxBytes { // replacement characters can grow the text
+		text = tailBytes(text, c.maxBytes)
+	}
+	c.entries = append(c.entries, LogEntry{Stream: stream, Time: p.time, Text: text})
+	c.total += len(text)
+	*p = partial{buf: p.buf[:0]}
+	for len(c.entries) > 1 && (len(c.entries) > c.lines || c.total > c.maxBytes) {
+		c.total -= len(c.entries[0].Text)
+		c.entries = c.entries[1:]
+		c.truncated = true
+	}
+}
+
+// result flushes unterminated lines and returns the bounded entries.
+func (c *collector) result() Logs {
 	for _, s := range []string{"tty", "stdout", "stderr"} {
-		if b := c.pending[s]; len(b) > 0 {
-			c.entries = append(c.entries, parseLine(s, b))
-		}
-		delete(c.pending, s)
-	}
-}
-
-// parseLine splits "<RFC3339Nano> <text>" and sanitizes the text.
-func parseLine(stream string, line []byte) LogEntry {
-	s := strings.TrimSuffix(string(line), "\r")
-	e := LogEntry{Stream: stream}
-	if ts, rest, ok := strings.Cut(s, " "); ok {
-		if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-			e.Time = t.UTC().Format(time.RFC3339Nano)
-			s = rest
+		if p := c.pending[s]; p != nil && p.open {
+			c.emit(s, p)
 		}
 	}
-	e.Text = sanitize(s)
-	return e
+	return Logs{Entries: append([]LogEntry{}, c.entries...), Truncated: c.truncated}
 }
 
-// sanitize makes s valid UTF-8 and removes escape sequences and control
-// characters other than tab.
+// cutTimestamp splits a leading "<RFC3339Nano> " and returns it normalized.
+func cutTimestamp(b []byte) (string, []byte, bool) {
+	i := bytes.IndexByte(b, ' ')
+	if i < 0 || i > 40 {
+		return "", b, false
+	}
+	t, err := time.Parse(time.RFC3339Nano, string(b[:i]))
+	if err != nil {
+		return "", b, false
+	}
+	return t.UTC().Format(time.RFC3339Nano), b[i+1:], true
+}
+
+// sanitize makes s valid UTF-8 and removes escape sequences, control
+// characters other than tab, and invisible format characters (bidi
+// overrides, zero-width characters) that could disguise the text.
 func sanitize(s string) string {
 	s = strings.ToValidUTF8(s, "�")
 	s = csi.ReplaceAllString(s, "")
 	return strings.Map(func(r rune) rune {
-		if r != '\t' && unicode.IsControl(r) {
+		if r != '\t' && (unicode.IsControl(r) || unicode.Is(unicode.Cf, r)) {
 			return -1
 		}
 		return r
 	}, s)
-}
-
-// bound keeps the newest entries within lines and maxBytes of text.
-func bound(all []LogEntry, lines, maxBytes int) Logs {
-	out := Logs{Entries: []LogEntry{}}
-	if len(all) > lines {
-		all = all[len(all)-lines:]
-		out.Truncated = true
-	}
-	total := 0
-	var kept []LogEntry
-	for i := len(all) - 1; i >= 0; i-- {
-		e := all[i]
-		if total+len(e.Text) > maxBytes {
-			out.Truncated = true
-			if len(kept) == 0 {
-				e.Text = tailBytes(e.Text, maxBytes)
-				kept = append(kept, e)
-			}
-			break
-		}
-		total += len(e.Text)
-		kept = append(kept, e)
-	}
-	for i := len(kept) - 1; i >= 0; i-- {
-		out.Entries = append(out.Entries, kept[i])
-	}
-	return out
 }
 
 // tailBytes returns the last n bytes of s, starting on a UTF-8 boundary.

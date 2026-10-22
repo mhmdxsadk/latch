@@ -5,19 +5,24 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
+const testID = "4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a"
+
 const inspectFixture = `{
-  "Id": "abc123",
+  "Id": "4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a",
+  "Name": "/web",
   "Path": "/bin/secret-tool",
   "Args": ["--token=hunter2"],
   "RestartCount": 3,
@@ -80,8 +85,8 @@ func newFake(t *testing.T, h http.HandlerFunc) (*Engine, *recorder) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec.add(r)
 		ok := r.Method == http.MethodGet &&
-			(r.URL.Path == "/_ping" || strings.HasPrefix(r.URL.Path, "/containers/web") &&
-				(strings.HasSuffix(r.URL.Path, "/json") || strings.HasSuffix(r.URL.Path, "/logs")))
+			(r.URL.Path == "/_ping" || r.URL.Path == "/containers/web/json" ||
+				r.URL.Path == "/containers/"+testID+"/logs")
 		if !ok {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL)
 		}
@@ -179,7 +184,8 @@ func TestStatusHealthAndTimes(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(tc.state)) })
+			body := `{"Id":"` + testID + `","Name":"/web",` + tc.state[1:]
+			e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) })
 			got, err := e.Status(context.Background(), "web")
 			if err != nil {
 				t.Fatal(err)
@@ -310,7 +316,7 @@ func TestLogsRequestShape(t *testing.T) {
 	}
 	r := rec.reqs[1]
 	q := r.URL.Query()
-	if r.Method != http.MethodGet || r.URL.Path != "/containers/web/logs" {
+	if r.Method != http.MethodGet || r.URL.Path != "/containers/"+testID+"/logs" {
 		t.Errorf("bad request %s %s", r.Method, r.URL.Path)
 	}
 	if q.Get("tail") != "42" || q.Get("timestamps") != "1" || q.Get("stdout") != "1" || q.Get("stderr") != "1" {
@@ -637,5 +643,85 @@ func TestUnixSocket(t *testing.T) {
 	}
 	if err := NewEngine(filepath.Join(dir, "missing.sock")).Ping(context.Background()); err == nil {
 		t.Error("expected dial error")
+	}
+}
+
+// Docker resolves names as ID prefixes too; an inspect answer for any other
+// container must be treated as not found, and nothing else fetched.
+func TestInspectMustMatchConfiguredName(t *testing.T) {
+	for _, body := range []string{
+		strings.Replace(fixture(false), `"/web"`, `"/webapp-other"`, 1),
+		strings.Replace(fixture(false), `"Name": "/web",`, ``, 1),
+	} {
+		e, rec := newFake(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) })
+		if _, err := e.Status(context.Background(), "web"); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Status err = %v", err)
+		}
+		if _, err := e.Logs(context.Background(), "web", 10, 100); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Logs err = %v", err)
+		}
+		if rec.count() != 2 {
+			t.Errorf("requests = %d; logs must not be fetched after a mismatch", rec.count())
+		}
+	}
+	bad := strings.Replace(fixture(false), testID, "../../x", 1)
+	e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(bad)) })
+	if _, err := e.Logs(context.Background(), "web", 10, 100); err == nil {
+		t.Error("malformed ID accepted")
+	}
+}
+
+// When the stream exceeds the byte budget, the newest lines are returned.
+func TestLogsKeepsNewestOfLargeStream(t *testing.T) {
+	var body []byte
+	for i := range 1000 {
+		line := fmt.Sprintf("2024-05-01T10:00:00Z %04d %s\n", i, strings.Repeat("x", 16<<10))
+		body = append(body, frame(1, line)...)
+	}
+	e, _ := logServer(t, false, body)
+	got, err := e.Logs(context.Background(), "web", 1000, 64<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := got.Entries[len(got.Entries)-1].Text
+	if !got.Truncated || !strings.HasPrefix(last, "0999 ") {
+		t.Errorf("truncated=%v last=%.10q", got.Truncated, last)
+	}
+}
+
+// Docker splits long lines into frames that each repeat the timestamp.
+func TestLogsContinuationTimestampsDropped(t *testing.T) {
+	body := cat(frame(1, "2024-05-01T10:00:00Z abc"), frame(1, "2024-05-01T10:00:00Z def\n"))
+	e, _ := logServer(t, false, body)
+	got, err := e.Logs(context.Background(), "web", 10, 100)
+	if err != nil || len(got.Entries) != 1 || got.Entries[0].Text != "abcdef" {
+		t.Errorf("got %+v %v", got, err)
+	}
+}
+
+func TestLogsLongLineMemoryBounded(t *testing.T) {
+	chunk := frame(1, strings.Repeat("y", 16<<10))
+	var body []byte
+	for range 1024 { // one 16 MiB line without a newline
+		body = append(body, chunk...)
+	}
+	e, _ := logServer(t, false, body)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got, err := e.Logs(context.Background(), "web", 10, 1000)
+	runtime.ReadMemStats(&after)
+	if err != nil || len(got.Entries) != 1 || len(got.Entries[0].Text) != 1000 || !got.Truncated {
+		t.Fatalf("got %d entries, %v", len(got.Entries), err)
+	}
+	// The test server and transport allocate too; the old quadratic
+	// collector allocated gigabytes here.
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 256<<20 {
+		t.Errorf("allocated %d MiB", alloc>>20)
+	}
+}
+
+func TestSanitizeStripsFormatCharacters(t *testing.T) {
+	if got := sanitize("safe\u202etxt.exe\u200b!"); got != "safetxt.exe!" {
+		t.Errorf("got %q", got)
 	}
 }
