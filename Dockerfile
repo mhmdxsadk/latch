@@ -13,9 +13,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/latch /usr/local/bin/latch
-# NOTE: the container image is provided for convenience. The recommended
-# deployment is the native binary under systemd (see packaging/systemd). Never
-# mount the Docker socket into an AI agent's container.
+# NOTE: never mount the Docker socket into an AI agent's container.
 USER nonroot
 ENTRYPOINT ["/usr/local/bin/latch"]
 CMD ["serve", "--config", "/etc/latch/config.yaml"]

@@ -69,10 +69,10 @@ The agent connects to `./run/latch.sock`. The Docker socket is mounted into the
 Latch container only, never into the agent. Disk paths in the config are resolved
 inside the container, so mount any host paths you want monitored.
 
-For production, run the native binary under systemd instead: download the archive
-for your platform from the
-[releases page](https://github.com/mhmdxsadk/latch/releases) and see
-[`packaging/systemd/latch.service`](packaging/systemd/latch.service). The `latch`
+Prefer a native install? Download the archive for your platform from the
+[releases page](https://github.com/mhmdxsadk/latch/releases) and run it under
+systemd with [`packaging/systemd/latch.service`](packaging/systemd/latch.service).
+This gives Latch direct access to the host without extra mounts. The `latch`
 user must belong to `server.socket_group` so it can assign that group to the
 socket, and the agent's user must belong to it to connect. `latch validate` and
 `latch doctor` check the config and host capabilities.
@@ -111,8 +111,7 @@ Releases are cut with [Release Please](https://github.com/googleapis/release-ple
 and published with [GoReleaser](https://goreleaser.com): `linux` and `darwin`
 binaries for `amd64` and `arm64`, with checksums, SBOMs, cosign signatures and
 build-provenance attestations. A multi-arch container image is published to
-`ghcr.io/mhmdxsadk/latch`, but the recommended deployment is the native binary
-under systemd.
+`ghcr.io/mhmdxsadk/latch`.
 
 ## License
 
