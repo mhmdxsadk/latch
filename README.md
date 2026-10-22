@@ -23,9 +23,9 @@ The agent is untrusted. Latch is the policy enforcement boundary.
 ### Do not give your agent the Docker socket
 
 Anything that can reach `/var/run/docker.sock` can start a privileged container
-and become root on the host. If your agent (or its container) has the Docker
-socket, Latch protects nothing. Only the Latch process should reach Docker, and
-the agent should only reach Latch's socket.
+and become root on the host. If your agent has the Docker socket, Latch protects
+nothing. Only the Latch process should reach Docker, and the agent should only
+reach Latch's socket.
 
 Latch itself holds that privilege, so keep its configuration minimal and review
 changes carefully. The hardening in the provided systemd unit limits collateral
@@ -40,8 +40,7 @@ Latch is pre-release (v0.x) and read-only. Currently available:
 
 ## Quick start
 
-The recommended deployment is the native binary under systemd, which gives Latch
-direct access to the host. On Linux with systemd:
+Latch runs as a native binary under systemd. On Linux with systemd:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mhmdxsadk/latch/main/scripts/install.sh | sudo sh -s -- --agent-user <agent-user>
@@ -63,28 +62,6 @@ sudo systemctl enable --now latch
 ```
 
 The agent connects to `/run/latch/latch.sock`.
-
-### Docker
-
-A multi-arch image is published to GHCR if you would rather run Latch in a
-container. Copy [`config/example.yaml`](config/example.yaml) to `latch.yaml`, set
-`allowed_uids` to your user ID (`id -u`) and `socket_group` to `""`, and run it
-as your own user so the socket is owned by you:
-
-```sh
-mkdir -p run
-docker run -d --name latch --restart unless-stopped \
-  --user "$(id -u)" \
-  --group-add "$(stat -c %g /var/run/docker.sock)" \
-  -v "$PWD/latch.yaml:/etc/latch/config.yaml:ro" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$PWD/run:/run/latch" \
-  ghcr.io/mhmdxsadk/latch
-```
-
-The agent connects to `./run/latch.sock`. The Docker socket is mounted into the
-Latch container only, never into the agent. Disk paths in the config are resolved
-inside the container, so mount any host paths you want monitored.
 
 ### Configuration
 
@@ -121,9 +98,7 @@ spawns Latch, so there is no privilege separation, and Latch prints a warning.
 Releases are cut with [Release Please](https://github.com/googleapis/release-please)
 and published with [GoReleaser](https://goreleaser.com): `linux` and `darwin`
 binaries for `amd64` and `arm64`, with checksums, SBOMs, cosign signatures and
-build-provenance attestations. A multi-arch container image is published to
-`ghcr.io/mhmdxsadk/latch`, but the recommended deployment is the native binary
-under systemd.
+build-provenance attestations.
 
 ## License
 
