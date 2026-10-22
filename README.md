@@ -1,61 +1,72 @@
 # Latch
 
-**A least-privilege, read-only infrastructure interface for AI agents.**
+**Securely lets AI agents monitor and manage your servers without giving them unrestricted access.**
 
-Latch sits between an AI agent and the Linux server it helps operate. The agent
-talks to Latch over [MCP](https://modelcontextprotocol.io); Latch decides what
-the agent may see and does the actual work. Latch contains no LLM and no
-reasoning. It is the security boundary, not the brain.
+Latch sits between an AI agent and a Linux server. The agent talks to Latch over
+[MCP](https://modelcontextprotocol.io), and Latch decides what the agent may see
+and do. It contains no LLM and no reasoning: it is the security boundary, not the
+brain.
 
-```
-AI agent ──MCP over Unix socket──▶ Latch ──▶ Docker, systemd, host, network
-   ▲                                │
-   └────── never gets the Docker socket, a shell, or arbitrary file access
-```
+## How it works
 
-> **Status: pre-release (v0.x).** Read-only only. See [Status](#status).
+The agent is untrusted. Latch is the policy enforcement boundary.
 
-## Trust model
-
-> **The AI agent is untrusted. Latch is the trusted policy enforcement boundary.**
-
-- Every tool argument is treated as hostile input.
-- An agent can only name resources the operator listed in the config. It cannot
-  supply commands, container IDs, unit names, file paths or URLs of its own.
-- The configuration file declares *which resources* are visible. It has no way
-  to express a command or argument; unknown keys are rejected.
-- Requests that fail validation or policy fail closed, and error messages never
-  echo untrusted input or leak details from the underlying integrations.
+- The operator lists the resources the agent may touch (Docker services, systemd
+  units, disks, HTTP targets, DNS names) in a config file.
+- The agent can only refer to those resources by name. It cannot supply commands,
+  container IDs, unit names, file paths or URLs of its own.
+- The config cannot express a command or argument, and unknown keys are rejected.
+- Every tool argument is treated as hostile input. Invalid or disallowed requests
+  fail closed, and error messages never echo input or leak integration details.
 - Every call is written to a structured audit log.
 
-### Do not mount the Docker socket into your agent
+### Do not give your agent the Docker socket
 
-Anything that can talk to `/var/run/docker.sock` can start a privileged
-container and become root on the host. **If you give your agent (or its
-container) the Docker socket, Latch protects nothing.** Only the Latch process
-should be able to reach the Docker daemon, and the agent should only be able to
-reach Latch's socket:
+Anything that can reach `/var/run/docker.sock` can start a privileged container
+and become root on the host. If your agent (or its container) has the Docker
+socket, Latch protects nothing. Only the Latch process should reach Docker, and
+the agent should only reach Latch's socket.
 
+Latch itself holds that privilege, so keep its configuration minimal and review
+changes carefully. The hardening in the provided systemd unit limits collateral
+damage but does not replace Latch's narrow API and allowlists. See
+[SECURITY.md](SECURITY.md).
+
+## Tools
+
+Latch is pre-release (v0.x) and read-only. Currently available:
+
+- `list_resources`: the resources the operator has exposed
+- `host_load`, `host_memory`, `host_disk`: host metrics
+
+## Quick start
+
+```sh
+go build -o latch ./cmd/latch
+cp config/example.yaml latch.yaml        # edit allowed_uids/gids and resources
+./latch validate --config latch.yaml     # check the config
+./latch doctor   --config latch.yaml     # check host capabilities
+./latch serve    --config latch.yaml     # listen on server.socket
 ```
-AI agent ──▶ Latch ──▶ Docker socket     ✅
-AI agent ──✖──────────▶ Docker socket    ❌ (this defeats the purpose of Latch)
-```
 
-Because Latch itself holds that privilege, treat it as highly privileged
-software: keep the configuration minimal and review changes carefully.
-Hardening in the provided systemd unit limits collateral damage but is **not** a
-substitute for Latch's narrow API and allowlists. See [SECURITY.md](SECURITY.md).
+See [`config/example.yaml`](config/example.yaml) for all options. HTTP and DNS
+checks use fixed, pre-configured targets (the agent supplies only a name), which
+avoids SSRF. HTTP targets that resolve to loopback or private ranges require an
+explicit `allow_private: true`.
 
-## Transport
+For a systemd deployment, see [`packaging/systemd/latch.service`](packaging/systemd/latch.service).
+The `latch` user must belong to `server.socket_group` so it can assign that group
+to the socket, and the agent's user must belong to it to connect.
 
-| Mode | Use | Notes |
-|---|---|---|
-| Unix socket (default) | Production | Streamable HTTP at `/mcp` on a socket with mode `0660`, a dedicated group, and kernel-verified peer credentials (`SO_PEERCRED`) checked against `allowed_uids` / `allowed_gids`. A peer matching neither is disconnected. |
-| `--stdio` | Development and tests | The client spawns Latch, so Latch runs with the client's privileges and provides **no** privilege separation. A warning is printed. |
+## Connecting an agent
+
+By default Latch serves MCP over Streamable HTTP at `/mcp` on a Unix socket. The
+socket is mode `0660` with a dedicated group, and each connection's peer
+credentials (`SO_PEERCRED`) are checked against `allowed_uids` and `allowed_gids`.
+A peer matching neither is disconnected.
 
 [Docker Agent](https://docs.docker.com/ai/docker-agent/features/remote-mcp/)
-supports `unix://` remote MCP servers over the `streamable` transport, so no
-bridge is needed:
+can connect directly:
 
 ```yaml
 toolsets:
@@ -65,61 +76,19 @@ toolsets:
       transport_type: "streamable"
 ```
 
-The server answers on the endpoint path `/mcp`. If a client's `unix://` support
-does not default to that path, point it there explicitly; a stdio bridge
-(`latch connect`) may be added later if a client turns out to need one.
+If your client does not default to the `/mcp` path, set it explicitly.
 
-## Quick start
-
-```sh
-go build -o latch ./cmd/latch
-cp config/example.yaml latch.yaml        # edit: allowed_uids/gids, resources
-./latch validate --config latch.yaml     # check config without starting
-./latch doctor   --config latch.yaml     # check host capabilities
-./latch serve    --config latch.yaml     # listen on server.socket
-./latch serve    --config latch.yaml --stdio   # dev only
-```
-
-For a systemd deployment see [`packaging/systemd/latch.service`](packaging/systemd/latch.service).
-The `latch` user must belong to `server.socket_group` so it may assign that
-group to the socket, and the agent's user must belong to it to connect.
-
-## Configuration
-
-See [`config/example.yaml`](config/example.yaml). It lists named Docker
-services, systemd units, disks, HTTP targets and DNS names. HTTP and DNS checks
-use fixed, pre-configured targets: the agent supplies only a name, which avoids
-SSRF. HTTP targets that resolve to loopback/private ranges require an explicit
-`allow_private: true`.
-
-## Status
-
-Implemented today:
-
-- Configuration loading and strict validation, policy/allowlist resolution
-- Audit logging, Unix socket server with peer-credential enforcement, stdio mode
-- Tools: `list_resources`, `host_load`, `host_memory`, `host_disk`
-- `latch serve | validate | doctor | version`
-- CI, CodeQL, Dependabot, Release Please, GoReleaser, GHCR image workflows
-
-Planned for v0.1 (configuration is already accepted, tools are not yet exposed):
-
-- Docker service list/status/health and bounded logs
-- systemd unit status
-- HTTP and DNS health checks
-
-Deliberately out of scope for v0.1: any mutation or remediation, `docker exec`,
-arbitrary file access, shell access.
+`latch serve --stdio` is available for development and tests only. The client
+spawns Latch, so there is no privilege separation, and Latch prints a warning.
 
 ## Releases
 
-Conventional Commits drive [Release Please](https://github.com/googleapis/release-please);
-merging its release PR tags `vX.Y.Z`. [GoReleaser](https://goreleaser.com) then
-publishes `linux`/`darwin` × `amd64`/`arm64` archives with SHA-256 checksums,
-SBOMs, a keyless cosign signature and GitHub build-provenance attestations. A
-multi-arch image is pushed to `ghcr.io/<owner>/latch` as `X.Y.Z`, `X.Y`, `X` and
-`latest`. The container image is a convenience; the recommended deployment is
-the native binary under systemd.
+Releases are cut with [Release Please](https://github.com/googleapis/release-please)
+and published with [GoReleaser](https://goreleaser.com): `linux` and `darwin`
+binaries for `amd64` and `arm64`, with checksums, SBOMs, cosign signatures and
+build-provenance attestations. A multi-arch container image is published to
+`ghcr.io/<owner>/latch`, but the recommended deployment is the native binary
+under systemd.
 
 ## License
 

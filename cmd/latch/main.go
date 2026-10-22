@@ -1,5 +1,5 @@
-// Command latch is a least-privilege, read-only infrastructure interface for
-// AI agents. See README.md for the trust model.
+// Command latch securely lets AI agents monitor and manage servers without
+// giving them unrestricted access. See README.md for the trust model.
 package main
 
 import (
