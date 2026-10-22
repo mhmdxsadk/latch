@@ -14,8 +14,8 @@ The agent is untrusted. Latch is the policy enforcement boundary.
 - The operator lists the resources the agent may touch (Docker services, systemd
   units, disks, HTTP targets, DNS names) in a config file.
 - The agent can only refer to those resources by name. It cannot supply commands,
-  container IDs, unit names, file paths or URLs of its own.
-- The config cannot express a command or argument, and unknown keys are rejected.
+  container IDs, unit names, file paths or URLs of its own, and the config cannot
+  express a command or argument.
 - Every tool argument is treated as hostile input. Invalid or disallowed requests
   fail closed, and error messages never echo input or leak integration details.
 - Every call is written to a structured audit log.
@@ -27,10 +27,6 @@ and become root on the host. If your agent has the Docker socket, Latch protects
 nothing. Only the Latch process should reach Docker, and the agent should only
 reach Latch's socket.
 
-Latch itself holds that privilege, so keep its configuration minimal and review
-changes carefully. The hardening in the provided systemd unit limits collateral
-damage but does not replace Latch's narrow API and allowlists.
-
 ## Tools
 
 Latch is pre-release (v0.x) and read-only. Currently available:
@@ -40,20 +36,19 @@ Latch is pre-release (v0.x) and read-only. Currently available:
 
 ## Quick start
 
-Latch runs as a native binary under systemd. On Linux with systemd:
+Latch runs as a native binary under systemd on Linux:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mhmdxsadk/latch/main/scripts/install.sh | sudo sh -s -- --agent-user <agent-user>
 ```
 
-The script downloads the latest release, verifies its SHA-256 checksum (and its
-cosign signature if `cosign` is installed), installs the binary and systemd
-unit, creates the `latch` user and the `latch-clients` socket group, adds your
-agent's user to that group, and writes an example config. It does not start the
-service. Pin a release with `--version X.Y.Z`. Re-running it upgrades Latch and
-keeps your config.
+The script verifies the download, installs Latch under systemd, and writes an
+example config. It does not start the service. Pin a release with
+`--version X.Y.Z`. Re-run it to upgrade; your config is kept.
 
-Then list the resources the agent may see, validate, and start:
+Then list the resources the agent may see in `/etc/latch/config.yaml` (see
+[`config/example.yaml`](config/example.yaml) for all options), validate, and
+start:
 
 ```sh
 sudo nano /etc/latch/config.yaml
@@ -61,21 +56,10 @@ sudo -u latch latch validate --config /etc/latch/config.yaml
 sudo systemctl enable --now latch
 ```
 
-The agent connects to `/run/latch/latch.sock`.
-
-### Configuration
-
-See [`config/example.yaml`](config/example.yaml) for all options. HTTP and DNS
-checks use fixed, pre-configured targets (the agent supplies only a name), which
-avoids SSRF. HTTP targets that resolve to loopback or private ranges require an
-explicit `allow_private: true`.
-
 ## Connecting an agent
 
-By default Latch serves MCP over Streamable HTTP at `/mcp` on a Unix socket. The
-socket is mode `0660` with a dedicated group, and each connection's peer
-credentials (`SO_PEERCRED`) are checked against `allowed_uids` and `allowed_gids`.
-A peer matching neither is disconnected.
+Latch serves MCP over a Unix socket at `/run/latch/latch.sock`. Only users and
+groups listed in `allowed_uids` and `allowed_gids` can connect.
 
 [Docker Agent](https://docs.docker.com/ai/docker-agent/features/remote-mcp/)
 can connect directly:
@@ -87,18 +71,6 @@ toolsets:
       url: "unix:///run/latch/latch.sock"
       transport_type: "streamable"
 ```
-
-If your client does not default to the `/mcp` path, set it explicitly.
-
-`latch serve --stdio` is available for development and tests only. The client
-spawns Latch, so there is no privilege separation, and Latch prints a warning.
-
-## Releases
-
-Releases are cut with [Release Please](https://github.com/googleapis/release-please)
-and published with [GoReleaser](https://goreleaser.com): `linux` and `darwin`
-binaries for `amd64` and `arm64`, with checksums, SBOMs, cosign signatures and
-build-provenance attestations.
 
 ## License
 
