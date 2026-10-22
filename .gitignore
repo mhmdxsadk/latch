@@ -18,7 +18,7 @@ coverage.*
 .DS_Store
 
 # Internal documentation: never tracked, never published.
-# Only README, SECURITY, CONTRIBUTING and LICENSE are public docs.
+# Only README and LICENSE are public docs.
 /HANDOFF.md
 /docs/internal/
 /internal-docs/

@@ -29,8 +29,7 @@ the agent should only reach Latch's socket.
 
 Latch itself holds that privilege, so keep its configuration minimal and review
 changes carefully. The hardening in the provided systemd unit limits collateral
-damage but does not replace Latch's narrow API and allowlists. See
-[SECURITY.md](SECURITY.md).
+damage but does not replace Latch's narrow API and allowlists.
 
 ## Tools
 
