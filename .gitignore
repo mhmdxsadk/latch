@@ -1,0 +1,21 @@
+# Binaries and build output
+/latch
+/dist/
+*.test
+*.out
+coverage.*
+
+# Local config and secrets (only config/example.yaml is tracked)
+/config/*.yaml
+!/config/example.yaml
+*.sock
+.env
+.env.*
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Private planning notes (mention deployment specifics; never publish)
+/HANDOFF.md
