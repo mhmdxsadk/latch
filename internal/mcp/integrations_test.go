@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/health"
@@ -251,5 +253,47 @@ func TestMissingResourcesAndLeaks(t *testing.T) {
 	}
 	if !strings.Contains(h.audit.String(), `"reason":"not_found"`) {
 		t.Errorf("audit: %s", h.audit)
+	}
+}
+
+// blockingDocker holds every Status call until released.
+type blockingDocker struct {
+	fakeDocker
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingDocker) Status(ctx context.Context, c string) (docker.Status, error) {
+	b.entered <- struct{}{}
+	<-b.release
+	return docker.Status{State: "running"}, nil
+}
+
+func TestConcurrentCallsAreBounded(t *testing.T) {
+	bd := &blockingDocker{entered: make(chan struct{}), release: make(chan struct{})}
+	h := newHarnessWith(t, func(d *Deps) { d.Docker = bd })
+	done := make(chan struct{})
+	for range MaxConcurrentCalls {
+		go func() {
+			h.cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "docker_status", Arguments: map[string]any{"name": "web"}})
+			done <- struct{}{}
+		}()
+		<-bd.entered
+	}
+	res, err := h.call("host_load", map[string]any{})
+	if err == nil && !res.IsError {
+		t.Error("call beyond the limit was served")
+	} else if err == nil && !strings.Contains(resultText(res), "too many") {
+		t.Errorf("unexpected message %q", resultText(res))
+	}
+	close(bd.release)
+	for range MaxConcurrentCalls {
+		<-done
+	}
+	if res, err := h.call("host_load", map[string]any{}); err != nil || res.IsError {
+		t.Errorf("slot not released: %v", err)
+	}
+	if !strings.Contains(h.audit.String(), `"reason":"busy"`) {
+		t.Error("busy refusal not audited")
 	}
 }

@@ -32,7 +32,15 @@ type Deps struct {
 	Health  health.Checker
 	Audit   *audit.Logger
 	Version string
+
+	// sem bounds concurrent tool calls across all connections, so parallel
+	// requests cannot multiply memory use, outbound probes or bus connections.
+	sem chan struct{}
 }
+
+// MaxConcurrentCalls is the number of tool calls served at once; further
+// calls are refused until one finishes.
+const MaxConcurrentCalls = 8
 
 // userError is the only error type whose text reaches the agent.
 type userError struct{ msg string }
@@ -46,6 +54,7 @@ var (
 	errUnavailable = userError{"operation failed; see the Latch audit log"}
 	errUnsupported = userError{"not supported on this host"}
 	errMissing     = userError{"resource is configured but does not exist on this host"}
+	errBusy        = userError{"too many concurrent requests; retry shortly"}
 )
 
 // classify maps any error to a safe user-facing error and an audit outcome.
@@ -73,6 +82,14 @@ func classify(err error) (userError, audit.Outcome, string) {
 func wrap[In, Out any](d *Deps, tool string, fn func(context.Context, In) (Out, string, error)) sdk.ToolHandlerFor[In, Out] {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in In) (*sdk.CallToolResult, Out, error) {
 		start := time.Now()
+		select {
+		case d.sem <- struct{}{}:
+			defer func() { <-d.sem }()
+		default:
+			d.Audit.Call(ctx, tool, "", audit.OutcomeDenied, "busy", time.Since(start))
+			var zero Out
+			return nil, zero, errBusy
+		}
 		out, resource, err := fn(ctx, in)
 		if err != nil {
 			ue, outcome, reason := classify(err)
@@ -95,6 +112,7 @@ func ptr[T any](v T) *T { return &v }
 // NewServer builds the MCP server with all v0.1 tools registered. Every
 // integration in d must be non-nil.
 func NewServer(d *Deps) *sdk.Server {
+	d.sem = make(chan struct{}, MaxConcurrentCalls)
 	s := sdk.NewServer(&sdk.Implementation{Name: "latch", Version: d.Version}, &sdk.ServerOptions{
 		Instructions: "Latch gives read-only visibility into one server. " +
 			"Call list_resources first to see which named resources you may query. " +
