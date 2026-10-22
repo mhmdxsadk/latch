@@ -5,3 +5,10 @@ dist
 config/*.yaml
 !config/example.yaml
 HANDOFF.md
+docs/internal
+internal-docs
+notes
+NOTES*.md
+PLAN*.md
+TODO*.md
+*.handoff.md

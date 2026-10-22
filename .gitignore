@@ -17,5 +17,13 @@ coverage.*
 .vscode/
 .DS_Store
 
-# Private planning notes (mention deployment specifics; never publish)
+# Internal documentation: never tracked, never published.
+# Only README, SECURITY, CONTRIBUTING and LICENSE are public docs.
 /HANDOFF.md
+/docs/internal/
+/internal-docs/
+/notes/
+/NOTES*.md
+/PLAN*.md
+/TODO*.md
+*.handoff.md
