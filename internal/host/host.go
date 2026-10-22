@@ -91,7 +91,10 @@ func (s System) Disk(_ context.Context, path string) (Disk, error) {
 	if err := unix.Statfs(path, &st); err != nil {
 		return Disk{}, fmt.Errorf("statfs: %w", err)
 	}
-	bs := uint64(st.Bsize)
+	if st.Bsize <= 0 {
+		return Disk{}, errors.New("statfs: invalid block size")
+	}
+	bs := uint64(st.Bsize) //nolint:gosec // checked positive above
 	total := st.Blocks * bs
 	free := st.Bavail * bs
 	return Disk{
