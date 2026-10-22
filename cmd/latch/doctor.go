@@ -115,7 +115,7 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 
 	for _, t := range cfg.Health.HTTP {
 		r, err := in.health.HTTP(ctx, t)
-		check("http check "+t.Name, httpProblem(r, err))
+		check("http check "+t.Name, httpProblem(t, r, err))
 	}
 	for _, t := range cfg.Health.DNS {
 		r, err := in.health.DNS(ctx, t)
@@ -128,10 +128,12 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 	return !failed
 }
 
-func httpProblem(r health.HTTPResult, err error) error {
+func httpProblem(t config.HTTPTarget, r health.HTTPResult, err error) error {
 	switch {
 	case err != nil:
 		return err
+	case r.Failure == health.FailureBlockedAddress && t.AllowPrivate:
+		return errors.New("target resolves to an address that is always blocked (cloud metadata, unspecified, multicast or reserved)")
 	case r.Failure == health.FailureBlockedAddress:
 		return errors.New("target resolves to a blocked address (set allow_private: true if it is meant to be internal)")
 	case r.Failure == health.FailureUnexpectedStatus:
