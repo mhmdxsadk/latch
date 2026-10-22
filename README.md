@@ -41,38 +41,28 @@ Latch is pre-release (v0.x) and read-only. Currently available:
 ## Quick start
 
 The recommended deployment is the native binary under systemd, which gives Latch
-direct access to the host. Download the archive for your platform from the
-[releases page](https://github.com/mhmdxsadk/latch/releases), then:
+direct access to the host. On Linux with systemd:
 
 ```sh
-VERSION=0.1.0 ARCH=amd64   # or arm64
-curl -fsSLO https://github.com/mhmdxsadk/latch/releases/download/v$VERSION/latch_${VERSION}_linux_$ARCH.tar.gz
-tar -xzf latch_${VERSION}_linux_$ARCH.tar.gz latch
-sudo install -m 0755 latch /usr/local/bin/latch
-
-sudo useradd --system --user-group --shell /usr/sbin/nologin latch
-sudo groupadd latch-clients
-sudo usermod -aG latch-clients latch
-sudo usermod -aG latch-clients <agent-user>
-
-sudo install -d /etc/latch
-sudo curl -fsSLo /etc/latch/config.yaml https://raw.githubusercontent.com/mhmdxsadk/latch/main/config/example.yaml
-sudo curl -fsSLo /etc/systemd/system/latch.service https://raw.githubusercontent.com/mhmdxsadk/latch/main/packaging/systemd/latch.service
+curl -fsSL https://raw.githubusercontent.com/mhmdxsadk/latch/main/scripts/install.sh | sudo sh -s -- --agent-user <agent-user>
 ```
 
-Edit `/etc/latch/config.yaml`: set `allowed_uids` or `allowed_gids` and list your
-resources. Then check it and start the service:
+The script downloads the latest release, verifies its SHA-256 checksum (and its
+cosign signature if `cosign` is installed), installs the binary and systemd
+unit, creates the `latch` user and the `latch-clients` socket group, adds your
+agent's user to that group, and writes an example config. It does not start the
+service. Pin a release with `--version X.Y.Z`. Re-running it upgrades Latch and
+keeps your config.
+
+Then list the resources the agent may see, validate, and start:
 
 ```sh
+sudo nano /etc/latch/config.yaml
 sudo -u latch latch validate --config /etc/latch/config.yaml
-sudo -u latch latch doctor   --config /etc/latch/config.yaml
-sudo systemctl daemon-reload
 sudo systemctl enable --now latch
 ```
 
-The agent connects to `/run/latch/latch.sock`. The `latch` user must belong to
-`server.socket_group` so it can assign that group to the socket, and the agent's
-user must belong to it to connect.
+The agent connects to `/run/latch/latch.sock`.
 
 ### Docker
 
