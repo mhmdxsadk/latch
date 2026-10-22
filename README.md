@@ -40,22 +40,47 @@ Latch is pre-release (v0.x) and read-only. Currently available:
 
 ## Quick start
 
+Pull the image from GHCR and run it as your own user, so the socket is owned by
+you:
+
 ```sh
-go build -o latch ./cmd/latch
-cp config/example.yaml latch.yaml        # edit allowed_uids/gids and resources
-./latch validate --config latch.yaml     # check the config
-./latch doctor   --config latch.yaml     # check host capabilities
-./latch serve    --config latch.yaml     # listen on server.socket
+mkdir latch && cd latch
+curl -fsSLo latch.yaml https://raw.githubusercontent.com/mhmdxsadk/latch/main/config/example.yaml
 ```
+
+Edit `latch.yaml`: set `allowed_uids` to your user ID (`id -u`) and set
+`socket_group` to `""`. Then validate the config and start Latch:
+
+```sh
+docker run --rm -v "$PWD/latch.yaml:/etc/latch/config.yaml:ro" \
+  ghcr.io/mhmdxsadk/latch validate --config /etc/latch/config.yaml
+
+mkdir -p run
+docker run -d --name latch --restart unless-stopped \
+  --user "$(id -u)" \
+  --group-add "$(stat -c %g /var/run/docker.sock)" \
+  -v "$PWD/latch.yaml:/etc/latch/config.yaml:ro" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD/run:/run/latch" \
+  ghcr.io/mhmdxsadk/latch
+```
+
+The agent connects to `./run/latch.sock`. The Docker socket is mounted into the
+Latch container only, never into the agent. Disk paths in the config are resolved
+inside the container, so mount any host paths you want monitored.
+
+For production, run the native binary under systemd instead: download the archive
+for your platform from the
+[releases page](https://github.com/mhmdxsadk/latch/releases) and see
+[`packaging/systemd/latch.service`](packaging/systemd/latch.service). The `latch`
+user must belong to `server.socket_group` so it can assign that group to the
+socket, and the agent's user must belong to it to connect. `latch validate` and
+`latch doctor` check the config and host capabilities.
 
 See [`config/example.yaml`](config/example.yaml) for all options. HTTP and DNS
 checks use fixed, pre-configured targets (the agent supplies only a name), which
 avoids SSRF. HTTP targets that resolve to loopback or private ranges require an
 explicit `allow_private: true`.
-
-For a systemd deployment, see [`packaging/systemd/latch.service`](packaging/systemd/latch.service).
-The `latch` user must belong to `server.socket_group` so it can assign that group
-to the socket, and the agent's user must belong to it to connect.
 
 ## Connecting an agent
 
