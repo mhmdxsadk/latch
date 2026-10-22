@@ -1,0 +1,57 @@
+version: 2
+project_name: latch
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - id: latch
+    main: ./cmd/latch
+    binary: latch
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .CommitDate }}
+    # Add targets here (e.g. linux/arm, freebsd) to extend the release matrix.
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - config/example.yaml
+      - packaging/systemd/latch.service
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    args:
+      - sign-blob
+      - --yes
+      - --output-signature=${signature}
+      - --output-certificate=${certificate}
+      - ${artifact}
+    certificate: "${artifact}.pem"
+    signature: "${artifact}.sig"
+
+# Release Please owns the changelog and the GitHub Release body.
+changelog:
+  disable: true
+release:
+  mode: keep-existing
