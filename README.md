@@ -40,21 +40,48 @@ Latch is pre-release (v0.x) and read-only. Currently available:
 
 ## Quick start
 
-Pull the image from GHCR and run it as your own user, so the socket is owned by
-you:
+The recommended deployment is the native binary under systemd, which gives Latch
+direct access to the host. Download the archive for your platform from the
+[releases page](https://github.com/mhmdxsadk/latch/releases), then:
 
 ```sh
-mkdir latch && cd latch
-curl -fsSLo latch.yaml https://raw.githubusercontent.com/mhmdxsadk/latch/main/config/example.yaml
+VERSION=0.1.0 ARCH=amd64   # or arm64
+curl -fsSLO https://github.com/mhmdxsadk/latch/releases/download/v$VERSION/latch_${VERSION}_linux_$ARCH.tar.gz
+tar -xzf latch_${VERSION}_linux_$ARCH.tar.gz latch
+sudo install -m 0755 latch /usr/local/bin/latch
+
+sudo useradd --system --user-group --shell /usr/sbin/nologin latch
+sudo groupadd latch-clients
+sudo usermod -aG latch-clients latch
+sudo usermod -aG latch-clients <agent-user>
+
+sudo install -d /etc/latch
+sudo curl -fsSLo /etc/latch/config.yaml https://raw.githubusercontent.com/mhmdxsadk/latch/main/config/example.yaml
+sudo curl -fsSLo /etc/systemd/system/latch.service https://raw.githubusercontent.com/mhmdxsadk/latch/main/packaging/systemd/latch.service
 ```
 
-Edit `latch.yaml`: set `allowed_uids` to your user ID (`id -u`) and set
-`socket_group` to `""`. Then validate the config and start Latch:
+Edit `/etc/latch/config.yaml`: set `allowed_uids` or `allowed_gids` and list your
+resources. Then check it and start the service:
 
 ```sh
-docker run --rm -v "$PWD/latch.yaml:/etc/latch/config.yaml:ro" \
-  ghcr.io/mhmdxsadk/latch validate --config /etc/latch/config.yaml
+sudo -u latch latch validate --config /etc/latch/config.yaml
+sudo -u latch latch doctor   --config /etc/latch/config.yaml
+sudo systemctl daemon-reload
+sudo systemctl enable --now latch
+```
 
+The agent connects to `/run/latch/latch.sock`. The `latch` user must belong to
+`server.socket_group` so it can assign that group to the socket, and the agent's
+user must belong to it to connect.
+
+### Docker
+
+A multi-arch image is published to GHCR if you would rather run Latch in a
+container. Copy [`config/example.yaml`](config/example.yaml) to `latch.yaml`, set
+`allowed_uids` to your user ID (`id -u`) and `socket_group` to `""`, and run it
+as your own user so the socket is owned by you:
+
+```sh
 mkdir -p run
 docker run -d --name latch --restart unless-stopped \
   --user "$(id -u)" \
@@ -69,13 +96,7 @@ The agent connects to `./run/latch.sock`. The Docker socket is mounted into the
 Latch container only, never into the agent. Disk paths in the config are resolved
 inside the container, so mount any host paths you want monitored.
 
-Prefer a native install? Download the archive for your platform from the
-[releases page](https://github.com/mhmdxsadk/latch/releases) and run it under
-systemd with [`packaging/systemd/latch.service`](packaging/systemd/latch.service).
-This gives Latch direct access to the host without extra mounts. The `latch`
-user must belong to `server.socket_group` so it can assign that group to the
-socket, and the agent's user must belong to it to connect. `latch validate` and
-`latch doctor` check the config and host capabilities.
+### Configuration
 
 See [`config/example.yaml`](config/example.yaml) for all options. HTTP and DNS
 checks use fixed, pre-configured targets (the agent supplies only a name), which
@@ -111,7 +132,8 @@ Releases are cut with [Release Please](https://github.com/googleapis/release-ple
 and published with [GoReleaser](https://goreleaser.com): `linux` and `darwin`
 binaries for `amd64` and `arm64`, with checksums, SBOMs, cosign signatures and
 build-provenance attestations. A multi-arch container image is published to
-`ghcr.io/mhmdxsadk/latch`.
+`ghcr.io/mhmdxsadk/latch`, but the recommended deployment is the native binary
+under systemd.
 
 ## License
 
