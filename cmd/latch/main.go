@@ -15,10 +15,13 @@ import (
 
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/config"
+	"github.com/mhmdxsadk/latch/internal/docker"
+	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/mcp"
 	"github.com/mhmdxsadk/latch/internal/policy"
 	"github.com/mhmdxsadk/latch/internal/server"
+	"github.com/mhmdxsadk/latch/internal/systemd"
 )
 
 // Set by GoReleaser via -ldflags.
@@ -113,7 +116,15 @@ func cmdServe(args []string, stderr io.Writer) int {
 	}
 	al := audit.New(slog.New(slog.NewJSONHandler(auditOut, nil)))
 
-	deps := &mcp.Deps{Policy: policy.New(cfg), Host: host.System{}, Audit: al, Version: version}
+	deps := &mcp.Deps{
+		Policy:  policy.New(cfg),
+		Host:    host.System{},
+		Docker:  docker.NewEngine(cfg.Docker.Socket),
+		Systemd: systemd.NewBus(),
+		Health:  health.Prober{},
+		Audit:   al,
+		Version: version,
+	}
 	srv := mcp.NewServer(deps)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

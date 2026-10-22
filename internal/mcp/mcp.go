@@ -15,8 +15,11 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/mhmdxsadk/latch/internal/audit"
+	"github.com/mhmdxsadk/latch/internal/docker"
+	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/policy"
+	"github.com/mhmdxsadk/latch/internal/systemd"
 )
 
 // Deps are the collaborators the tools need. Integrations are interfaces so
@@ -24,6 +27,9 @@ import (
 type Deps struct {
 	Policy  *policy.Policy
 	Host    host.Provider
+	Docker  docker.Client
+	Systemd systemd.Client
+	Health  health.Checker
 	Audit   *audit.Logger
 	Version string
 }
@@ -39,6 +45,7 @@ var (
 	errNotAllowed  = userError{"resource is not configured"}
 	errUnavailable = userError{"operation failed; see the Latch audit log"}
 	errUnsupported = userError{"not supported on this host"}
+	errMissing     = userError{"resource is configured but does not exist on this host"}
 )
 
 // classify maps any error to a safe user-facing error and an audit outcome.
@@ -51,6 +58,8 @@ func classify(err error) (userError, audit.Outcome, string) {
 		return errInvalidName, audit.OutcomeDenied, "invalid_name"
 	case errors.Is(err, policy.ErrNotAllowed):
 		return errNotAllowed, audit.OutcomeDenied, "not_allowed"
+	case errors.Is(err, docker.ErrNotFound), errors.Is(err, systemd.ErrNotFound):
+		return errMissing, audit.OutcomeError, "not_found"
 	case errors.Is(err, host.ErrUnsupported):
 		return errUnsupported, audit.OutcomeError, "unsupported"
 	default:
@@ -83,7 +92,8 @@ var readOnly = &sdk.ToolAnnotations{
 
 func ptr[T any](v T) *T { return &v }
 
-// NewServer builds the MCP server with all v0.1 tools registered.
+// NewServer builds the MCP server with all v0.1 tools registered. Every
+// integration in d must be non-nil.
 func NewServer(d *Deps) *sdk.Server {
 	s := sdk.NewServer(&sdk.Implementation{Name: "latch", Version: d.Version}, &sdk.ServerOptions{
 		Instructions: "Latch gives read-only visibility into one server. " +
@@ -92,5 +102,8 @@ func NewServer(d *Deps) *sdk.Server {
 	})
 	registerResources(s, d)
 	registerHost(s, d)
+	registerDocker(s, d)
+	registerSystemd(s, d)
+	registerHealth(s, d)
 	return s
 }

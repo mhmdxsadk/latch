@@ -42,6 +42,13 @@ type harness struct {
 
 func newHarness(t *testing.T, h host.Provider) *harness {
 	t.Helper()
+	return newHarnessWith(t, func(d *Deps) { d.Host = h })
+}
+
+// newHarnessWith builds a server with healthy fakes, then lets the test
+// override any dependency.
+func newHarnessWith(t *testing.T, override func(*Deps)) *harness {
+	t.Helper()
 	cfg, err := config.Parse([]byte(`
 server: {socket: /run/l.sock, allowed_uids: [1]}
 host:
@@ -50,6 +57,14 @@ host:
 docker:
   services:
     - {name: web, container: my-web}
+    - {name: db, container: my-db}
+systemd:
+  units: [ssh.service]
+health:
+  http:
+    - {name: site, url: "https://example.com/"}
+  dns:
+    - {name: example, host: example.com}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -57,10 +72,14 @@ docker:
 	buf := &bytes.Buffer{}
 	deps := &Deps{
 		Policy:  policy.New(cfg),
-		Host:    h,
+		Host:    fakeHost{},
+		Docker:  &fakeDocker{},
+		Systemd: &fakeSystemd{},
+		Health:  &fakeHealth{},
 		Audit:   audit.New(slog.New(slog.NewJSONHandler(buf, nil))),
 		Version: "test",
 	}
+	override(deps)
 	srv := NewServer(deps)
 	ct, st := sdk.NewInMemoryTransports()
 	ctx := context.Background()
@@ -100,7 +119,11 @@ func TestToolSurfaceIsReadOnlyAndFixed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"list_resources": true, "host_load": true, "host_memory": true, "host_disk": true}
+	want := map[string]bool{
+		"list_resources": true, "host_load": true, "host_memory": true, "host_disk": true,
+		"docker_list": true, "docker_status": true, "docker_logs": true,
+		"systemd_unit_status": true, "http_check": true, "dns_check": true,
+	}
 	for _, tool := range res.Tools {
 		if !want[tool.Name] {
 			t.Errorf("unexpected tool %q: v0.1 tools are an explicit list", tool.Name)
@@ -126,7 +149,8 @@ func TestListResources(t *testing.T) {
 	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Disks) != 1 || out.Disks[0] != "root" || len(out.DockerServices) != 1 || out.SystemdUnits == nil {
+	if len(out.Disks) != 1 || out.Disks[0] != "root" || len(out.DockerServices) != 2 ||
+		len(out.SystemdUnits) != 1 || len(out.HTTPChecks) != 1 || len(out.DNSChecks) != 1 {
 		t.Errorf("got %+v", out)
 	}
 }
@@ -171,7 +195,7 @@ func TestHostDiskRejections(t *testing.T) {
 
 func TestToolsRejectUnexpectedArguments(t *testing.T) {
 	h := newHarness(t, fakeHost{})
-	for _, tool := range []string{"host_load", "host_memory", "list_resources"} {
+	for _, tool := range []string{"host_load", "host_memory", "list_resources", "docker_list"} {
 		res, err := h.call(tool, map[string]any{"path": "/etc/shadow"})
 		if err == nil && !res.IsError {
 			t.Errorf("%s accepted an unexpected argument", tool)
