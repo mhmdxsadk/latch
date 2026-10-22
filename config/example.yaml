@@ -27,6 +27,8 @@ docker:
   socket: /var/run/docker.sock
   services:
     # name: what the agent sees. container: the Docker container name.
+    # The agent can read these containers' recent logs (bounded by limits),
+    # so do not list containers that log secrets.
     - name: web
       container: my-web-container
     - name: database

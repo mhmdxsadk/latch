@@ -33,6 +33,18 @@ Latch is pre-release (v0.x) and read-only. Currently available:
 
 - `list_resources`: the resources the operator has exposed
 - `host_load`, `host_memory`, `host_disk`: host metrics
+- `docker_list`, `docker_status`: container state, exit code, restarts, image
+  and health. Never environment variables, labels, mounts or commands.
+- `docker_logs`: recent stdout and stderr, capped by `limits` in the config.
+  Logs often contain secrets, so only list containers whose logs the agent may
+  read.
+- `systemd_unit_status`: load, active and sub state of allowlisted units
+- `http_check`, `dns_check`: probe configured targets. HTTP checks never follow
+  redirects, ignore proxy settings, and refuse targets that resolve to
+  loopback, private or link-local addresses unless the target sets
+  `allow_private`. Cloud metadata addresses are always refused.
+
+Run `latch doctor` to check that every configured resource is reachable.
 
 ## Quick start
 
