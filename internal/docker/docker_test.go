@@ -1,0 +1,641 @@
+package docker
+
+import (
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+const inspectFixture = `{
+  "Id": "abc123",
+  "Path": "/bin/secret-tool",
+  "Args": ["--token=hunter2"],
+  "RestartCount": 3,
+  "Mounts": [{"Source": "/var/lib/secrets", "Destination": "/data"}],
+  "HostConfig": {"Binds": ["/var/lib/x:/y"]},
+  "NetworkSettings": {"IPAddress": "10.0.0.2"},
+  "State": {
+    "Status": "running", "Running": true, "Paused": false, "Restarting": false,
+    "OOMKilled": false, "ExitCode": 0,
+    "StartedAt": "2024-05-01T10:00:00.5+02:00",
+    "FinishedAt": "0001-01-01T00:00:00Z",
+    "Health": {
+      "Status": "unhealthy", "FailingStreak": 4,
+      "Log": [
+        {"Start": "2024-05-01T10:00:00Z", "End": "2024-05-01T10:00:01Z", "ExitCode": 0, "Output": "SECRET old"},
+        {"Start": "2024-05-01T10:01:00Z", "End": "2024-05-01T10:01:02.25Z", "ExitCode": 1, "Output": "SECRET=hunter2"}
+      ]
+    }
+  },
+  "Config": {
+    "Image": "nginx:1.27",
+    "Tty": %TTY%,
+    "Env": ["SECRET=hunter2", "PATH=/usr/bin"],
+    "Labels": {"password": "hunter2"},
+    "Cmd": ["run", "--password=hunter2"],
+    "Entrypoint": ["/var/lib/entry"]
+  }
+}`
+
+func fixture(tty bool) string {
+	v := "false"
+	if tty {
+		v = "true"
+	}
+	return strings.ReplaceAll(inspectFixture, "%TTY%", v)
+}
+
+type recorder struct {
+	mu   sync.Mutex
+	reqs []*http.Request
+}
+
+func (r *recorder) add(req *http.Request) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reqs = append(r.reqs, req.Clone(context.Background()))
+}
+
+func (r *recorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.reqs)
+}
+
+// newFake serves h behind an Engine and records every request. It fails the
+// test on any non-GET method or path outside the allowed endpoints.
+func newFake(t *testing.T, h http.HandlerFunc) (*Engine, *recorder) {
+	t.Helper()
+	rec := &recorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.add(r)
+		ok := r.Method == http.MethodGet &&
+			(r.URL.Path == "/_ping" || strings.HasPrefix(r.URL.Path, "/containers/web") &&
+				(strings.HasSuffix(r.URL.Path, "/json") || strings.HasSuffix(r.URL.Path, "/logs")))
+		if !ok {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL)
+		}
+		h(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return newEngine(srv.URL, srv.Client().Transport), rec
+}
+
+func frame(stream byte, s string) []byte {
+	b := make([]byte, 8, 8+len(s))
+	b[0] = stream
+	binary.BigEndian.PutUint32(b[4:], uint32(len(s)))
+	return append(b, s...)
+}
+
+func cat(parts ...[]byte) []byte {
+	var out []byte
+	for _, p := range parts {
+		out = append(out, p...)
+	}
+	return out
+}
+
+// logServer answers inspect with the fixture and logs with body.
+func logServer(t *testing.T, tty bool, body []byte) (*Engine, *recorder) {
+	return newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/json") {
+			_, _ = w.Write([]byte(fixture(tty)))
+			return
+		}
+		_, _ = w.Write(body)
+	})
+}
+
+func TestStatusProjection(t *testing.T) {
+	e, rec := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(fixture(false)))
+	})
+	st, err := e.Status(context.Background(), "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Status{
+		State: "running", Running: true, RestartCount: 3, Image: "nginx:1.27",
+		StartedAt: "2024-05-01T08:00:00.5Z",
+		Health: Health{
+			Status: "unhealthy", FailingStreak: 4,
+			LastCheckAt: "2024-05-01T10:01:02.25Z", LastExitCode: 1,
+		},
+	}
+	if st != want {
+		t.Errorf("got %+v\nwant %+v", st, want)
+	}
+	b, _ := json.Marshal(st)
+	for _, bad := range []string{"SECRET", "hunter2", "/var/lib", "10.0.0.2", "PATH", "password"} {
+		if strings.Contains(string(b), bad) {
+			t.Errorf("output leaks %q: %s", bad, b)
+		}
+	}
+	if strings.Contains(string(b), "finished_at") {
+		t.Errorf("zero finished time should be omitted: %s", b)
+	}
+	if rec.count() != 1 || rec.reqs[0].URL.Path != "/containers/web/json" || rec.reqs[0].URL.RawQuery != "" {
+		t.Errorf("unexpected requests: %v", rec.reqs)
+	}
+}
+
+func TestStatusHealthAndTimes(t *testing.T) {
+	tests := []struct {
+		name  string
+		state string
+		want  Status
+	}{
+		{
+			"no healthcheck",
+			`{"State":{"Status":"exited","ExitCode":137,"OOMKilled":true,"StartedAt":"0001-01-01T00:00:00Z","FinishedAt":"2024-01-02T03:04:05Z"},"Config":{"Image":"x"}}`,
+			Status{State: "exited", ExitCode: 137, OOMKilled: true, FinishedAt: "2024-01-02T03:04:05Z", Image: "x", Health: Health{Status: "none"}},
+		},
+		{
+			"healthy no log",
+			`{"State":{"Status":"running","Running":true,"Health":{"Status":"healthy","FailingStreak":0}},"Config":{"Image":"x"}}`,
+			Status{State: "running", Running: true, Image: "x", Health: Health{Status: "healthy"}},
+		},
+		{
+			"starting",
+			`{"State":{"Status":"restarting","Restarting":true,"Health":{"Status":"starting","FailingStreak":2}},"Config":{"Image":"x"}}`,
+			Status{State: "restarting", Restarting: true, Image: "x", Health: Health{Status: "starting", FailingStreak: 2}},
+		},
+		{
+			"garbage time",
+			`{"State":{"Status":"paused","Paused":true,"StartedAt":"yesterday"},"Config":{"Image":"x"}}`,
+			Status{State: "paused", Paused: true, Image: "x", Health: Health{Status: "none"}},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(tc.state)) })
+			got, err := e.Status(context.Background(), "web")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("got %+v\nwant %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStatusErrors(t *testing.T) {
+	const secret = "TOP-SECRET-BODY"
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		notFnd bool
+	}{
+		{"404", 404, `{"message":"` + secret + `"}`, true},
+		{"500", 500, `{"message":"` + secret + `"}`, false},
+		{"403", 403, secret, false},
+		{"bad json", 200, `{"State": ` + secret, false},
+		{"204", 204, "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			_, err := e.Status(context.Background(), "web")
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if errors.Is(err, ErrNotFound) != tc.notFnd {
+				t.Errorf("ErrNotFound = %v, want %v (%v)", !tc.notFnd, tc.notFnd, err)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("error leaks body: %v", err)
+			}
+		})
+	}
+}
+
+func TestInvalidNamesRejectedBeforeRequest(t *testing.T) {
+	names := []string{"", "../x", "a/b", "x?y", "-x", ".x", "_x", "a b", "a\x00b", "a%2fb", "a#b", "a\nb",
+		strings.Repeat("a", 129), "é", "a:b", "a@b"}
+	e, rec := newFake(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(fixture(false))) })
+	for _, n := range names {
+		if _, err := e.Status(context.Background(), n); err == nil {
+			t.Errorf("Status(%q) accepted", n)
+		}
+		if _, err := e.Logs(context.Background(), n, 10, 100); err == nil {
+			t.Errorf("Logs(%q) accepted", n)
+		}
+	}
+	if n := rec.count(); n != 0 {
+		t.Errorf("%d requests sent for invalid names", n)
+	}
+}
+
+func TestValidNameAccepted(t *testing.T) {
+	e, rec := newFake(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(fixture(false))) })
+	if _, err := e.Status(context.Background(), "web"); err != nil {
+		t.Fatal(err)
+	}
+	if rec.count() != 1 {
+		t.Fatal("no request")
+	}
+}
+
+func TestRedirectNotFollowed(t *testing.T) {
+	var hits []string
+	var mu sync.Mutex
+	e, _ := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits = append(hits, r.URL.Path)
+		mu.Unlock()
+		if r.URL.Path == "/containers/web/json" {
+			http.Redirect(w, r, "/containers/web/other", http.StatusFound)
+			return
+		}
+		t.Errorf("redirect target fetched: %s", r.URL.Path)
+	})
+	_, err := e.Status(context.Background(), "web")
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("want generic error, got %v", err)
+	}
+	if len(hits) != 1 {
+		t.Errorf("hits = %v", hits)
+	}
+}
+
+func TestPing(t *testing.T) {
+	tests := []struct {
+		status  int
+		wantErr bool
+	}{{200, false}, {500, true}, {404, true}, {302, true}, {204, true}}
+	for _, tc := range tests {
+		e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte("OK"))
+		})
+		if err := e.Ping(context.Background()); (err != nil) != tc.wantErr {
+			t.Errorf("status %d: err = %v", tc.status, err)
+		}
+	}
+	// Unreachable daemon.
+	srv := httptest.NewServer(http.NotFoundHandler())
+	e := newEngine(srv.URL, srv.Client().Transport)
+	srv.Close()
+	if err := e.Ping(context.Background()); err == nil {
+		t.Error("expected error for closed server")
+	}
+}
+
+func TestLogsRequestShape(t *testing.T) {
+	e, rec := logServer(t, false, nil)
+	if _, err := e.Logs(context.Background(), "web", 42, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if rec.count() != 2 {
+		t.Fatalf("requests = %d", rec.count())
+	}
+	if p := rec.reqs[0].URL.Path; p != "/containers/web/json" {
+		t.Errorf("first request %s, want inspect", p)
+	}
+	r := rec.reqs[1]
+	q := r.URL.Query()
+	if r.Method != http.MethodGet || r.URL.Path != "/containers/web/logs" {
+		t.Errorf("bad request %s %s", r.Method, r.URL.Path)
+	}
+	if q.Get("tail") != "42" || q.Get("timestamps") != "1" || q.Get("stdout") != "1" || q.Get("stderr") != "1" {
+		t.Errorf("bad query %v", q)
+	}
+	if _, ok := q["follow"]; ok {
+		t.Error("follow must not be set")
+	}
+}
+
+func TestLogsNotFound(t *testing.T) {
+	e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(404) })
+	if _, err := e.Logs(context.Background(), "web", 10, 100); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestLogsRangeRejected(t *testing.T) {
+	e, rec := logServer(t, false, nil)
+	tests := []struct{ lines, max int }{
+		{0, 100}, {-1, 100}, {1001, 100}, {10, 0}, {10, -5}, {10, 262145},
+	}
+	for _, tc := range tests {
+		if _, err := e.Logs(context.Background(), "web", tc.lines, tc.max); err == nil {
+			t.Errorf("Logs(%d,%d) accepted", tc.lines, tc.max)
+		}
+	}
+	if rec.count() != 0 {
+		t.Errorf("%d requests for out-of-range args", rec.count())
+	}
+	if _, err := e.Logs(context.Background(), "web", 1000, 262144); err != nil {
+		t.Errorf("max bounds rejected: %v", err)
+	}
+}
+
+func TestLogsDemux(t *testing.T) {
+	const ts1, ts2, ts3 = "2024-05-01T10:00:00.000000001Z", "2024-05-01T10:00:01Z", "2024-05-01T10:00:02.5Z"
+	tests := []struct {
+		name string
+		tty  bool
+		body []byte
+		want []LogEntry
+	}{
+		{
+			"mixed streams",
+			false,
+			cat(frame(1, ts1+" out1\n"), frame(2, ts2+" err1\n"), frame(1, ts3+" out2\n")),
+			[]LogEntry{
+				{"stdout", "2024-05-01T10:00:00.000000001Z", "out1"},
+				{"stderr", "2024-05-01T10:00:01Z", "err1"},
+				{"stdout", "2024-05-01T10:00:02.5Z", "out2"},
+			},
+		},
+		{
+			"line split across frames, stderr interleaved",
+			false,
+			cat(frame(1, ts1+" hel"), frame(2, ts2+" e\n"), frame(1, "lo\n")),
+			[]LogEntry{
+				{"stderr", "2024-05-01T10:00:01Z", "e"},
+				{"stdout", "2024-05-01T10:00:00.000000001Z", "hello"},
+			},
+		},
+		{
+			"unterminated final line, CRLF, empty text",
+			false,
+			cat(frame(1, ts1+" a\r\n"+ts2+" \n"+ts3+" tail")),
+			[]LogEntry{
+				{"stdout", "2024-05-01T10:00:00.000000001Z", "a"},
+				{"stdout", "2024-05-01T10:00:01Z", ""},
+				{"stdout", "2024-05-01T10:00:02.5Z", "tail"},
+			},
+		},
+		{
+			"stdin frame ignored",
+			false,
+			cat(frame(0, "ignored\n"), frame(1, ts1+" x\n")),
+			[]LogEntry{{"stdout", "2024-05-01T10:00:00.000000001Z", "x"}},
+		},
+		{
+			"no timestamp",
+			false,
+			cat(frame(1, "plain words\nnotatime here\n")),
+			[]LogEntry{{"stdout", "", "plain words"}, {"stdout", "", "notatime here"}},
+		},
+		{
+			"ansi, control chars, tabs",
+			false,
+			cat(frame(1, ts1+" \x1b[31mred\x1b[0m\ta\x00b\x07c\x1b]0;x\x07d\x7f\n")),
+			[]LogEntry{{"stdout", "2024-05-01T10:00:00.000000001Z", "red\tabc]0;xd"}},
+		},
+		{
+			"invalid utf8",
+			false,
+			cat(frame(1, ts1+" ok\xff\xfe bad\xc3\n")),
+			[]LogEntry{{"stdout", "2024-05-01T10:00:00.000000001Z", "ok\uFFFD bad\uFFFD"}},
+		},
+		{
+			"tty raw",
+			true,
+			[]byte(ts1 + " one\r\n" + ts2 + " \x1b[1mtwo\x1b[0m\n"),
+			[]LogEntry{
+				{"tty", "2024-05-01T10:00:00.000000001Z", "one"},
+				{"tty", "2024-05-01T10:00:01Z", "two"},
+			},
+		},
+		{
+			"tty does not demux",
+			true,
+			frame(1, ts1+" x\n"),
+			nil, // header bytes are treated as text; only checked below for no error
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e, _ := logServer(t, tc.tty, tc.body)
+			got, err := e.Logs(context.Background(), "web", 100, 10000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Entries == nil {
+				t.Fatal("Entries is nil")
+			}
+			if tc.want == nil {
+				return
+			}
+			if got.Truncated {
+				t.Error("unexpected truncation")
+			}
+			if len(got.Entries) != len(tc.want) {
+				t.Fatalf("got %+v\nwant %+v", got.Entries, tc.want)
+			}
+			for i := range tc.want {
+				if got.Entries[i] != tc.want[i] {
+					t.Errorf("entry %d = %+v, want %+v", i, got.Entries[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestLogsEmptyNonNil(t *testing.T) {
+	for _, tty := range []bool{false, true} {
+		e, _ := logServer(t, tty, nil)
+		got, err := e.Logs(context.Background(), "web", 10, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Entries == nil || len(got.Entries) != 0 || got.Truncated {
+			t.Errorf("tty=%v: %+v", tty, got)
+		}
+		b, _ := json.Marshal(got)
+		if !strings.Contains(string(b), `"entries":[]`) {
+			t.Errorf("marshalled: %s", b)
+		}
+	}
+}
+
+func TestLogsMalformedStreams(t *testing.T) {
+	huge := make([]byte, 8)
+	huge[0] = 1
+	binary.BigEndian.PutUint32(huge[4:], maxFrame+1)
+	hugeMax := make([]byte, 8)
+	hugeMax[0] = 1
+	binary.BigEndian.PutUint32(hugeMax[4:], 0xFFFFFFFF)
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{"oversized frame", huge},
+		{"max uint32 frame", hugeMax},
+		{"unknown stream type", frame(7, "x\n")},
+		{"truncated payload", frame(1, "hello\n")[:12]},
+		{"truncated header", []byte{1, 0, 0}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e, _ := logServer(t, false, tc.body)
+			if _, err := e.Logs(context.Background(), "web", 10, 100); err == nil {
+				t.Error("expected error")
+			}
+		})
+	}
+}
+
+func TestLogsMaxBytesKeepsNewest(t *testing.T) {
+	body := cat(frame(1, "2024-05-01T10:00:00Z aaaa\n2024-05-01T10:00:01Z bbbb\n2024-05-01T10:00:02Z cccc\n"))
+	tests := []struct {
+		max       int
+		want      []string
+		truncated bool
+	}{
+		{12, []string{"aaaa", "bbbb", "cccc"}, false},
+		{11, []string{"bbbb", "cccc"}, true},
+		{8, []string{"bbbb", "cccc"}, true},
+		{4, []string{"cccc"}, true},
+		{3, []string{"ccc"}, true},
+	}
+	for _, tc := range tests {
+		e, _ := logServer(t, false, body)
+		got, err := e.Logs(context.Background(), "web", 10, tc.max)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var texts []string
+		total := 0
+		for _, en := range got.Entries {
+			texts = append(texts, en.Text)
+			total += len(en.Text)
+		}
+		if strings.Join(texts, ",") != strings.Join(tc.want, ",") || got.Truncated != tc.truncated || total > tc.max {
+			t.Errorf("max=%d: got %v truncated=%v", tc.max, texts, got.Truncated)
+		}
+	}
+}
+
+func TestLogsSingleHugeLineTailTruncated(t *testing.T) {
+	// 'é' is 2 bytes; a cut in the middle of one must land on a boundary.
+	line := "2024-05-01T10:00:00Z " + strings.Repeat("a", 5000) + strings.Repeat("é", 10) + "END"
+	e, _ := logServer(t, false, frame(1, line+"\n"))
+	got, err := e.Logs(context.Background(), "web", 10, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Entries) != 1 || !got.Truncated {
+		t.Fatalf("got %+v", got)
+	}
+	txt := got.Entries[0].Text
+	if txt != "éééEND" && txt != "ééEND" {
+		t.Errorf("text = %q", txt)
+	}
+	if len(txt) > 8 || strings.Contains(txt, "\uFFFD") {
+		t.Errorf("bad tail %q", txt)
+	}
+}
+
+func TestLogsLinesLimit(t *testing.T) {
+	// A misbehaving daemon returning more than tail still yields <= lines.
+	var b strings.Builder
+	for _, s := range []string{"a", "b", "c", "d"} {
+		b.WriteString("2024-05-01T10:00:00Z " + s + "\n")
+	}
+	e, _ := logServer(t, false, frame(1, b.String()))
+	got, err := e.Logs(context.Background(), "web", 2, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Entries) != 2 || got.Entries[0].Text != "c" || got.Entries[1].Text != "d" || !got.Truncated {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestLogsReadCap(t *testing.T) {
+	// Stream far more than the 8 MiB cap using 1 MiB frames of one long line.
+	e, _ := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/json") {
+			_, _ = w.Write([]byte(fixture(false)))
+			return
+		}
+		chunk := frame(1, strings.Repeat("x", maxFrame))
+		for range 12 {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	})
+	got, err := e.Logs(context.Background(), "web", 10, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Truncated || len(got.Entries) != 1 || len(got.Entries[0].Text) != 100 {
+		t.Errorf("entries=%d truncated=%v", len(got.Entries), got.Truncated)
+	}
+}
+
+func TestContextTimeout(t *testing.T) {
+	e, _ := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := e.Status(ctx, "web"); err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Error("timeout not honoured")
+	}
+}
+
+func TestUnixSocket(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "d.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skipf("unix sockets unavailable: %v", err)
+	}
+	srv := &http.Server{
+		ReadHeaderTimeout: time.Second,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/_ping" {
+				_, _ = w.Write([]byte("OK"))
+				return
+			}
+			_, _ = w.Write([]byte(fixture(false)))
+		}),
+	}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	e := NewEngine(sock)
+	if err := e.Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st, err := e.Status(context.Background(), "web")
+	if err != nil || st.Image != "nginx:1.27" {
+		t.Fatalf("st=%+v err=%v", st, err)
+	}
+	if e.client.Transport.(*http.Transport).Proxy != nil {
+		t.Error("proxy must be disabled")
+	}
+	if err := NewEngine(filepath.Join(dir, "missing.sock")).Ping(context.Background()); err == nil {
+		t.Error("expected dial error")
+	}
+}
