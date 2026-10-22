@@ -128,6 +128,7 @@ func (p Prober) HTTP(ctx context.Context, t config.HTTPTarget) (HTTPResult, erro
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	t.Timeout = timeout
 	start := time.Now()
 	res := p.probeHTTP(ctx, u, t)
 	res.DurationMS = time.Since(start).Milliseconds()
@@ -157,12 +158,17 @@ func (p Prober) probeHTTP(ctx context.Context, u *url.URL, t config.HTTPTarget) 
 		// Ignore the address the transport asks for and dial only the
 		// addresses checked above, so a second DNS answer cannot redirect us.
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			// Give each address a share of the budget so one that drops
+			// packets cannot starve the rest.
+			attempt := max(t.Timeout/time.Duration(len(addrs)), time.Second)
 			last := errBlocked
 			for _, a := range addrs {
 				if !Allowed(a, t.AllowPrivate) {
 					continue
 				}
-				c, err := p.dial(ctx, network, net.JoinHostPort(a.String(), port))
+				actx, cancel := context.WithTimeout(ctx, attempt)
+				c, err := p.dial(actx, network, net.JoinHostPort(a.String(), port))
+				cancel()
 				if err == nil {
 					return c, nil
 				}

@@ -52,6 +52,15 @@ func TestAllowed(t *testing.T) {
 		{"240.0.0.1", false, false},
 		{"224.0.0.1", false, false},
 		{"ff02::1", false, false},
+		{"168.63.129.16", false, false},
+		// IPv4 embedded in IPv6.
+		{"::127.0.0.1", false, false},
+		{"::a9fe:a9fe", false, false},
+		{"::ffff:0:127.0.0.1", false, false},
+		{"64:ff9b::a9fe:a9fe", false, false},                   // NAT64 to metadata
+		{"2002:a9fe:a9fe::", false, false},                     // 6to4 to metadata
+		{"2001:0:4136:e378:8000:63bf:5601:5601", false, false}, // Teredo, client 169.254.169.254 xor 0xff
+		{"64:ff9b::808:808", false, true},                      // NAT64 to a public address is still private-class
 	}
 	for _, tt := range tests {
 		a := netip.MustParseAddr(tt.addr)
