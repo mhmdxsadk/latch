@@ -1,0 +1,46 @@
+[Unit]
+Description=Latch - least-privilege read-only infrastructure interface for AI agents
+Documentation=https://github.com/mhmdxsadk/latch
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=latch
+Group=latch
+# Grants access to /var/run/docker.sock. This is highly privileged: anyone who
+# can talk to the Docker daemon can become root. Latch's narrow API, strict
+# validation and allowlists are the protection; the hardening below only
+# reduces collateral damage and must not be mistaken for containment.
+SupplementaryGroups=docker
+ExecStart=/usr/local/bin/latch serve --config /etc/latch/config.yaml
+Restart=on-failure
+RestartSec=2s
+
+# Socket directory /run/latch, owned by latch, group-accessible (0750) so only
+# the client group can traverse into it.
+RuntimeDirectory=latch
+RuntimeDirectoryMode=0750
+
+# Hardening (defence in depth).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

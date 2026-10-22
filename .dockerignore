@@ -1,0 +1,7 @@
+.git
+.github
+dist
+*.sock
+config/*.yaml
+!config/example.yaml
+HANDOFF.md
