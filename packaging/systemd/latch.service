@@ -1,5 +1,5 @@
 [Unit]
-Description=Latch - least-privilege read-only infrastructure interface for AI agents
+Description=Latch - securely lets AI agents monitor and manage your servers
 Documentation=https://github.com/mhmdxsadk/latch
 After=network.target docker.service
 Wants=docker.service
