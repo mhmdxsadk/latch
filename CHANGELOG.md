@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.2.0](https://github.com/mhmdxsadk/latch/compare/v0.1.0...v0.2.0) (2026-10-23)
+
+
+### Features
+
+* add host metrics tools and latch CLI ([51fddf6](https://github.com/mhmdxsadk/latch/commit/51fddf64c6db736f350a97e597e275e8cca1039f))
+* add install script and use it in quick start ([b41b712](https://github.com/mhmdxsadk/latch/commit/b41b712ed617b4a2668cf128d89aa5220e7b3c6a))
+* add strict config, policy allowlists and audit logging ([5265062](https://github.com/mhmdxsadk/latch/commit/5265062006e9dac1925cf8aa5ea449df76219adc))
+* **docker:** add read-only Docker Engine client ([c94eafc](https://github.com/mhmdxsadk/latch/commit/c94eafc8be77ff60b2b5365290c49b569df87b2f))
+* **doctor:** check Docker, systemd and health targets ([e2e9966](https://github.com/mhmdxsadk/latch/commit/e2e99669e916172cb28c058e695f58cf7440eaab))
+* **health:** add SSRF-guarded HTTP and DNS checks ([af03de0](https://github.com/mhmdxsadk/latch/commit/af03de04ed8133d5f3bf1e4377ba3bf0c28129ed))
+* **mcp:** bound concurrent tool calls ([c46ac7e](https://github.com/mhmdxsadk/latch/commit/c46ac7e794159ffaf6fb67d11974249adb9d46ae))
+* **mcp:** expose Docker, systemd and health check tools ([4315ff3](https://github.com/mhmdxsadk/latch/commit/4315ff34fb1c79daa9aad46f7f0c26e8cbe4864b))
+* serve MCP over peer-authenticated Unix socket ([62831f1](https://github.com/mhmdxsadk/latch/commit/62831f1ceda87372b494beaba6d74685481b49d3))
+* **systemd:** read allowlisted unit status over D-Bus ([79718a3](https://github.com/mhmdxsadk/latch/commit/79718a30d6797739f8a6b6fa010ab76753ac0533))
+
+
+### Bug Fixes
+
+* **docker:** verify container identity and keep newest logs ([4a85154](https://github.com/mhmdxsadk/latch/commit/4a851547b0ea6632f5f3f1e639b7d2720fc87867))
+* **doctor:** explain always-blocked health targets ([bc916d2](https://github.com/mhmdxsadk/latch/commit/bc916d22e456852d216e7f8e09ead39e9a314ad0))
+* **health:** check IPv4 embedded in IPv6 and share dial budget ([1e4c1a5](https://github.com/mhmdxsadk/latch/commit/1e4c1a58c349b26055706ead0de1e440aedcbf8a))
+* reject non-positive block size in disk stats ([fa529d8](https://github.com/mhmdxsadk/latch/commit/fa529d81778ae1d9f0dee541f532a7f925fc8a4e))
+
 ## 0.1.0 (2026-10-22)
 
 
