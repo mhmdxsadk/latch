@@ -99,11 +99,9 @@ main() {
 	curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt" || die "download failed: $base/checksums.txt"
 
 	if command -v cosign >/dev/null 2>&1; then
-		curl -fsSL -o "$tmp/checksums.txt.sig" "$base/checksums.txt.sig" || die "download failed: checksums.txt.sig"
-		curl -fsSL -o "$tmp/checksums.txt.pem" "$base/checksums.txt.pem" || die "download failed: checksums.txt.pem"
+		curl -fsSL -o "$tmp/checksums.txt.sigstore.json" "$base/checksums.txt.sigstore.json" || die "download failed: checksums.txt.sigstore.json"
 		cosign verify-blob \
-			--certificate "$tmp/checksums.txt.pem" \
-			--signature "$tmp/checksums.txt.sig" \
+			--bundle "$tmp/checksums.txt.sigstore.json" \
 			--certificate-identity-regexp "^https://github.com/$REPO/\\.github/workflows/release\\.yml@" \
 			--certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
 			"$tmp/checksums.txt" >/dev/null 2>&1 || die "cosign signature verification failed"
