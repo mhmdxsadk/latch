@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/mhmdxsadk/latch/compare/v0.1.0...v0.1.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **release:** sign checksums with a cosign v3 bundle ([7b292ad](https://github.com/mhmdxsadk/latch/commit/7b292ad2ba79e20d08bd8d76d54367cb2662bde2))
+
 ## 0.1.0 (2026-10-22)
 
 
