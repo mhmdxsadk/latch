@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/mhmdxsadk/latch/compare/v0.4.0...v0.4.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **install:** let socket group members reach the socket ([5b0ca7d](https://github.com/mhmdxsadk/latch/commit/5b0ca7dfccd42d9d0c16193f95f593386cafef9d))
+* **server:** also serve MCP at the socket root ([d6bb6da](https://github.com/mhmdxsadk/latch/commit/d6bb6da443ee1a25c995655f5a565001d9382e5b))
+
 ## [0.4.0](https://github.com/mhmdxsadk/latch/compare/v0.3.0...v0.4.0) (2026-10-24)
 
 
