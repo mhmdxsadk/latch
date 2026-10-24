@@ -8,12 +8,10 @@ server:
   # Unix socket the agent connects to (Streamable HTTP, endpoint /mcp).
   # Mode is always 0660. Put it in a directory not writable by "other".
   socket: /run/latch/latch.sock
-  # Group that owns the socket. Add the agent's user to this group.
+  # Group that owns the socket. Only processes in this group may connect
+  # (checked by file permissions and again with kernel-verified peer
+  # credentials). Add the agent's user to it. Root's group is refused.
   socket_group: latch-clients
-  # Kernel-verified peer credentials (SO_PEERCRED). At least one entry is
-  # required; a peer matching neither list is disconnected.
-  allowed_uids: []
-  allowed_gids: [1500]
 
 limits:
   max_log_lines: 200      # hard ceiling 1000

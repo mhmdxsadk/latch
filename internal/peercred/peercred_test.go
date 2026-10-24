@@ -7,28 +7,28 @@ import (
 	"testing"
 )
 
-func TestAllowed(t *testing.T) {
+func TestInGroup(t *testing.T) {
 	c := Cred{UID: 1000, GIDs: []uint32{1000, 44}}
 	tests := []struct {
 		name     string
-		uids     []uint32
-		gids     []uint32
+		gid      uint32
 		expected bool
 	}{
-		{"empty lists match nobody", nil, nil, false},
-		{"uid match", []uint32{1000}, nil, true},
-		{"uid mismatch", []uint32{1001}, nil, false},
-		{"gid match on secondary group", nil, []uint32{44}, true},
-		{"gid mismatch", nil, []uint32{45}, false},
-		{"root is not implicitly allowed", []uint32{1}, []uint32{2}, false},
+		{"primary group", 1000, true},
+		{"secondary group", 44, true},
+		{"other group", 45, false},
+		{"uid is not a group", 999, false},
 	}
 	for _, tt := range tests {
-		if got := Allowed(c, tt.uids, tt.gids); got != tt.expected {
+		if got := InGroup(c, tt.gid); got != tt.expected {
 			t.Errorf("%s: got %v, want %v", tt.name, got, tt.expected)
 		}
 	}
-	if Allowed(Cred{UID: 0}, nil, nil) {
-		t.Error("uid 0 must not be implicitly allowed")
+	if InGroup(Cred{UID: 0, GIDs: []uint32{0}}, 0) {
+		t.Error("group 0 must match nobody")
+	}
+	if InGroup(Cred{UID: 1000}, 1000) {
+		t.Error("a peer without groups must match nothing")
 	}
 }
 

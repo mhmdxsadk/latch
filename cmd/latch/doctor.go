@@ -14,6 +14,7 @@ import (
 	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
+	"github.com/mhmdxsadk/latch/internal/server"
 	"github.com/mhmdxsadk/latch/internal/systemd"
 )
 
@@ -25,6 +26,7 @@ type integrations struct {
 	docker  docker.Client
 	systemd systemd.Client
 	health  health.Checker
+	groupID func(name string) (uint32, error)
 }
 
 // cmdDoctor checks that every configured integration is reachable. It never
@@ -49,6 +51,7 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 		docker:  docker.NewEngine(cfg.Docker.Socket),
 		systemd: systemd.NewBus(),
 		health:  health.Prober{},
+		groupID: server.GroupID,
 	}, stdout)
 	if !ok {
 		return 1
@@ -79,8 +82,10 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 	} else {
 		check("socket directory "+dir, nil)
 	}
+	_, err := in.groupID(cfg.Server.SocketGroup)
+	check("socket group "+cfg.Server.SocketGroup, err)
 
-	_, err := in.host.Load(ctx)
+	_, err = in.host.Load(ctx)
 	check("host load", err)
 	_, err = in.host.Memory(ctx)
 	check("host memory", err)

@@ -46,6 +46,8 @@ var (
 	// unitName matches a fully qualified systemd unit name. Template
 	// instances ("foo@bar.service") are allowed; path separators are not.
 	unitName = regexp.MustCompile(`^[A-Za-z0-9:_.\\@-]{1,200}\.(service|socket|timer|mount|target|path)$`)
+	// groupName is a conservative Unix group name.
+	groupName = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 	// dnsName is a conservative hostname check (no wildcards, no underscores).
 	dnsName = regexp.MustCompile(`^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?$`)
 )
@@ -68,12 +70,15 @@ type Config struct {
 type Server struct {
 	// Socket is the absolute path of the Unix domain socket.
 	Socket string `yaml:"socket"`
-	// SocketGroup is the group name that owns the socket (mode is fixed 0660).
+	// SocketGroup owns the socket (mode is fixed 0660) and is the only group
+	// whose processes may connect, verified with kernel-supplied peer
+	// credentials. Required.
 	SocketGroup string `yaml:"socket_group"`
-	// AllowedUIDs / AllowedGIDs restrict which peers may connect, verified with
-	// kernel-supplied peer credentials. At least one entry is required.
-	AllowedUIDs []uint32 `yaml:"allowed_uids"`
-	AllowedGIDs []uint32 `yaml:"allowed_gids"`
+
+	// Removed in 0.2. Kept only so old configs get a clear error instead of
+	// a generic unknown-field one.
+	RemovedAllowedUIDs any `yaml:"allowed_uids"`
+	RemovedAllowedGIDs any `yaml:"allowed_gids"`
 }
 
 // Limits bounds what a single call may return.
@@ -203,8 +208,11 @@ func (c *Config) Validate() error {
 	if !filepath.IsAbs(c.Server.Socket) || filepath.Clean(c.Server.Socket) != c.Server.Socket {
 		add("server.socket must be a clean absolute path")
 	}
-	if len(c.Server.AllowedUIDs)+len(c.Server.AllowedGIDs) == 0 {
-		add("server: at least one of allowed_uids or allowed_gids is required")
+	if !groupName.MatchString(c.Server.SocketGroup) {
+		add("server.socket_group must be a valid group name")
+	}
+	if c.Server.RemovedAllowedUIDs != nil || c.Server.RemovedAllowedGIDs != nil {
+		add("server.allowed_uids and server.allowed_gids were removed: processes in socket_group may connect; delete these lines")
 	}
 
 	// limits

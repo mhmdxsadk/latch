@@ -10,7 +10,7 @@ import (
 const validBase = `
 server:
   socket: /run/latch/latch.sock
-  allowed_gids: [1500]
+  socket_group: latch-clients
 `
 
 func TestExampleConfigIsValid(t *testing.T) {
@@ -27,9 +27,13 @@ func TestParseRejects(t *testing.T) {
 	}{
 		{"unknown top-level key", validBase + "commands:\n  - rm -rf /\n", "field commands not found"},
 		{"unknown nested key", validBase + "docker:\n  services:\n    - name: a\n      container: b\n      exec: /bin/sh\n", "field exec not found"},
-		{"no peer allowlist", "server:\n  socket: /run/latch.sock\n", "allowed_uids or allowed_gids"},
-		{"relative socket", "server:\n  socket: latch.sock\n  allowed_uids: [1]\n", "server.socket"},
-		{"socket path traversal", "server:\n  socket: /run/../etc/x.sock\n  allowed_uids: [1]\n", "server.socket"},
+		{"no socket group", "server:\n  socket: /run/latch.sock\n", "server.socket_group"},
+		{"socket group with path", "server:\n  socket: /run/latch.sock\n  socket_group: ../x\n", "server.socket_group"},
+		{"socket group numeric", "server:\n  socket: /run/latch.sock\n  socket_group: '0'\n", "server.socket_group"},
+		{"removed allowed_uids", validBase + "  allowed_uids: [1000]\n", "were removed"},
+		{"removed allowed_gids", validBase + "  allowed_gids: []\n", "were removed"},
+		{"relative socket", "server:\n  socket: latch.sock\n  socket_group: latch-clients\n", "server.socket"},
+		{"socket path traversal", "server:\n  socket: /run/../etc/x.sock\n  socket_group: latch-clients\n", "server.socket"},
 		{"log lines above hard cap", validBase + "limits:\n  max_log_lines: 100000\n", "max_log_lines"},
 		{"log bytes above hard cap", validBase + "limits:\n  max_log_bytes: 99999999\n", "max_log_bytes"},
 		{"negative log lines", validBase + "limits:\n  max_log_lines: -1\n", "max_log_lines"},

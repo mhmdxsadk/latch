@@ -138,10 +138,7 @@ main() {
 	fresh=0
 	if [ ! -e "$CONFIG_DIR/config.yaml" ]; then
 		fresh=1
-		gid=$(getent group "$CLIENT_GROUP" | cut -d: -f3)
-		sed "s/allowed_gids: \\[1500\\]/allowed_gids: [$gid]/" "$tmp/config/example.yaml" >"$tmp/config.yaml"
-		grep -q "allowed_gids: \\[$gid\\]" "$tmp/config.yaml" || die "could not prepare the example config"
-		install -m 0640 -o root -g latch "$tmp/config.yaml" "$CONFIG_DIR/config.yaml"
+		install -m 0640 -o root -g latch "$tmp/config/example.yaml" "$CONFIG_DIR/config.yaml"
 	fi
 
 	systemctl daemon-reload

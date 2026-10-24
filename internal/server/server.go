@@ -57,13 +57,11 @@ func Listen(o Options) (net.Listener, error) {
 
 	gid := -1
 	if o.Group != "" {
-		g, err := user.LookupGroup(o.Group)
+		g, err := GroupID(o.Group)
 		if err != nil {
-			return nil, fmt.Errorf("lookup socket group: %w", err)
+			return nil, err
 		}
-		if gid, err = strconv.Atoi(g.Gid); err != nil {
-			return nil, fmt.Errorf("invalid gid for group %q", o.Group)
-		}
+		gid = int(g)
 	}
 
 	// Create the socket with no permissions for "other" from the start so there
@@ -90,12 +88,30 @@ func Listen(o Options) (net.Listener, error) {
 	return ln, nil
 }
 
-// credListener rejects peers whose kernel-verified credentials are not allowed.
-// Failing to read credentials is a rejection.
+// GroupID resolves the socket group to its numeric ID. Root's group is refused:
+// it would let any root process through the peer check, which defeats the
+// point of running the agent unprivileged.
+func GroupID(name string) (uint32, error) {
+	g, err := user.LookupGroup(name)
+	if err != nil {
+		return 0, fmt.Errorf("lookup socket group: %w", err)
+	}
+	gid, err := strconv.ParseUint(g.Gid, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid gid for group %q", name)
+	}
+	if gid == 0 {
+		return 0, fmt.Errorf("socket group %q is gid 0; use a dedicated group", name)
+	}
+	return uint32(gid), nil
+}
+
+// credListener rejects peers whose kernel-verified credentials are not in the
+// socket group. Failing to read credentials is a rejection.
 type credListener struct {
 	net.Listener
-	uids, gids []uint32
-	audit      *audit.Logger
+	gid   uint32
+	audit *audit.Logger
 }
 
 type credConn struct {
@@ -119,7 +135,7 @@ func (l *credListener) Accept() (net.Conn, error) {
 		if len(cred.GIDs) > 0 {
 			p.GID = cred.GIDs[0]
 		}
-		if !peercred.Allowed(cred, l.uids, l.gids) {
+		if !peercred.InGroup(cred, l.gid) {
 			l.audit.Connection(context.Background(), p, audit.OutcomeRejected, "peer_not_allowed")
 			c.Close()
 			continue
@@ -128,8 +144,9 @@ func (l *credListener) Accept() (net.Conn, error) {
 	}
 }
 
-// ServeUnix serves handler on ln until ctx is cancelled.
-func ServeUnix(ctx context.Context, ln net.Listener, handler http.Handler, uids, gids []uint32, al *audit.Logger) error {
+// ServeUnix serves handler on ln until ctx is cancelled. Only peers in group
+// gid are accepted.
+func ServeUnix(ctx context.Context, ln net.Listener, handler http.Handler, gid uint32, al *audit.Logger) error {
 	mux := http.NewServeMux()
 	mux.Handle(Endpoint, limitBody(handler))
 
@@ -158,7 +175,7 @@ func ServeUnix(ctx context.Context, ln net.Listener, handler http.Handler, uids,
 	}
 	go func() { <-ctx.Done(); shutdown() }()
 
-	err := srv.Serve(&credListener{Listener: ln, uids: uids, gids: gids, audit: al})
+	err := srv.Serve(&credListener{Listener: ln, gid: gid, audit: al})
 	shutdown()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil

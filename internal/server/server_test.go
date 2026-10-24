@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -97,9 +98,9 @@ type env struct {
 	audit *lockedBuffer
 }
 
-func start(t *testing.T, uids, gids []uint32) env {
+func start(t *testing.T, gid uint32) env {
 	t.Helper()
-	cfg, err := config.Parse([]byte("server: {socket: /run/l.sock, allowed_uids: [1]}\nhost: {disks: [{name: root, path: /}]}\n"))
+	cfg, err := config.Parse([]byte("server: {socket: /run/l.sock, socket_group: latch-clients}\nhost: {disks: [{name: root, path: /}]}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +115,7 @@ func start(t *testing.T, uids, gids []uint32) env {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- ServeUnix(ctx, ln, Handler(srv), uids, gids, al) }()
+	go func() { done <- ServeUnix(ctx, ln, Handler(srv), gid, al) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -137,8 +138,8 @@ func unixClient(path string) *http.Client {
 	}
 }
 
-func TestMCPClientOverUnixSocketAllowedUID(t *testing.T) {
-	e := start(t, []uint32{uint32(os.Getuid())}, nil)
+func TestMCPClientOverUnixSocketInGroup(t *testing.T) {
+	e := start(t, uint32(os.Getgid()))
 	client := sdk.NewClient(&sdk.Implementation{Name: "t", Version: "0"}, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -157,8 +158,7 @@ func TestMCPClientOverUnixSocketAllowedUID(t *testing.T) {
 }
 
 func TestPeerWithDisallowedCredentialsIsRejected(t *testing.T) {
-	other := uint32(os.Getuid()) + 1
-	e := start(t, []uint32{other}, []uint32{uint32(os.Getgid()) + 1})
+	e := start(t, 4_000_000_000) // a group this test process is not in
 	resp, err := unixClient(e.path).Post("http://latch"+Endpoint, "application/json", strings.NewReader("{}"))
 	if err == nil {
 		resp.Body.Close()
@@ -173,17 +173,27 @@ func TestPeerWithDisallowedCredentialsIsRejected(t *testing.T) {
 	}
 }
 
-func TestEmptyAllowListsRejectEveryone(t *testing.T) {
-	e := start(t, nil, nil)
+func TestGroupZeroRejectsEveryone(t *testing.T) {
+	e := start(t, 0)
 	resp, err := unixClient(e.path).Get("http://latch" + Endpoint)
 	if err == nil {
 		resp.Body.Close()
-		t.Fatal("fail closed: empty allowlists must reject all peers")
+		t.Fatal("fail closed: group 0 must reject all peers")
+	}
+}
+
+func TestGroupIDRefusesRootGroup(t *testing.T) {
+	g, err := user.LookupGroupId("0")
+	if err != nil {
+		t.Skip("no gid 0 on this system")
+	}
+	if _, err := GroupID(g.Name); err == nil {
+		t.Fatalf("socket group %q (gid 0) must be refused", g.Name)
 	}
 }
 
 func TestOnlyMCPEndpointIsServed(t *testing.T) {
-	e := start(t, []uint32{uint32(os.Getuid())}, nil)
+	e := start(t, uint32(os.Getgid()))
 	c := unixClient(e.path)
 	for _, path := range []string{"/", "/etc/passwd", "/mcp/../x", "/metrics", "/debug/pprof/"} {
 		resp, err := c.Get("http://latch" + path)
@@ -198,7 +208,7 @@ func TestOnlyMCPEndpointIsServed(t *testing.T) {
 }
 
 func TestOversizedBodyIsRejected(t *testing.T) {
-	e := start(t, []uint32{uint32(os.Getuid())}, nil)
+	e := start(t, uint32(os.Getgid()))
 	big := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"x","params":{"p":"` + strings.Repeat("a", 2*maxBodyBytes) + `"}}`)
 	req, _ := http.NewRequest("POST", "http://latch"+Endpoint, big)
 	req.Header.Set("Content-Type", "application/json")

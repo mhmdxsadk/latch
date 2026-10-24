@@ -70,8 +70,10 @@ sudo systemctl enable --now latch
 
 ## Connecting an agent
 
-Latch serves MCP over a Unix socket at `/run/latch/latch.sock`. Only users and
-groups listed in `allowed_uids` and `allowed_gids` can connect.
+Latch serves MCP over a Unix socket at `/run/latch/latch.sock`. Only processes
+in `socket_group` (`latch-clients` by default) can connect, so add the agent's
+user to that group. Latch checks the group with kernel-verified peer
+credentials, and refuses root's group.
 
 [Docker Agent](https://docs.docker.com/ai/docker-agent/features/remote-mcp/)
 can connect directly:

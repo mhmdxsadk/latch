@@ -139,13 +139,18 @@ func cmdServe(args []string, stderr io.Writer) int {
 		return 0
 	}
 
+	gid, err := server.GroupID(cfg.Server.SocketGroup)
+	if err != nil {
+		fmt.Fprintf(stderr, "latch: %v\n", err)
+		return 1
+	}
 	ln, err := server.Listen(server.Options{Path: cfg.Server.Socket, Group: cfg.Server.SocketGroup})
 	if err != nil {
 		fmt.Fprintf(stderr, "latch: listen: %v\n", err)
 		return 1
 	}
 	fmt.Fprintf(stderr, "latch: listening on unix://%s\n", cfg.Server.Socket)
-	err = server.ServeUnix(ctx, ln, server.Handler(srv), cfg.Server.AllowedUIDs, cfg.Server.AllowedGIDs, al)
+	err = server.ServeUnix(ctx, ln, server.Handler(srv), gid, al)
 	os.Remove(cfg.Server.Socket)
 	if err != nil {
 		fmt.Fprintf(stderr, "latch: %v\n", err)

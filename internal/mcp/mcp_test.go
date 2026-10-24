@@ -50,7 +50,7 @@ func newHarness(t *testing.T, h host.Provider) *harness {
 func newHarnessWith(t *testing.T, override func(*Deps)) *harness {
 	t.Helper()
 	cfg, err := config.Parse([]byte(`
-server: {socket: /run/l.sock, allowed_uids: [1]}
+server: {socket: /run/l.sock, socket_group: latch-clients}
 host:
   disks:
     - {name: root, path: /}

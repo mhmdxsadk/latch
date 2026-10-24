@@ -30,19 +30,15 @@ func FromConn(conn net.Conn) (Cred, error) {
 	return fromUnixConn(uc)
 }
 
-// Allowed reports whether c matches one of the allowed UIDs or GIDs.
-// Empty allow lists match nobody.
-func Allowed(c Cred, uids, gids []uint32) bool {
-	for _, u := range uids {
-		if c.UID == u {
-			return true
-		}
+// InGroup reports whether c belongs to group gid. Group 0 matches nobody, so
+// root is never let in through its own group.
+func InGroup(c Cred, gid uint32) bool {
+	if gid == 0 {
+		return false
 	}
-	for _, g := range gids {
-		for _, cg := range c.GIDs {
-			if cg == g {
-				return true
-			}
+	for _, g := range c.GIDs {
+		if g == gid {
+			return true
 		}
 	}
 	return false

@@ -52,7 +52,7 @@ func (s stubHealth) DNS(context.Context, config.DNSTarget) (health.DNSResult, er
 func doctorConfig(t *testing.T) *config.Config {
 	t.Helper()
 	cfg, err := config.Parse([]byte(`
-server: {socket: ` + t.TempDir() + `/l.sock, allowed_uids: [1]}
+server: {socket: ` + t.TempDir() + `/l.sock, socket_group: latch-clients}
 docker:
   services: [{name: web, container: my-web}]
 systemd:
@@ -73,6 +73,7 @@ func healthy() integrations {
 		docker:  stubDocker{},
 		systemd: stubSystemd{},
 		health:  stubHealth{http: health.HTTPResult{OK: true, StatusCode: 200}, dns: health.DNSResult{OK: true}},
+		groupID: func(string) (uint32, error) { return 1500, nil },
 	}
 }
 
@@ -81,7 +82,7 @@ func TestDoctorAllHealthy(t *testing.T) {
 	if !doctor(context.Background(), doctorConfig(t), healthy(), &out) {
 		t.Fatalf("expected success:\n%s", out.String())
 	}
-	for _, want := range []string{"docker daemon", "docker service web", "systemd unit ssh.service", "http check site", "dns check example"} {
+	for _, want := range []string{"socket group latch-clients", "docker daemon", "docker service web", "systemd unit ssh.service", "http check site", "dns check example"} {
 		if !strings.Contains(out.String(), "ok    "+want) {
 			t.Errorf("missing %q in:\n%s", want, out.String())
 		}
@@ -94,6 +95,9 @@ func TestDoctorReportsFailures(t *testing.T) {
 		mutate func(*integrations)
 		want   string
 	}{
+		{"socket group missing", func(i *integrations) {
+			i.groupID = func(string) (uint32, error) { return 0, errors.New("unknown group") }
+		}, "FAIL  socket group latch-clients"},
 		{"docker down", func(i *integrations) { i.docker = stubDocker{ping: errors.New("dial failed")} }, "FAIL  docker daemon"},
 		{"container missing", func(i *integrations) { i.docker = stubDocker{status: docker.ErrNotFound} }, "FAIL  docker service web"},
 		{"no systemd", func(i *integrations) { i.systemd = stubSystemd{ping: errors.New("no bus")} }, "FAIL  systemd"},
