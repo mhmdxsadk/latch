@@ -2,11 +2,48 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mhmdxsadk/latch/internal/config"
+	"github.com/mhmdxsadk/latch/internal/files"
 )
+
+func TestNewFileGuardBlocksConfigAndWarns(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "latch.yaml")
+	data := "server: {socket: /run/l.sock, socket_group: no-such-group-xyz}\nfiles:\n  exclude: ['*.secret']\n"
+	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "ok.txt"), []byte("ok"), 0o600)
+	os.WriteFile(filepath.Join(dir, "a.secret"), []byte("x"), 0o600)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errb bytes.Buffer
+	g, err := newFileGuard(cfg, cfgPath, nil, &errb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errb.String(), "latch: warning: agent home directories") {
+		t.Errorf("no warning for an unknown socket group: %q", errb.String())
+	}
+	ctx := context.Background()
+	for _, p := range []string{cfgPath, filepath.Join(dir, "a.secret"), "/etc/shadow"} {
+		if _, err := g.Check(ctx, p); !errors.Is(err, files.ErrBlocked) {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+	if _, err := g.Check(ctx, filepath.Join(dir, "ok.txt")); err != nil {
+		t.Errorf("ok.txt: %v", err)
+	}
+}
 
 func TestRunDispatch(t *testing.T) {
 	var out, errb bytes.Buffer
