@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -24,6 +26,11 @@ type fakeDocker struct {
 	containers []string
 	lines      int
 	maxBytes   int
+	events     []docker.Event // returned by Events, after the visibility filter
+	since      time.Time
+	until      time.Time
+	ids        map[string]string
+	usage      docker.Usage
 }
 
 func (f *fakeDocker) Ping(context.Context) error { return f.err }
@@ -47,6 +54,32 @@ func (f *fakeDocker) Logs(_ context.Context, c string, lines, maxBytes int) (doc
 	f.containers = append(f.containers, c)
 	f.lines, f.maxBytes = lines, maxBytes
 	return docker.Logs{Entries: []docker.LogEntry{{Stream: "stdout", Text: "hello"}}}, f.err
+}
+
+func (f *fakeDocker) Usage(_ context.Context, c string) (docker.Usage, error) {
+	f.containers = append(f.containers, c)
+	return f.usage, f.err
+}
+
+func (f *fakeDocker) Events(_ context.Context, since, until time.Time, visible func(string) bool, limit int) (docker.Events, error) {
+	f.since, f.until = since, until
+	if f.err != nil {
+		return docker.Events{}, f.err
+	}
+	out := docker.Events{Events: []docker.Event{}}
+	for _, e := range f.events {
+		if visible(e.Container) {
+			out.Events = append(out.Events, e)
+		}
+	}
+	if len(out.Events) > limit {
+		out.Events, out.Truncated = out.Events[len(out.Events)-limit:], true
+	}
+	return out, nil
+}
+
+func (f *fakeDocker) IDs(context.Context) (map[string]string, error) {
+	return f.ids, f.err
 }
 
 func (f *fakeDocker) Settings(_ context.Context, c string) (docker.Settings, error) {
@@ -382,5 +415,94 @@ func TestConcurrentCallsAreBounded(t *testing.T) {
 	}
 	if !strings.Contains(h.audit.String(), `"reason":"busy"`) {
 		t.Error("busy refusal not audited")
+	}
+}
+
+func TestDockerUsage(t *testing.T) {
+	fd := &fakeDocker{usage: docker.Usage{CPUPercent: 12.5, MemoryUsedBytes: 100, PIDs: 3}}
+	h := newHarnessWith(t, func(d *Deps) { d.Docker = fd })
+	out := structured[dockerUsageOut](t, h, "docker_usage", map[string]any{"name": "my-web"})
+	if out.Name != "my-web" || out.Usage.CPUPercent != 12.5 || out.Usage.PIDs != 3 {
+		t.Errorf("got %+v", out)
+	}
+	for _, name := range []string{"secret-vault", "../x", "", "a b"} {
+		res, err := h.call("docker_usage", map[string]any{"name": name})
+		if err == nil && !res.IsError {
+			t.Errorf("name %q accepted", name)
+		}
+	}
+	if strings.Join(fd.containers, ",") != "my-web" {
+		t.Errorf("integration saw %v", fd.containers)
+	}
+}
+
+func TestDockerUsageExcludedReadsAsMissing(t *testing.T) {
+	h := newHarnessWith(t, func(d *Deps) { d.Docker = &fakeDocker{err: docker.ErrNotFound} })
+	excluded, _ := h.call("docker_usage", map[string]any{"name": "secret-vault"})
+	missing, _ := h.call("docker_usage", map[string]any{"name": "my-web"})
+	if !excluded.IsError || !missing.IsError || resultText(excluded) != resultText(missing) {
+		t.Errorf("excluded %q, missing %q", resultText(excluded), resultText(missing))
+	}
+}
+
+func TestDockerEvents(t *testing.T) {
+	zero := 0
+	fd := &fakeDocker{events: []docker.Event{
+		{Time: "2024-01-01T00:00:00Z", Container: "my-web", Action: "die", ExitCode: &zero},
+		{Time: "2024-01-01T00:00:01Z", Container: "secret-vault", Action: "oom"},
+		{Time: "2024-01-01T00:00:02Z", Container: "my-db", Action: "health_status", Health: "unhealthy"},
+	}}
+	h := newHarnessWith(t, func(d *Deps) { d.Docker = fd })
+	out := structured[dockerEventsOut](t, h, "docker_events", map[string]any{})
+	if out.Hours != 1 || len(out.Events) != 2 || out.Events[0].Container != "my-web" || out.Events[1].Health != "unhealthy" {
+		t.Errorf("got %+v", out)
+	}
+	if got := fd.until.Sub(fd.since); got != time.Hour {
+		t.Errorf("window = %v", got)
+	}
+	res, _ := h.call("docker_events", map[string]any{})
+	if strings.Contains(resultText(res), "secret-vault") {
+		t.Errorf("excluded container leaked: %s", resultText(res))
+	}
+	out = structured[dockerEventsOut](t, h, "docker_events", map[string]any{"hours": 24})
+	if got := fd.until.Sub(fd.since); got != 24*time.Hour || out.Hours != 24 {
+		t.Errorf("window = %v", got)
+	}
+}
+
+func TestDockerEventsEmptyIsNonNilAndCapped(t *testing.T) {
+	fd := &fakeDocker{}
+	h := newHarnessWith(t, func(d *Deps) { d.Docker = fd })
+	res, err := h.call("docker_events", map[string]any{})
+	if err != nil || res.IsError {
+		t.Fatal(err, resultText(res))
+	}
+	b, _ := json.Marshal(res.StructuredContent)
+	if !strings.Contains(string(b), `"events":[]`) {
+		t.Errorf("got %s", b)
+	}
+	for i := range 250 {
+		fd.events = append(fd.events, docker.Event{Container: "my-web", Action: "start", Time: fmt.Sprint(i)})
+	}
+	out := structured[dockerEventsOut](t, h, "docker_events", map[string]any{})
+	if len(out.Events) != 200 || !out.Truncated || out.Events[199].Time != "249" {
+		t.Errorf("len=%d truncated=%v", len(out.Events), out.Truncated)
+	}
+}
+
+func TestDockerEventsRejections(t *testing.T) {
+	fd := &fakeDocker{}
+	h := newHarnessWith(t, func(d *Deps) { d.Docker = fd })
+	for _, args := range []any{
+		map[string]any{"hours": 25}, map[string]any{"hours": -1}, map[string]any{"hours": "all"},
+		map[string]any{"hours": 1.5}, map[string]any{"since": 1},
+	} {
+		res, err := h.call("docker_events", args)
+		if err == nil && !res.IsError {
+			t.Errorf("%v accepted", args)
+		}
+	}
+	if !fd.since.IsZero() {
+		t.Error("rejected call reached the integration")
 	}
 }

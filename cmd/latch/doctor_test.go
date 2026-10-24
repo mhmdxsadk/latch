@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
@@ -38,6 +39,13 @@ func (s stubDocker) Logs(context.Context, string, int, int) (docker.Logs, error)
 func (s stubDocker) Settings(context.Context, string) (docker.Settings, error) {
 	return docker.Settings{}, nil
 }
+func (s stubDocker) Usage(context.Context, string) (docker.Usage, error) {
+	return docker.Usage{}, nil
+}
+func (s stubDocker) Events(context.Context, time.Time, time.Time, func(string) bool, int) (docker.Events, error) {
+	return docker.Events{}, nil
+}
+func (s stubDocker) IDs(context.Context) (map[string]string, error) { return nil, nil }
 
 type stubSystemd struct{ ping, list error }
 
