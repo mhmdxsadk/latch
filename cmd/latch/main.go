@@ -28,8 +28,20 @@ import (
 var (
 	version = "dev"
 	commit  = "none"
-	date    = "unknown"
 )
+
+// versionText is the output of "latch version": the version, then the commit
+// and platform so a bug report can name the exact build.
+func versionText(version, commit, goos, goarch string) string {
+	detail := goos + "/" + goarch
+	if commit != "" && commit != "none" {
+		if len(commit) > 7 {
+			commit = commit[:7]
+		}
+		detail = "commit " + commit + " · " + detail
+	}
+	return "latch " + version + "\n" + detail + "\n"
+}
 
 const usage = `Usage: latch <command> [flags]
 
@@ -59,7 +71,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "doctor":
 		return cmdDoctor(args[1:], stdout, stderr)
 	case "version", "--version", "-v":
-		fmt.Fprintf(stdout, "latch %s (commit %s, built %s, %s/%s)\n", version, commit, date, runtime.GOOS, runtime.GOARCH)
+		fmt.Fprint(stdout, versionText(version, commit, runtime.GOOS, runtime.GOARCH))
 		return 0
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)

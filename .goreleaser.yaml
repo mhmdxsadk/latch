@@ -16,7 +16,6 @@ builds:
       - -s -w
       - -X main.version={{ .Version }}
       - -X main.commit={{ .Commit }}
-      - -X main.date={{ .CommitDate }}
     # Add targets here (e.g. linux/arm, freebsd) to extend the release matrix.
     goos: [linux, darwin]
     goarch: [amd64, arm64]
