@@ -12,7 +12,7 @@ brain.
 The agent is untrusted. Latch is the policy enforcement boundary.
 
 - The operator lists the resources the agent may touch (Docker services, systemd
-  units, disks, HTTP targets, DNS names) in a config file.
+  units, disks, DNS names) in a config file.
 - The agent can only refer to those resources by name. It cannot supply commands,
   container IDs, unit names, file paths or URLs of its own, and the config cannot
   express a command or argument.
@@ -39,10 +39,7 @@ Latch is pre-release (v0.x) and read-only. Currently available:
   Logs often contain secrets, so only list containers whose logs the agent may
   read.
 - `systemd_unit_status`: load, active and sub state of allowlisted units
-- `http_check`, `dns_check`: probe configured targets. HTTP checks never follow
-  redirects, ignore proxy settings, and refuse targets that resolve to
-  loopback, private or link-local addresses unless the target sets
-  `allow_private`. Cloud metadata addresses are always refused.
+- `dns_check`: resolve a configured hostname and return its addresses.
 
 Run `latch doctor` to check that every configured resource is reachable.
 

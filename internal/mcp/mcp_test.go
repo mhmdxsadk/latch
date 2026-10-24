@@ -61,8 +61,6 @@ docker:
 systemd:
   units: [ssh.service]
 health:
-  http:
-    - {name: site, url: "https://example.com/"}
   dns:
     - {name: example, host: example.com}
 `))
@@ -122,7 +120,7 @@ func TestToolSurfaceIsReadOnlyAndFixed(t *testing.T) {
 	want := map[string]bool{
 		"list_resources": true, "host_load": true, "host_memory": true, "host_disk": true,
 		"docker_list": true, "docker_status": true, "docker_logs": true,
-		"systemd_unit_status": true, "http_check": true, "dns_check": true,
+		"systemd_unit_status": true, "dns_check": true,
 	}
 	for _, tool := range res.Tools {
 		if !want[tool.Name] {
@@ -150,7 +148,7 @@ func TestListResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(out.Disks) != 1 || out.Disks[0] != "root" || len(out.DockerServices) != 2 ||
-		len(out.SystemdUnits) != 1 || len(out.HTTPChecks) != 1 || len(out.DNSChecks) != 1 {
+		len(out.SystemdUnits) != 1 || len(out.DNSChecks) != 1 {
 		t.Errorf("got %+v", out)
 	}
 }

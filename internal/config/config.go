@@ -11,12 +11,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -36,7 +34,6 @@ const (
 
 	DefaultDockerSocket = "/var/run/docker.sock"
 	DefaultCheckTimeout = 5 * time.Second
-	MaxCheckTimeout     = 30 * time.Second
 )
 
 var (
@@ -117,22 +114,9 @@ type Disk struct {
 	Path string `yaml:"path"`
 }
 
-// Health lists the fixed health-check targets.
+// Health lists the fixed DNS check targets.
 type Health struct {
-	HTTP []HTTPTarget `yaml:"http"`
-	DNS  []DNSTarget  `yaml:"dns"`
-}
-
-// HTTPTarget is a fixed URL the agent can ask Latch to probe by name.
-type HTTPTarget struct {
-	Name         string        `yaml:"name"`
-	URL          string        `yaml:"url"`
-	ExpectStatus int           `yaml:"expect_status"`
-	Timeout      time.Duration `yaml:"timeout"`
-	// AllowPrivate permits the target to resolve to loopback/private/link-local
-	// addresses. It is false by default so a public-looking URL cannot be
-	// pointed at internal services through DNS.
-	AllowPrivate bool `yaml:"allow_private"`
+	DNS []DNSTarget `yaml:"dns"`
 }
 
 // DNSTarget is a fixed hostname the agent can ask Latch to resolve by name.
@@ -228,15 +212,6 @@ func (c *Config) applyDefaults() {
 	if c.Docker.Socket == "" {
 		c.Docker.Socket = DefaultDockerSocket
 	}
-	for i := range c.Health.HTTP {
-		t := &c.Health.HTTP[i]
-		if t.ExpectStatus == 0 {
-			t.ExpectStatus = 200
-		}
-		if t.Timeout == 0 {
-			t.Timeout = DefaultCheckTimeout
-		}
-	}
 }
 
 // Validate checks every field. It returns all problems found, not just the
@@ -307,23 +282,6 @@ func (c *Config) Validate() error {
 	}
 
 	// health
-	for i, t := range c.Health.HTTP {
-		if !resourceName.MatchString(t.Name) {
-			add("health.http[%d].name is not a valid resource name", i)
-		} else if seen["http/"+t.Name] {
-			add("health.http: duplicate name %q", t.Name)
-		}
-		seen["http/"+t.Name] = true
-		if err := validateHTTPURL(t.URL); err != nil {
-			add("health.http[%d].url: %v", i, err)
-		}
-		if t.ExpectStatus < 100 || t.ExpectStatus > 599 {
-			add("health.http[%d].expect_status must be 100-599", i)
-		}
-		if t.Timeout <= 0 || t.Timeout > MaxCheckTimeout {
-			add("health.http[%d].timeout must be in (0, %s]", i, MaxCheckTimeout)
-		}
-	}
 	for i, t := range c.Health.DNS {
 		if !resourceName.MatchString(t.Name) {
 			add("health.dns[%d].name is not a valid resource name", i)
@@ -337,27 +295,4 @@ func (c *Config) Validate() error {
 	}
 
 	return errors.Join(errs...)
-}
-
-// validateHTTPURL requires an http(s) URL with a host and no embedded
-// credentials, query string, or fragment (any of which could carry secrets
-// that would then show up in audit logs and errors).
-func validateHTTPURL(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return errors.New("not a valid URL")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return errors.New("scheme must be http or https")
-	}
-	if u.Hostname() == "" {
-		return errors.New("host is required")
-	}
-	if u.User != nil {
-		return errors.New("must not contain credentials")
-	}
-	if u.RawQuery != "" || u.Fragment != "" || strings.Contains(raw, "?") || strings.Contains(raw, "#") {
-		return errors.New("must not contain a query string or fragment")
-	}
-	return nil
 }

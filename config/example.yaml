@@ -45,16 +45,6 @@ host:
       path: /var/lib
 
 health:
-  http:
-    # The agent can only probe these named targets, never an arbitrary URL.
-    # URLs may not contain credentials or query strings.
-    - name: web-local
-      url: http://127.0.0.1:8080/healthz
-      expect_status: 200
-      timeout: 5s
-      allow_private: true   # required because the target is loopback
-    - name: public-site
-      url: https://example.com/
   dns:
     - name: example
       host: example.com

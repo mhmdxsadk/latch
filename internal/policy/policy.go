@@ -20,7 +20,6 @@ const (
 	KindDocker  Kind = "docker"
 	KindSystemd Kind = "systemd"
 	KindDisk    Kind = "disk"
-	KindHTTP    Kind = "http"
 	KindDNS     Kind = "dns"
 )
 
@@ -36,7 +35,6 @@ type Policy struct {
 	docker  map[string]config.DockerService
 	units   map[string]string
 	disks   map[string]config.Disk
-	http    map[string]config.HTTPTarget
 	dns     map[string]config.DNSTarget
 	limits  config.Limits
 	ordered map[Kind][]string
@@ -48,7 +46,6 @@ func New(c *config.Config) *Policy {
 		docker:  map[string]config.DockerService{},
 		units:   map[string]string{},
 		disks:   map[string]config.Disk{},
-		http:    map[string]config.HTTPTarget{},
 		dns:     map[string]config.DNSTarget{},
 		limits:  c.Limits,
 		ordered: map[Kind][]string{},
@@ -64,10 +61,6 @@ func New(c *config.Config) *Policy {
 	for _, d := range c.Host.Disks {
 		p.disks[d.Name] = d
 		p.ordered[KindDisk] = append(p.ordered[KindDisk], d.Name)
-	}
-	for _, t := range c.Health.HTTP {
-		p.http[t.Name] = t
-		p.ordered[KindHTTP] = append(p.ordered[KindHTTP], t.Name)
 	}
 	for _, t := range c.Health.DNS {
 		p.dns[t.Name] = t
@@ -117,18 +110,6 @@ func (p *Policy) Disk(name string) (config.Disk, error) {
 		return config.Disk{}, ErrNotAllowed
 	}
 	return d, nil
-}
-
-// HTTPTarget resolves an agent-supplied HTTP check name.
-func (p *Policy) HTTPTarget(name string) (config.HTTPTarget, error) {
-	if !config.ValidResourceName(name) {
-		return config.HTTPTarget{}, ErrInvalidName
-	}
-	t, ok := p.http[name]
-	if !ok {
-		return config.HTTPTarget{}, ErrNotAllowed
-	}
-	return t, nil
 }
 
 // DNSTarget resolves an agent-supplied DNS check name.

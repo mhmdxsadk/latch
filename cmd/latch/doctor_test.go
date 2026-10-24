@@ -40,13 +40,9 @@ func (s stubSystemd) UnitStatus(context.Context, string) (systemd.UnitStatus, er
 }
 
 type stubHealth struct {
-	http health.HTTPResult
-	dns  health.DNSResult
+	dns health.DNSResult
 }
 
-func (s stubHealth) HTTP(context.Context, config.HTTPTarget) (health.HTTPResult, error) {
-	return s.http, nil
-}
 func (s stubHealth) DNS(context.Context, config.DNSTarget) (health.DNSResult, error) {
 	return s.dns, nil
 }
@@ -60,7 +56,6 @@ docker:
 systemd:
   units: [ssh.service]
 health:
-  http: [{name: site, url: "https://example.com/"}]
   dns: [{name: example, host: example.com}]
 `))
 	if err != nil {
@@ -74,7 +69,7 @@ func healthy() integrations {
 		host:    okHost{},
 		docker:  stubDocker{},
 		systemd: stubSystemd{},
-		health:  stubHealth{http: health.HTTPResult{OK: true, StatusCode: 200}, dns: health.DNSResult{OK: true}},
+		health:  stubHealth{dns: health.DNSResult{OK: true}},
 		groupID: func(string) (uint32, error) { return 1500, nil },
 	}
 }
@@ -84,7 +79,7 @@ func TestDoctorAllHealthy(t *testing.T) {
 	if !doctor(context.Background(), doctorConfig(t), healthy(), &out, false) {
 		t.Fatalf("expected success:\n%s", out.String())
 	}
-	for _, want := range []string{"OK    socket group latch-agents", "OK    docker daemon", "OK    docker service web (container my-web)", "OK    systemd unit ssh.service", "OK    http check site", "OK    dns check example", "All checks passed."} {
+	for _, want := range []string{"OK    socket group latch-agents", "OK    docker daemon", "OK    docker service web (container my-web)", "OK    systemd unit ssh.service", "OK    dns check example", "All checks passed."} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in:\n%s", want, out.String())
 		}
@@ -107,14 +102,8 @@ func TestDoctorReportsFailures(t *testing.T) {
 		{"container missing", func(i *integrations) { i.docker = stubDocker{status: docker.ErrNotFound} }, "FAIL  docker service web (container my-web)"},
 		{"no systemd", func(i *integrations) { i.systemd = stubSystemd{ping: errors.New("no bus")} }, "FAIL  systemd bus"},
 		{"unit missing", func(i *integrations) { i.systemd = stubSystemd{status: systemd.ErrNotFound} }, "FAIL  systemd unit ssh.service"},
-		{"blocked http", func(i *integrations) {
-			i.health = stubHealth{http: health.HTTPResult{Failure: health.FailureBlockedAddress}, dns: health.DNSResult{OK: true}}
-		}, "allow_private"},
-		{"bad status", func(i *integrations) {
-			i.health = stubHealth{http: health.HTTPResult{StatusCode: 503, Failure: health.FailureUnexpectedStatus}, dns: health.DNSResult{OK: true}}
-		}, "unexpected status 503"},
 		{"dns failure", func(i *integrations) {
-			i.health = stubHealth{http: health.HTTPResult{OK: true}, dns: health.DNSResult{Failure: health.FailureNotFound}}
+			i.health = stubHealth{dns: health.DNSResult{Failure: health.FailureNotFound}}
 		}, "FAIL  dns check example\n      not_found"},
 	}
 	for _, tt := range tests {

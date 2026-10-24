@@ -14,7 +14,6 @@ type listResourcesOut struct {
 	DockerServices []string `json:"docker_services"`
 	SystemdUnits   []string `json:"systemd_units"`
 	Disks          []string `json:"disks"`
-	HTTPChecks     []string `json:"http_checks"`
 	DNSChecks      []string `json:"dns_checks"`
 }
 
@@ -35,7 +34,6 @@ func registerResources(s *sdk.Server, d *Deps) {
 			DockerServices: nz(policy.KindDocker),
 			SystemdUnits:   nz(policy.KindSystemd),
 			Disks:          nz(policy.KindDisk),
-			HTTPChecks:     nz(policy.KindHTTP),
 			DNSChecks:      nz(policy.KindDNS),
 		}, "", nil
 	}))

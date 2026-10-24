@@ -22,8 +22,6 @@ host:
   disks:
     - {name: root, path: /}
 health:
-  http:
-    - {name: site, url: "https://example.com/"}
   dns:
     - {name: ex, host: example.com}
 `))
@@ -44,9 +42,6 @@ func TestResolvesConfiguredNames(t *testing.T) {
 	if d, err := p.Disk("root"); err != nil || d.Path != "/" {
 		t.Errorf("disk: %+v %v", d, err)
 	}
-	if _, err := p.HTTPTarget("site"); err != nil {
-		t.Error(err)
-	}
 	if _, err := p.DNSTarget("ex"); err != nil {
 		t.Error(err)
 	}
@@ -57,7 +52,6 @@ func TestUnknownResourcesAreRejected(t *testing.T) {
 	for name, fn := range map[string]func(string) error{
 		"docker":  func(n string) error { _, e := p.DockerService(n); return e },
 		"disk":    func(n string) error { _, e := p.Disk(n); return e },
-		"http":    func(n string) error { _, e := p.HTTPTarget(n); return e },
 		"dns":     func(n string) error { _, e := p.DNSTarget(n); return e },
 		"systemd": func(n string) error { _, e := p.SystemdUnit(n); return e },
 	} {
@@ -85,9 +79,6 @@ func TestEscapeAttemptsNeverResolve(t *testing.T) {
 		}
 		if d, err := p.Disk(a); err == nil {
 			t.Errorf("Disk(%q) resolved to %+v", a, d)
-		}
-		if _, err := p.HTTPTarget(a); err == nil {
-			t.Errorf("HTTPTarget(%q) resolved", a)
 		}
 		if _, err := p.DNSTarget(a); err == nil {
 			t.Errorf("DNSTarget(%q) resolved", a)

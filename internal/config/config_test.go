@@ -48,11 +48,7 @@ func TestParseRejects(t *testing.T) {
 		{"unit with space", validBase + "systemd:\n  units: ['a b.service']\n", "systemd.units[0]"},
 		{"relative disk path", validBase + "host:\n  disks:\n    - {name: a, path: var}\n", "host.disks[0].path"},
 		{"disk path traversal", validBase + "host:\n  disks:\n    - {name: a, path: /var/../etc}\n", "host.disks[0].path"},
-		{"http file scheme", validBase + "health:\n  http:\n    - {name: a, url: 'file:///etc/passwd'}\n", "scheme"},
-		{"http credentials in url", validBase + "health:\n  http:\n    - {name: a, url: 'http://u:p@host/'}\n", "credentials"},
-		{"http query string", validBase + "health:\n  http:\n    - {name: a, url: 'http://h/?token=s'}\n", "query"},
-		{"http bad status", validBase + "health:\n  http:\n    - {name: a, url: 'http://h/', expect_status: 999}\n", "expect_status"},
-		{"http huge timeout", validBase + "health:\n  http:\n    - {name: a, url: 'http://h/', timeout: 1h}\n", "timeout"},
+		{"old http checks section", validBase + "health:\n  http:\n    - {name: a, url: 'https://h/'}\n", "field http not found"},
 		{"dns host with scheme", validBase + "health:\n  dns:\n    - {name: a, host: 'http://x'}\n", "hostname"},
 		{"dns wildcard", validBase + "health:\n  dns:\n    - {name: a, host: '*.example.com'}\n", "hostname"},
 		{"not yaml mapping", "- just\n- a list\n", "parse config"},
@@ -70,23 +66,13 @@ func TestParseRejects(t *testing.T) {
 	}
 }
 
-func TestErrorsDoNotEchoURLs(t *testing.T) {
-	_, err := Parse([]byte(validBase + "health:\n  http:\n    - {name: a, url: 'http://user:hunter2@host/'}\n"))
-	if err == nil || strings.Contains(err.Error(), "hunter2") {
-		t.Fatalf("error must not echo credentials: %v", err)
-	}
-}
-
 func TestDefaults(t *testing.T) {
-	c, err := Parse([]byte(validBase + "health:\n  http:\n    - {name: a, url: 'https://h/'}\n"))
+	c, err := Parse([]byte(validBase))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Limits.MaxLogLines != DefaultMaxLogLines || c.Docker.Socket != DefaultDockerSocket {
 		t.Errorf("defaults not applied: %+v", c)
-	}
-	if h := c.Health.HTTP[0]; h.ExpectStatus != 200 || h.Timeout != DefaultCheckTimeout || h.AllowPrivate {
-		t.Errorf("http defaults wrong (allow_private must default to false): %+v", h)
 	}
 }
 

@@ -184,10 +184,6 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 		}
 	}
 
-	for _, t := range cfg.Health.HTTP {
-		res, err := in.health.HTTP(ctx, t)
-		r.check("http check "+t.Name, httpProblem(t, res, err), httpHint(res.Failure))
-	}
 	for _, t := range cfg.Health.DNS {
 		res, err := in.health.DNS(ctx, t)
 		if err == nil && !res.OK {
@@ -198,32 +194,4 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 
 	r.summary()
 	return r.failed == 0
-}
-
-func httpHint(f health.Failure) string {
-	switch f {
-	case health.FailureConnectionRefused:
-		return "Nothing is listening at that address and port. Is the service running?"
-	case health.FailureTimeout:
-		return "No answer within the timeout. Raise timeout in the config, or check the service."
-	case health.FailureTLS:
-		return "The TLS certificate is invalid or expired."
-	}
-	return ""
-}
-
-func httpProblem(t config.HTTPTarget, r health.HTTPResult, err error) error {
-	switch {
-	case err != nil:
-		return err
-	case r.Failure == health.FailureBlockedAddress && t.AllowPrivate:
-		return errors.New("target resolves to an address that is always blocked (cloud metadata, unspecified, multicast or reserved)")
-	case r.Failure == health.FailureBlockedAddress:
-		return errors.New("target resolves to a blocked address (set allow_private: true if it is meant to be internal)")
-	case r.Failure == health.FailureUnexpectedStatus:
-		return fmt.Errorf("unexpected status %d", r.StatusCode)
-	case !r.OK:
-		return errors.New(string(r.Failure))
-	}
-	return nil
 }

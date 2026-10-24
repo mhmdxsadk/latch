@@ -55,10 +55,6 @@ type fakeHealth struct {
 	targets []string
 }
 
-func (f *fakeHealth) HTTP(_ context.Context, t config.HTTPTarget) (health.HTTPResult, error) {
-	f.targets = append(f.targets, t.URL)
-	return health.HTTPResult{OK: true, StatusCode: 200}, f.err
-}
 func (f *fakeHealth) DNS(_ context.Context, t config.DNSTarget) (health.DNSResult, error) {
 	f.targets = append(f.targets, t.Host)
 	return health.DNSResult{OK: true, Addresses: []string{"192.0.2.1"}}, f.err
@@ -174,19 +170,15 @@ func TestSystemdTool(t *testing.T) {
 func TestHealthTools(t *testing.T) {
 	fh := &fakeHealth{}
 	h := newHarnessWith(t, func(d *Deps) { d.Health = fh })
-	hc := structured[httpCheckOut](t, h, "http_check", map[string]any{"name": "site"})
 	dc := structured[dnsCheckOut](t, h, "dns_check", map[string]any{"name": "example"})
-	if !hc.Result.OK || !dc.Result.OK || len(dc.Result.Addresses) != 1 {
-		t.Errorf("got %+v %+v", hc, dc)
+	if !dc.Result.OK || len(dc.Result.Addresses) != 1 {
+		t.Errorf("got %+v", dc)
 	}
 	for _, c := range []struct {
 		tool string
 		args any
 	}{
-		{"http_check", map[string]any{"name": "https://evil.example/"}},
-		{"http_check", map[string]any{"name": "site", "url": "http://169.254.169.254/"}},
-		{"http_check", map[string]any{"url": "http://127.0.0.1/"}},
-		{"http_check", map[string]any{"name": "example"}}, // a DNS target is not an HTTP target
+		{"http_check", map[string]any{"name": "example"}}, // there is no such tool any more
 		{"dns_check", map[string]any{"name": "evil.example"}},
 		{"dns_check", map[string]any{"name": "example", "host": "internal.corp"}},
 	} {
@@ -195,7 +187,7 @@ func TestHealthTools(t *testing.T) {
 			t.Errorf("%s %v: expected rejection", c.tool, c.args)
 		}
 	}
-	if strings.Join(fh.targets, ",") != "https://example.com/,example.com" {
+	if strings.Join(fh.targets, ",") != "example.com" {
 		t.Errorf("integration saw %v", fh.targets)
 	}
 }
@@ -214,7 +206,6 @@ func TestMissingResourcesAndLeaks(t *testing.T) {
 		{"docker_status", map[string]any{"name": "web"}},
 		{"docker_logs", map[string]any{"name": "web"}},
 		{"systemd_unit_status", map[string]any{"unit": "ssh.service"}},
-		{"http_check", map[string]any{"name": "site"}},
 		{"dns_check", map[string]any{"name": "example"}},
 	} {
 		res, err := h.call(c.tool, c.args)
