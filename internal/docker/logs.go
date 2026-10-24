@@ -248,6 +248,19 @@ func sanitize(s string) string {
 	}, s)
 }
 
+// headBytes returns the first n bytes of s, ending on a UTF-8 boundary.
+func headBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	// s is valid UTF-8, so at most a few bytes of a cut rune need dropping.
+	s = s[:n]
+	for !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
 // tailBytes returns the last n bytes of s, starting on a UTF-8 boundary.
 func tailBytes(s string, n int) string {
 	if len(s) <= n {

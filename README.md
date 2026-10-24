@@ -38,8 +38,9 @@ Latch is pre-release (v0.x) and read-only. These tools exist today:
 - `list_resources` lists the disks and DNS checks you have exposed.
 - `host_load`, `host_memory` and `host_disk` report host metrics.
 - `docker_list` and `docker_status` report each visible container's state, exit
-  code, restart count, image and health. They never return environment
-  variables, labels, mounts or commands.
+  code, restart count, image and health. `docker_status` also returns the
+  output of the latest health check, which usually says why it failed. They
+  never return environment variables, labels, mounts or commands.
 - `docker_logs` returns recent stdout and stderr, capped by `limits` in the
   config. Logs often contain secrets, so exclude any container whose logs the
   agent must not read. A new container is visible as soon as it exists.

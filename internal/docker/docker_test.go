@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 const testID = "4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a"
@@ -38,7 +39,7 @@ const inspectFixture = `{
       "Status": "unhealthy", "FailingStreak": 4,
       "Log": [
         {"Start": "2024-05-01T10:00:00Z", "End": "2024-05-01T10:00:01Z", "ExitCode": 0, "Output": "SECRET old"},
-        {"Start": "2024-05-01T10:01:00Z", "End": "2024-05-01T10:01:02.25Z", "ExitCode": 1, "Output": "SECRET=hunter2"}
+        {"Start": "2024-05-01T10:01:00Z", "End": "2024-05-01T10:01:02.25Z", "ExitCode": 1, "Output": "curl: (7) refused\r\n\u001b[31mport 3000\u001b[0m\n"}
       ]
     }
   },
@@ -137,6 +138,7 @@ func TestStatusProjection(t *testing.T) {
 		Health: Health{
 			Status: "unhealthy", FailingStreak: 4,
 			LastCheckAt: "2024-05-01T10:01:02.25Z", LastExitCode: 1,
+			LastOutput: "curl: (7) refused\nport 3000",
 		},
 	}
 	if st != want {
@@ -718,6 +720,17 @@ func TestLogsLongLineMemoryBounded(t *testing.T) {
 	// collector allocated gigabytes here.
 	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 256<<20 {
 		t.Errorf("allocated %d MiB", alloc>>20)
+	}
+}
+
+func TestHealthOutputBounded(t *testing.T) {
+	long := strings.Repeat("a", maxHealthOutput-1) + "étail"
+	got := healthOutput(long)
+	if len(got) != maxHealthOutput-1 || !utf8.ValidString(got) {
+		t.Errorf("len %d, valid %v", len(got), utf8.ValidString(got))
+	}
+	if got := healthOutput("x\u202ey\n\n"); got != "xy" {
+		t.Errorf("got %q", got)
 	}
 }
 

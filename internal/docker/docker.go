@@ -5,8 +5,10 @@
 // /containers/{name}/json, /containers/{name}/logs), never follows redirects
 // or uses proxies, and caps every response read. Inspect output is decoded into
 // a private struct and projected onto a small Status, so environment variables,
-// labels, mounts, commands and health-check output are never read into memory
-// beyond the decoder and never returned. Container names come from policy but
+// labels, mounts and commands are never read into memory beyond the decoder
+// and never returned. The newest health-check output is returned, bounded and
+// sanitized like logs, because it is the container's own explanation of why it
+// is unhealthy. Container names come from policy but
 // are re-validated here as defence in depth.
 package docker
 
@@ -32,7 +34,10 @@ const (
 	defaultTimeout = 10 * time.Second
 	maxInspectBody = 4 << 20
 	maxListBody    = 8 << 20
-	baseURL        = "http://docker"
+	// maxHealthOutput bounds the returned health-check output; Docker itself
+	// keeps at most 4096 bytes per probe.
+	maxHealthOutput = 4096
+	baseURL         = "http://docker"
 )
 
 var (
@@ -50,6 +55,7 @@ type Health struct {
 	FailingStreak int    `json:"failing_streak"`
 	LastCheckAt   string `json:"last_check_at,omitempty"` // RFC3339, end time of most recent probe
 	LastExitCode  int    `json:"last_exit_code"`
+	LastOutput    string `json:"last_output,omitempty"` // sanitized output of the most recent probe
 }
 
 // Status is the projected state of a container.
@@ -230,6 +236,7 @@ type inspect struct {
 			Log           []struct {
 				End      string
 				ExitCode int
+				Output   string
 			}
 		}
 	}
@@ -294,9 +301,20 @@ func (e *Engine) Status(ctx context.Context, container string) (Status, error) {
 		if n := len(h.Log); n > 0 {
 			st.Health.LastCheckAt = fmtTime(h.Log[n-1].End)
 			st.Health.LastExitCode = h.Log[n-1].ExitCode
+			st.Health.LastOutput = healthOutput(h.Log[n-1].Output)
 		}
 	}
 	return st, nil
+}
+
+// healthOutput sanitizes probe output line by line, keeping line breaks, and
+// keeps at most maxHealthOutput bytes from the start, where errors appear.
+func healthOutput(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\r\n"), "\n")
+	for i, l := range lines {
+		lines[i] = sanitize(strings.TrimSuffix(l, "\r"))
+	}
+	return headBytes(strings.Join(lines, "\n"), maxHealthOutput)
 }
 
 // fmtTime normalizes a Docker timestamp to UTC; zero or unparsable becomes "".
