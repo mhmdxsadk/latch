@@ -61,6 +61,8 @@ systemd:
 health:
   dns:
     - {name: example, host: example.com}
+network:
+  exclude: [vault.internal, 10.9.9.9]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -72,6 +74,7 @@ health:
 		Docker:  &fakeDocker{},
 		Systemd: &fakeSystemd{},
 		Health:  &fakeHealth{},
+		Net:     &fakeNet{},
 		Audit:   audit.New(slog.New(slog.NewJSONHandler(buf, nil))),
 		Version: "test",
 	}
@@ -119,6 +122,7 @@ func TestToolSurfaceIsReadOnlyAndFixed(t *testing.T) {
 		"list_resources": true, "host_load": true, "host_memory": true, "host_disk": true,
 		"docker_list": true, "docker_status": true, "docker_logs": true, "docker_settings": true,
 		"systemd_list": true, "systemd_unit_status": true, "dns_check": true,
+		"net_ping": true, "net_dns": true, "net_tcp": true, "net_traceroute": true, "net_http_get": true,
 	}
 	for _, tool := range res.Tools {
 		if !want[tool.Name] {
@@ -127,6 +131,10 @@ func TestToolSurfaceIsReadOnlyAndFixed(t *testing.T) {
 		delete(want, tool.Name)
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
 			t.Errorf("tool %q must be annotated read-only", tool.Name)
+		}
+		network := strings.HasPrefix(tool.Name, "net_")
+		if tool.Annotations != nil && (tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint != network) {
+			t.Errorf("tool %q: OpenWorldHint must be %v", tool.Name, network)
 		}
 	}
 	if len(want) != 0 {

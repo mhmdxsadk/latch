@@ -18,6 +18,7 @@ import (
 	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
+	"github.com/mhmdxsadk/latch/internal/netcheck"
 	"github.com/mhmdxsadk/latch/internal/policy"
 	"github.com/mhmdxsadk/latch/internal/systemd"
 )
@@ -30,6 +31,7 @@ type Deps struct {
 	Docker  docker.Client
 	Systemd systemd.Client
 	Health  health.Checker
+	Net     netcheck.Checker
 	Audit   *audit.Logger
 	Version string
 
@@ -58,6 +60,10 @@ var (
 	errUnsupported = userError{"not supported on this host"}
 	errMissing     = userError{"resource does not exist or is not allowed"}
 	errBusy        = userError{"too many concurrent requests; retry shortly"}
+	// errTargetNotAllowed is the one message for every blocked network
+	// target, whatever the reason.
+	errTargetNotAllowed = userError{"target is not allowed"}
+	errInvalidTarget    = userError{"invalid host, name or URL"}
 )
 
 // errPartial lets a tool return its output while auditing that part of it
@@ -70,6 +76,15 @@ func classify(err error) (userError, audit.Outcome, string) {
 	switch {
 	case errors.As(err, &ue):
 		return ue, audit.OutcomeDenied, "bad_request"
+	case errors.Is(err, netcheck.ErrNotAllowed):
+		return errTargetNotAllowed, audit.OutcomeDenied, "not_allowed"
+	case errors.Is(err, netcheck.ErrInvalid):
+		return errInvalidTarget, audit.OutcomeDenied, "invalid_name"
+	case errors.Is(err, netcheck.ErrUnknown):
+		// Excluded containers are unknown, so nothing is reached.
+		return errUnavailable, audit.OutcomeError, "excluded_unknown"
+	case errors.Is(err, netcheck.ErrUnsupported):
+		return errUnsupported, audit.OutcomeError, "unsupported"
 	case errors.Is(err, policy.ErrInvalidName):
 		return errInvalidName, audit.OutcomeDenied, "invalid_name"
 	case errors.Is(err, policy.ErrNotAllowed):
@@ -127,6 +142,7 @@ func NewServer(d *Deps) *sdk.Server {
 	s := sdk.NewServer(&sdk.Implementation{Name: "latch", Version: d.Version}, &sdk.ServerOptions{
 		Instructions: "Latch gives read-only visibility into one server. " +
 			"Use docker_list and systemd_list to see containers and services, and list_resources for named disks and DNS checks. " +
+			"The net_* tools run network diagnostics from this server. " +
 			"Some resources may be excluded by the operator; they behave as if they do not exist.",
 	})
 	registerResources(s, d)
@@ -134,5 +150,6 @@ func NewServer(d *Deps) *sdk.Server {
 	registerDocker(s, d)
 	registerSystemd(s, d)
 	registerHealth(s, d)
+	registerNetwork(s, d)
 	return s
 }

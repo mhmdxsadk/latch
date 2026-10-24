@@ -16,9 +16,11 @@ import (
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
+	"github.com/mhmdxsadk/latch/internal/excluded"
 	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/mcp"
+	"github.com/mhmdxsadk/latch/internal/netcheck"
 	"github.com/mhmdxsadk/latch/internal/policy"
 	"github.com/mhmdxsadk/latch/internal/server"
 	"github.com/mhmdxsadk/latch/internal/systemd"
@@ -140,12 +142,16 @@ func cmdServe(args []string, stderr io.Writer) int {
 	}
 	al := audit.New(slog.New(slog.NewJSONHandler(auditOut, nil)))
 
+	pol := policy.New(cfg)
+	dockerClient := docker.NewEngine(cfg.Docker.Socket)
+	tracker := &excluded.Tracker{Docker: dockerClient, Policy: pol}
 	deps := &mcp.Deps{
-		Policy:  policy.New(cfg),
+		Policy:  pol,
 		Host:    host.System{},
-		Docker:  docker.NewEngine(cfg.Docker.Socket),
+		Docker:  dockerClient,
 		Systemd: systemd.NewBus(),
 		Health:  health.Prober{},
+		Net:     netcheck.New(pol, tracker, version),
 		Audit:   al,
 		Version: version,
 	}

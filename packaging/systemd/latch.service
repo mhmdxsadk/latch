@@ -40,7 +40,10 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 CapabilityBoundingSet=
 AmbientCapabilities=
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# AF_NETLINK lets the network tools read this host's own addresses (to keep
+# excluded containers' published ports out of reach). Without it they refuse
+# those ports on every address.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 UMask=0077
 
 [Install]

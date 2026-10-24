@@ -14,8 +14,9 @@ Latch treats the agent as untrusted and enforces the policy itself.
   to exclude in a config file. Disks and DNS names must still be listed, because
   each needs a path or a hostname.
 - An excluded resource behaves as if it does not exist.
-- The agent cannot supply its own commands, file paths or URLs, and the config
-  cannot express a command or argument.
+- The agent cannot supply its own commands or file paths, and the config
+  cannot express a command or argument. The network tools take a host or URL,
+  checked as described under Tools.
 - Containers are addressed by exact name, never by ID. Units are addressed by
   their full name, never by alias. This stops an exclusion from being bypassed
   through another name for the same thing.
@@ -56,6 +57,25 @@ excluding the container is the real one.
 - `systemd_unit_status` returns the load, active and sub state of any unit that
   is not excluded.
 - `dns_check` resolves a configured hostname and returns its addresses.
+- `net_ping` pings a host (up to 5 packets) and reports loss and round-trip
+  times. It runs the system `ping`.
+- `net_dns` looks up A, AAAA, CNAME, MX, TXT, NS, SRV or PTR records with the
+  server's resolver.
+- `net_tcp` checks whether a TCP port accepts connections. It sends nothing.
+- `net_traceroute` lists the hops to a host (up to 30). It needs `traceroute`
+  or `tracepath` installed (`apt install traceroute`).
+- `net_http_get` fetches a URL with a plain GET, follows up to 5 redirects and
+  returns the status, a few safe headers and up to 8 KiB of a text body. The
+  agent cannot set headers, cookies, a method or a body. Certificates are
+  verified unless the agent asks to skip that, and the result says so.
+
+The network tools run without approval and may reach any address, including
+this server and the LAN. They cannot reach excluded containers, ports that
+excluded containers publish on this server, or the hostnames and addresses in
+`network.exclude`. Latch resolves names itself and checks the address again
+when it connects, so a changing DNS answer or a redirect cannot get around
+this. Ping needs unprivileged ICMP (`net.ipv4.ping_group_range`, open on
+Debian by default).
 
 Run `latch doctor` to check that every configured resource is reachable.
 
