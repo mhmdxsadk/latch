@@ -119,6 +119,11 @@ main() {
 
 	# Users and groups. The latch user runs the service; members of the client
 	# group may connect to the socket.
+	# An existing config decides the group; never create a second one beside it.
+	if [ -r "$CONFIG_DIR/config.yaml" ]; then
+		existing=$(sed -n 's/^[[:space:]]*socket_group:[[:space:]]*\([A-Za-z0-9_-]*\).*/\1/p' "$CONFIG_DIR/config.yaml" | head -n 1)
+		[ -z "$existing" ] || CLIENT_GROUP="$existing"
+	fi
 	getent group "$CLIENT_GROUP" >/dev/null || groupadd --system "$CLIENT_GROUP"
 	if ! id latch >/dev/null 2>&1; then
 		nologin=$(command -v nologin || echo /usr/sbin/nologin)
