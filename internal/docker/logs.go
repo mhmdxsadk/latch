@@ -7,13 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/mhmdxsadk/latch/internal/redact"
+	"github.com/mhmdxsadk/latch/internal/textsafe"
 )
 
 const (
@@ -25,12 +23,6 @@ const (
 	// maxBytes); it only bounds work when lines are pathologically long.
 	maxLogSource = 64 << 20
 )
-
-// escape matches terminal escape sequences: CSI, terminated string
-// sequences (OSC, DCS, SOS, PM, APC) and two-character escapes. An
-// unterminated string sequence loses only its introducer, so it cannot hide
-// the rest of the line.
-var escape = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|[\]PX^_][^\x07\x1b]*(?:\x07|\x1b\\)|[ -/]*[0-~])`)
 
 // Logs returns the newest log lines of the container, at most lines entries
 // and maxBytes bytes of text in total.
@@ -229,52 +221,9 @@ func cutTimestamp(b []byte) (string, []byte, bool) {
 	return t.UTC().Format(time.RFC3339Nano), b[i+1:], true
 }
 
-// sanitize makes s valid UTF-8 and removes escape sequences, control
-// characters other than tab, and invisible characters (bidi overrides,
-// zero-width and tag characters, variation selectors, fillers) that could
-// disguise the text or smuggle hidden data. Line and paragraph separators
-// become spaces so one entry cannot pose as several.
-func sanitize(s string) string {
-	s = strings.ToValidUTF8(s, "�")
-	if strings.IndexByte(s, 0x1b) >= 0 {
-		s = escape.ReplaceAllString(s, "")
-	}
-	return strings.Map(func(r rune) rune {
-		switch {
-		case r >= 0x20 && r < 0x7f: // printable ASCII, the common case
-			return r
-		case r == '\t':
-			return r
-		case unicode.In(r, unicode.Zl, unicode.Zp):
-			return ' '
-		case unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point):
-			return -1
-		}
-		return r
-	}, s)
-}
-
-// headBytes returns the first n bytes of s, ending on a UTF-8 boundary.
-func headBytes(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	// s is valid UTF-8, so at most a few bytes of a cut rune need dropping.
-	s = s[:n]
-	for !utf8.ValidString(s) {
-		s = s[:len(s)-1]
-	}
-	return s
-}
-
-// tailBytes returns the last n bytes of s, starting on a UTF-8 boundary.
-func tailBytes(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	s = s[len(s)-n:]
-	for len(s) > 0 && !utf8.RuneStart(s[0]) {
-		s = s[1:]
-	}
-	return s
-}
+// Local names for the shared text helpers.
+var (
+	sanitize  = textsafe.Line
+	headBytes = textsafe.Head
+	tailBytes = textsafe.Tail
+)
