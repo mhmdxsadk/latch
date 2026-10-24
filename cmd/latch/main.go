@@ -10,12 +10,15 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
+	"github.com/mhmdxsadk/latch/internal/excluded"
+	"github.com/mhmdxsadk/latch/internal/files"
 	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/mcp"
@@ -113,6 +116,22 @@ func cmdValidate(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// newFileGuard builds the block list for the file tools: the built-in rules,
+// the config file itself, files.exclude and the home directories of the
+// accounts in the socket group (the agents). If those homes cannot all be
+// resolved, Latch still starts, with a warning, blocking the ones it found.
+func newFileGuard(cfg *config.Config, configPath string, folders files.Folders, stderr io.Writer) (*files.Guard, error) {
+	abs, err := filepath.Abs(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("config path: %w", err)
+	}
+	homes, err := files.AgentHomes(cfg.Server.SocketGroup)
+	if err != nil {
+		fmt.Fprintf(stderr, "latch: warning: %v\n", err)
+	}
+	return files.NewGuard(files.DefaultRules(abs, homes, cfg.Files.Exclude), folders), nil
+}
+
 func cmdServe(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -140,12 +159,20 @@ func cmdServe(args []string, stderr io.Writer) int {
 	}
 	al := audit.New(slog.New(slog.NewJSONHandler(auditOut, nil)))
 
+	pol := policy.New(cfg)
+	dockerClient := docker.NewEngine(cfg.Docker.Socket)
+	fileGuard, err := newFileGuard(cfg, *path, &excluded.Tracker{Docker: dockerClient, Policy: pol}, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "latch: %v\n", err)
+		return 1
+	}
 	deps := &mcp.Deps{
-		Policy:  policy.New(cfg),
+		Policy:  pol,
 		Host:    host.System{},
-		Docker:  docker.NewEngine(cfg.Docker.Socket),
+		Docker:  dockerClient,
 		Systemd: systemd.NewBus(),
 		Health:  health.Prober{},
+		Files:   files.NewReader(fileGuard, files.DefaultLimits()),
 		Audit:   al,
 		Version: version,
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/config"
+	"github.com/mhmdxsadk/latch/internal/files"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/policy"
 )
@@ -72,6 +73,7 @@ health:
 		Docker:  &fakeDocker{},
 		Systemd: &fakeSystemd{},
 		Health:  &fakeHealth{},
+		Files:   files.NewReader(files.NewGuard(files.Rules{}, nil), files.DefaultLimits()),
 		Audit:   audit.New(slog.New(slog.NewJSONHandler(buf, nil))),
 		Version: "test",
 	}
@@ -119,6 +121,7 @@ func TestToolSurfaceIsReadOnlyAndFixed(t *testing.T) {
 		"list_resources": true, "host_load": true, "host_memory": true, "host_disk": true,
 		"docker_list": true, "docker_status": true, "docker_logs": true, "docker_settings": true,
 		"systemd_list": true, "systemd_unit_status": true, "dns_check": true,
+		"file_read": true, "file_list": true, "file_find": true, "file_grep": true,
 	}
 	for _, tool := range res.Tools {
 		if !want[tool.Name] {
@@ -200,7 +203,7 @@ func TestToolsRejectUnexpectedArguments(t *testing.T) {
 
 func TestUnknownToolRejected(t *testing.T) {
 	h := newHarness(t, fakeHost{})
-	for _, name := range []string{"exec", "docker_exec", "shell", "read_file", "restart_service"} {
+	for _, name := range []string{"exec", "docker_exec", "shell", "read_file", "file_write", "file_edit", "restart_service"} {
 		res, err := h.call(name, map[string]any{})
 		if err == nil && !res.IsError {
 			t.Errorf("tool %q must not exist", name)
