@@ -15,6 +15,7 @@ import (
 	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
+	"github.com/mhmdxsadk/latch/internal/ports"
 	"github.com/mhmdxsadk/latch/internal/systemd"
 )
 
@@ -605,5 +606,131 @@ func TestSystemdLogsUnsupportedAndLeaks(t *testing.T) {
 	res, _ = h.call("systemd_logs", map[string]any{"unit": "ssh.service"})
 	if !res.IsError || !strings.Contains(resultText(res), "not supported") {
 		t.Errorf("%s", resultText(res))
+	}
+}
+
+type fakePorts struct {
+	err       error
+	listeners []ports.Listener
+	calls     int
+}
+
+func (f *fakePorts) Listening(context.Context) ([]ports.Listener, error) {
+	f.calls++
+	return f.listeners, f.err
+}
+
+// portsDocker is a fakeDocker whose excluded container publishes port 8200.
+type portsDocker struct {
+	*fakeDocker
+	settingsErr error
+}
+
+func (p *portsDocker) Settings(_ context.Context, c string) (docker.Settings, error) {
+	if p.settingsErr != nil {
+		return docker.Settings{}, p.settingsErr
+	}
+	return docker.Settings{Ports: []docker.Port{{HostPort: "8200"}}}, nil
+}
+
+const idWeb = "4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a"
+const idVault = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func portsHarness(t *testing.T, fp *fakePorts, pd *portsDocker) *harness {
+	return newHarnessWith(t, func(d *Deps) {
+		d.Ports = fp
+		d.Docker = pd
+	})
+}
+
+func newPortsDocker() *portsDocker {
+	return &portsDocker{fakeDocker: &fakeDocker{ids: map[string]string{idWeb: "my-web", idVault: "secret-vault"}}}
+}
+
+func TestHostPorts(t *testing.T) {
+	fp := &fakePorts{listeners: []ports.Listener{
+		{Protocol: "tcp", Address: "0.0.0.0", Port: 22, PID: 1, Program: "sshd", Unit: "ssh.service", Units: []string{"ssh.service"}},
+		{Protocol: "tcp", Address: "0.0.0.0", Port: 3000, PID: 2, Program: "node", ContainerID: idWeb, Units: []string{}},
+		{Protocol: "tcp", Address: "0.0.0.0", Port: 9000, PID: 3, Program: "vaultd", Unit: "vault.service", Units: []string{"system.slice", "vault.service"}},
+		{Protocol: "tcp", Address: "0.0.0.0", Port: 9001, PID: 3, Program: "x", Units: []string{"vault.service"}}, // excluded parent unit
+		{Protocol: "tcp", Address: "::", Port: 8200, PID: 4, Program: "docker-proxy"},                             // published by the excluded container
+		{Protocol: "udp", Address: "0.0.0.0", Port: 4000, PID: 5, Program: "v", ContainerID: idVault},
+		{Protocol: "udp", Address: "0.0.0.0", Port: 4001, PID: 6, Program: "u", ContainerID: strings.Repeat("c", 64)}, // unknown container
+		{Protocol: "tcp", Address: "127.0.0.1", Port: 80, Program: "ev\x1b[31mil password=hunter2"},
+	}}
+	h := portsHarness(t, fp, newPortsDocker())
+	out := structured[hostPortsOut](t, h, "host_ports", map[string]any{})
+	if out.Truncated || len(out.Listeners) != 3 {
+		t.Fatalf("got %+v", out)
+	}
+	if l := out.Listeners[0]; l.Port != 22 || l.Unit != "ssh.service" || l.Program != "sshd" || l.Container != "" {
+		t.Errorf("l0 %+v", l)
+	}
+	if l := out.Listeners[1]; l.Port != 3000 || l.Container != "my-web" || l.Unit != "" {
+		t.Errorf("l1 %+v", l)
+	}
+	if l := out.Listeners[2]; l.Port != 80 || l.PID != 0 || l.Program != "evil password=[hidden]" {
+		t.Errorf("l2 %+v", l)
+	}
+	res, _ := h.call("host_ports", map[string]any{})
+	for _, secret := range []string{"vault", "secret", "8200", "9000", "9001", "4000", "4001", "hunter2"} {
+		if strings.Contains(resultText(res), secret) {
+			t.Errorf("output contains %q: %s", secret, resultText(res))
+		}
+	}
+}
+
+func TestHostPortsFailsClosed(t *testing.T) {
+	fp := &fakePorts{listeners: []ports.Listener{{Protocol: "tcp", Address: "0.0.0.0", Port: 22}}}
+	pd := newPortsDocker()
+	pd.err = errors.New("SECRET docker down") // List fails: snapshot unknown
+	h := portsHarness(t, fp, pd)
+	res, err := h.call("host_ports", map[string]any{})
+	if err != nil || !res.IsError || strings.Contains(resultText(res), "SECRET") {
+		t.Errorf("want a sanitized error, got %v %s", err, resultText(res))
+	}
+	if fp.calls != 0 {
+		t.Error("sockets were read without an exclusion snapshot")
+	}
+
+	// IDs unavailable while a container-owned socket is present.
+	fp = &fakePorts{listeners: []ports.Listener{{Protocol: "tcp", Port: 3000, ContainerID: idWeb}}}
+	pd = newPortsDocker()
+	h = portsHarness(t, fp, pd)
+	structured[hostPortsOut](t, h, "host_ports", map[string]any{}) // snapshot cached now
+	pd.ids = nil
+	out := structured[hostPortsOut](t, h, "host_ports", map[string]any{})
+	if len(out.Listeners) != 0 {
+		t.Errorf("unnamed container listed: %+v", out)
+	}
+}
+
+func TestHostPortsCapAndEmpty(t *testing.T) {
+	fp := &fakePorts{}
+	h := portsHarness(t, fp, newPortsDocker())
+	res, _ := h.call("host_ports", map[string]any{})
+	b, _ := json.Marshal(res.StructuredContent)
+	if !strings.Contains(string(b), `"listeners":[]`) {
+		t.Errorf("got %s", b)
+	}
+	for i := range 600 {
+		fp.listeners = append(fp.listeners, ports.Listener{Protocol: "tcp", Address: "0.0.0.0", Port: uint16(10000 + i)}) //nolint:gosec // test
+	}
+	out := structured[hostPortsOut](t, h, "host_ports", map[string]any{})
+	if len(out.Listeners) != 512 || !out.Truncated {
+		t.Errorf("len=%d truncated=%v", len(out.Listeners), out.Truncated)
+	}
+}
+
+func TestHostPortsErrorsAndInput(t *testing.T) {
+	fp := &fakePorts{err: host.ErrUnsupported}
+	h := portsHarness(t, fp, newPortsDocker())
+	res, _ := h.call("host_ports", map[string]any{})
+	if !res.IsError || !strings.Contains(resultText(res), "not supported") {
+		t.Errorf("%s", resultText(res))
+	}
+	res, err := h.call("host_ports", map[string]any{"port": 22})
+	if err == nil && !res.IsError {
+		t.Error("unknown input accepted")
 	}
 }
