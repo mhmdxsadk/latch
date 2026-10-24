@@ -234,9 +234,13 @@ func cutTimestamp(b []byte) (string, []byte, bool) {
 // become spaces so one entry cannot pose as several.
 func sanitize(s string) string {
 	s = strings.ToValidUTF8(s, "�")
-	s = escape.ReplaceAllString(s, "")
+	if strings.IndexByte(s, 0x1b) >= 0 {
+		s = escape.ReplaceAllString(s, "")
+	}
 	return strings.Map(func(r rune) rune {
 		switch {
+		case r >= 0x20 && r < 0x7f: // printable ASCII, the common case
+			return r
 		case r == '\t':
 			return r
 		case unicode.In(r, unicode.Zl, unicode.Zp):
