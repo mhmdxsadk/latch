@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.0](https://github.com/mhmdxsadk/latch/compare/v0.1.0...v0.2.0) (2026-10-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **server:** configs with allowed_uids or allowed_gids are rejected with a message to delete them; socket_group must be set.
+
+### Features
+
+* **install:** rename default socket group to latch-agents ([1fee157](https://github.com/mhmdxsadk/latch/commit/1fee15704a68cb18ec070b98fad44aa1f0d84500))
+* **server:** allow connections from socket_group only ([7688925](https://github.com/mhmdxsadk/latch/commit/76889256f521880143c9ddf0cf05bd35536a620c))
+
+
+### Bug Fixes
+
+* **peercred:** include supplementary groups on Linux ([7eda3a9](https://github.com/mhmdxsadk/latch/commit/7eda3a9ca053bf7067d79f4e0e5c7fe735e24685))
+
 ## 0.1.0 (2026-10-22)
 
 
