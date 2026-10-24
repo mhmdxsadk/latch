@@ -267,7 +267,7 @@ type inspect struct {
 	}
 	NetworkSettings struct {
 		Ports    map[string][]struct{ HostIp, HostPort string }
-		Networks map[string]struct{ IPAddress string }
+		Networks map[string]struct{ IPAddress, GlobalIPv6Address string }
 	}
 	Mounts []struct {
 		Type        string

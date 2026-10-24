@@ -50,8 +50,9 @@ type Mount struct {
 
 // Network is one network the container is attached to.
 type Network struct {
-	Name      string `json:"name"`
-	IPAddress string `json:"ip_address,omitempty"`
+	Name        string `json:"name"`
+	IPAddress   string `json:"ip_address,omitempty"`
+	IPv6Address string `json:"ipv6_address,omitempty"`
 }
 
 // HealthCheck is the configured health check, which is where the image or the
@@ -121,7 +122,8 @@ func (e *Engine) Settings(ctx context.Context, container string) (Settings, erro
 			truncated = true
 			break
 		}
-		st.Networks = append(st.Networks, Network{Name: text(name), IPAddress: text(in.NetworkSettings.Networks[name].IPAddress)})
+		n := in.NetworkSettings.Networks[name]
+		st.Networks = append(st.Networks, Network{Name: text(name), IPAddress: text(n.IPAddress), IPv6Address: text(n.GlobalIPv6Address)})
 	}
 	for _, raw := range sortedKeys(in.Config.Labels) {
 		if len(st.Labels) == maxLabels {
