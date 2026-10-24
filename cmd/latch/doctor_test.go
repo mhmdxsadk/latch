@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -165,5 +166,22 @@ func TestUseColorOffForNonTerminal(t *testing.T) {
 	defer f.Close()
 	if useColor(f) {
 		t.Error("a regular file is not a terminal")
+	}
+}
+
+func TestDoctorInvalidConfigUsesTheReportFormat(t *testing.T) {
+	bad := filepath.Join(t.TempDir(), "bad.yaml")
+	os.WriteFile(bad, []byte("server: {socket: /run/l.sock, allowed_uids: [1]}\n"), 0o600)
+	var out, errb bytes.Buffer
+	if code := cmdDoctor([]string{"-config", bad}, &out, &errb); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	for _, want := range []string{"Latch doctor", "Config", "✗ config " + bad, "were removed", "latch validate", "1 problem found."} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	if errb.Len() != 0 {
+		t.Errorf("report belongs on stdout, stderr got: %s", errb.String())
 	}
 }

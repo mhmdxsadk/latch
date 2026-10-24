@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mhmdxsadk/latch/internal/config"
@@ -41,7 +42,7 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg, err := config.Load(*path)
 	if err != nil {
-		fmt.Fprintf(stderr, "invalid configuration:\n%v\n", err)
+		configProblem(stdout, *path, err, useColor(stdout))
 		return 1
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), doctorTimeout)
@@ -112,6 +113,17 @@ func (r *report) summary() {
 	default:
 		fmt.Fprintln(r.out, r.paint("31", fmt.Sprintf("%d problems found.", r.failed)))
 	}
+}
+
+// configProblem prints the report for a config that cannot be loaded. Nothing
+// else can be checked without a valid config, so it is the whole report.
+func configProblem(out io.Writer, path string, err error, color bool) {
+	r := &report{out: out, color: color}
+	fmt.Fprintln(out, r.paint("1", "Latch doctor"))
+	r.section("Config")
+	r.check("config "+path, errors.New(strings.ReplaceAll(strings.TrimSpace(err.Error()), "\n", "\n    ")),
+		"Fix this, then run 'latch validate' to recheck. Nothing else can be checked until the config loads.")
+	r.summary()
 }
 
 func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Writer, color bool) bool {
