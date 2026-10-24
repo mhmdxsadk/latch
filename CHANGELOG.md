@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/mhmdxsadk/latch/compare/v0.6.0...v0.7.0) (2026-10-24)
+
+
+### Features
+
+* **docker:** include latest health check output ([e3c473a](https://github.com/mhmdxsadk/latch/commit/e3c473a1031c153fc3443efeb89178f3cabc3a30))
+
+
+### Bug Fixes
+
+* **docker:** speed up log sanitizing ([fb0438d](https://github.com/mhmdxsadk/latch/commit/fb0438de8bf2aef350dcf3428297c95cd6e8d9f5))
+* **docker:** strip more hidden characters from logs ([268f353](https://github.com/mhmdxsadk/latch/commit/268f3530aa0379b752ee02cfb0220bd709127639))
+* **mcp:** audit docker_list lookup failures ([2834aab](https://github.com/mhmdxsadk/latch/commit/2834aab7f6048d6d98a608738cf56b3f503e3803))
+
 ## [0.6.0](https://github.com/mhmdxsadk/latch/compare/v0.5.0...v0.6.0) (2026-10-24)
 
 
