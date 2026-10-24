@@ -27,7 +27,9 @@ func TestParseRejects(t *testing.T) {
 		want string // substring of the error
 	}{
 		{"unknown top-level key", validBase + "commands:\n  - rm -rf /\n", "field commands not found"},
-		{"unknown nested key", validBase + "docker:\n  services:\n    - name: a\n      container: b\n      exec: /bin/sh\n", "field exec not found"},
+		{"unknown nested key", validBase + "docker:\n  exclude: [a]\n  exec: /bin/sh\n", "field exec not found"},
+		{"old docker services key", validBase + "docker:\n  services:\n    - {name: a, container: b}\n", "field services not found"},
+		{"old systemd units key", validBase + "systemd:\n  units: [ssh.service]\n", "field units not found"},
 		{"no socket group", "server:\n  socket: /run/latch.sock\n", "server.socket_group"},
 		{"socket group with path", "server:\n  socket: /run/latch.sock\n  socket_group: ../x\n", "server.socket_group"},
 		{"socket group numeric", "server:\n  socket: /run/latch.sock\n  socket_group: '0'\n", "server.socket_group"},
@@ -38,14 +40,15 @@ func TestParseRejects(t *testing.T) {
 		{"log lines above hard cap", validBase + "limits:\n  max_log_lines: 100000\n", "max_log_lines"},
 		{"log bytes above hard cap", validBase + "limits:\n  max_log_bytes: 99999999\n", "max_log_bytes"},
 		{"negative log lines", validBase + "limits:\n  max_log_lines: -1\n", "max_log_lines"},
-		{"service name uppercase", validBase + "docker:\n  services:\n    - {name: Web, container: c}\n", "docker.services[0].name"},
-		{"service name with slash", validBase + "docker:\n  services:\n    - {name: a/b, container: c}\n", "docker.services[0].name"},
-		{"container with flag-like name", validBase + "docker:\n  services:\n    - {name: a, container: --privileged}\n", "docker.services[0].container"},
-		{"container with space", validBase + "docker:\n  services:\n    - {name: a, container: 'x y'}\n", "docker.services[0].container"},
-		{"duplicate service", validBase + "docker:\n  services:\n    - {name: a, container: c}\n    - {name: a, container: d}\n", "duplicate"},
-		{"unit without suffix", validBase + "systemd:\n  units: [ssh]\n", "systemd.units[0]"},
-		{"unit with path", validBase + "systemd:\n  units: ['../../etc/x.service']\n", "systemd.units[0]"},
-		{"unit with space", validBase + "systemd:\n  units: ['a b.service']\n", "systemd.units[0]"},
+		{"docker exclude with flag-like name", validBase + "docker:\n  exclude: ['--privileged!']\n", "docker.exclude[0]"},
+		{"docker exclude with space", validBase + "docker:\n  exclude: ['x y']\n", "docker.exclude[0]"},
+		{"docker exclude with slash", validBase + "docker:\n  exclude: ['a/b']\n", "docker.exclude[0]"},
+		{"docker exclude with class", validBase + "docker:\n  exclude: ['a[bc]']\n", "docker.exclude[0]"},
+		{"docker exclude with escape", validBase + "docker:\n  exclude: ['a\\\\*']\n", "docker.exclude[0]"},
+		{"docker exclude empty", validBase + "docker:\n  exclude: ['']\n", "docker.exclude[0]"},
+		{"docker exclude duplicate", validBase + "docker:\n  exclude: [a, a]\n", "duplicate"},
+		{"systemd exclude with path", validBase + "systemd:\n  exclude: ['../../etc/x.service']\n", "systemd.exclude[0]"},
+		{"systemd exclude with space", validBase + "systemd:\n  exclude: ['a b.service']\n", "systemd.exclude[0]"},
 		{"relative disk path", validBase + "host:\n  disks:\n    - {name: a, path: var}\n", "host.disks[0].path"},
 		{"disk path traversal", validBase + "host:\n  disks:\n    - {name: a, path: /var/../etc}\n", "host.disks[0].path"},
 		{"old http checks section", validBase + "health:\n  http:\n    - {name: a, url: 'https://h/'}\n", "field http not found"},
@@ -63,6 +66,35 @@ func TestParseRejects(t *testing.T) {
 				t.Errorf("error %q does not contain %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestMatchesAny(t *testing.T) {
+	pats := []string{"secrets-broker", "infisical*", "vault-?", "ssh.service", "getty@*.service"}
+	for name, want := range map[string]bool{
+		"secrets-broker": true, "secrets-broker2": false, "my-secrets-broker": false,
+		"infisical": true, "infisical-redis": true, "not-infisical": false,
+		"vault-1": true, "vault-12": false, "vault-": false,
+		"ssh.service": true, "ssh": false, "SSH.service": false,
+		"getty@tty1.service": true, "getty.service": false,
+		"": false,
+	} {
+		if got := MatchesAny(pats, name); got != want {
+			t.Errorf("MatchesAny(%q) = %v, want %v", name, got, want)
+		}
+	}
+	if MatchesAny(nil, "anything") {
+		t.Error("an empty list excludes nothing")
+	}
+}
+
+func TestExcludeListsAccepted(t *testing.T) {
+	c, err := Parse([]byte(validBase + "docker:\n  exclude: [secrets-broker, 'infisical*']\nsystemd:\n  exclude: [vault.service, 'getty@*.service']\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Docker.Exclude) != 2 || len(c.Systemd.Exclude) != 2 {
+		t.Errorf("got %+v", c)
 	}
 }
 

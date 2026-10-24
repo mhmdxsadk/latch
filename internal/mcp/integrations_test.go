@@ -20,12 +20,22 @@ import (
 type fakeDocker struct {
 	err        error
 	errFor     map[string]error
+	names      []string // returned by List; defaults to web, db and an excluded one
 	containers []string
 	lines      int
 	maxBytes   int
 }
 
 func (f *fakeDocker) Ping(context.Context) error { return f.err }
+func (f *fakeDocker) List(context.Context) ([]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.names != nil {
+		return f.names, nil
+	}
+	return []string{"my-db", "my-web", "secret-vault"}, nil
+}
 func (f *fakeDocker) Status(_ context.Context, c string) (docker.Status, error) {
 	f.containers = append(f.containers, c)
 	if err := f.errFor[c]; err != nil {
@@ -45,6 +55,9 @@ type fakeSystemd struct {
 }
 
 func (f *fakeSystemd) Ping(context.Context) error { return f.err }
+func (f *fakeSystemd) List(context.Context) ([]systemd.ListedUnit, error) {
+	return []systemd.ListedUnit{{Name: "ssh.service", ActiveState: "active"}, {Name: "vault.service", ActiveState: "active"}}, f.err
+}
 func (f *fakeSystemd) UnitStatus(_ context.Context, u string) (systemd.UnitStatus, error) {
 	f.units = append(f.units, u)
 	return systemd.UnitStatus{LoadState: "loaded", ActiveState: "active", SubState: "running"}, f.err
@@ -78,27 +91,41 @@ func TestDockerToolsResolveThroughPolicy(t *testing.T) {
 	fd := &fakeDocker{}
 	h := newHarnessWith(t, func(d *Deps) { d.Docker = fd })
 
-	st := structured[dockerStatusOut](t, h, "docker_status", map[string]any{"name": "web"})
-	if st.Name != "web" || st.Status.State != "running" {
+	st := structured[dockerStatusOut](t, h, "docker_status", map[string]any{"name": "my-web"})
+	if st.Name != "my-web" || st.Status.State != "running" {
 		t.Errorf("got %+v", st)
 	}
-	logs := structured[dockerLogsOut](t, h, "docker_logs", map[string]any{"name": "db", "lines": 50})
+	logs := structured[dockerLogsOut](t, h, "docker_logs", map[string]any{"name": "my-db", "lines": 50})
 	if len(logs.Entries) != 1 || fd.lines != 50 || fd.maxBytes != config.DefaultMaxLogBytes {
 		t.Errorf("got %+v lines=%d maxBytes=%d", logs, fd.lines, fd.maxBytes)
 	}
-	structured[dockerLogsOut](t, h, "docker_logs", map[string]any{"name": "db"})
+	structured[dockerLogsOut](t, h, "docker_logs", map[string]any{"name": "my-db"})
 	if fd.lines != 100 {
 		t.Errorf("default lines = %d", fd.lines)
 	}
 	if strings.Join(fd.containers, ",") != "my-web,my-db,my-db" {
-		t.Errorf("integration saw %v; want only configured container names", fd.containers)
+		t.Errorf("integration saw %v; want only the requested container names", fd.containers)
+	}
+}
+
+func TestDockerListHidesExcluded(t *testing.T) {
+	fd := &fakeDocker{}
+	h := newHarnessWith(t, func(d *Deps) { d.Docker = fd })
+	out := structured[dockerListOut](t, h, "docker_list", map[string]any{})
+	if len(out.Services) != 2 || out.Services[0].Name != "my-db" || out.Services[1].Name != "my-web" {
+		t.Errorf("got %+v", out)
+	}
+	for _, c := range fd.containers {
+		if c == "secret-vault" {
+			t.Error("an excluded container was inspected")
+		}
 	}
 }
 
 func TestDockerListToleratesPerServiceFailures(t *testing.T) {
 	fd := &fakeDocker{errFor: map[string]error{
-		"my-web": docker.ErrNotFound,
-		"my-db":  errors.New("SECRET daemon detail"),
+		"my-db":  docker.ErrNotFound,
+		"my-web": errors.New("SECRET daemon detail"),
 	}}
 	h := newHarnessWith(t, func(d *Deps) { d.Docker = fd })
 	res, err := h.call("docker_list", map[string]any{})
@@ -123,20 +150,22 @@ func TestDockerRejections(t *testing.T) {
 		tool string
 		args any
 	}{
-		{"docker_status", map[string]any{"name": "my-web"}}, // container name, not service name
+		{"docker_status", map[string]any{"name": "secret-vault"}}, // excluded
+		{"docker_logs", map[string]any{"name": "secret-vault"}},
+		{"docker_status", map[string]any{"name": "secret-"}},
 		{"docker_status", map[string]any{"name": "../web"}},
 		{"docker_status", map[string]any{"name": "web/../../etc"}},
-		{"docker_status", map[string]any{"name": "WEB"}},
+		{"docker_status", map[string]any{"name": "web;id"}},
+		{"docker_status", map[string]any{"name": "-v"}},
 		{"docker_status", map[string]any{"name": "web", "container": "other"}},
 		{"docker_status", map[string]any{}},
-		{"docker_logs", map[string]any{"name": "web", "lines": 1001}},
-		{"docker_logs", map[string]any{"name": "web", "lines": config.DefaultMaxLogLines + 1}},
-		{"docker_logs", map[string]any{"name": "web", "lines": -1}},
-		{"docker_logs", map[string]any{"name": "web", "lines": "all"}},
-		{"docker_logs", map[string]any{"name": "web", "lines": 1.5}},
-		{"docker_logs", map[string]any{"name": "web", "follow": true}},
-		{"docker_logs", map[string]any{"name": "web", "max_bytes": 1 << 30}},
-		{"docker_logs", map[string]any{"name": "nope"}},
+		{"docker_logs", map[string]any{"name": "my-web", "lines": 1001}},
+		{"docker_logs", map[string]any{"name": "my-web", "lines": config.DefaultMaxLogLines + 1}},
+		{"docker_logs", map[string]any{"name": "my-web", "lines": -1}},
+		{"docker_logs", map[string]any{"name": "my-web", "lines": "all"}},
+		{"docker_logs", map[string]any{"name": "my-web", "lines": 1.5}},
+		{"docker_logs", map[string]any{"name": "my-web", "follow": true}},
+		{"docker_logs", map[string]any{"name": "my-web", "max_bytes": 1 << 30}},
 	}
 	for _, c := range cases {
 		res, err := h.call(c.tool, c.args)
@@ -156,7 +185,7 @@ func TestSystemdTool(t *testing.T) {
 	if out.Unit != "ssh.service" || out.Status.ActiveState != "active" {
 		t.Errorf("got %+v", out)
 	}
-	for _, u := range []string{"ssh", "sshd.service", "SSH.service", "../ssh.service", "ssh.service\n", "*.service", "ssh.service --now", ""} {
+	for _, u := range []string{"vault.service", "ssh", "../ssh.service", "ssh.service\n", "*.service", "ssh.service --now", ""} {
 		res, err := h.call("systemd_unit_status", map[string]any{"unit": u})
 		if err == nil && !res.IsError {
 			t.Errorf("unit %q accepted", u)
@@ -164,6 +193,30 @@ func TestSystemdTool(t *testing.T) {
 	}
 	if len(fs.units) != 1 {
 		t.Errorf("integration calls: %v", fs.units)
+	}
+}
+
+func TestSystemdListHidesExcluded(t *testing.T) {
+	h := newHarnessWith(t, func(d *Deps) {})
+	out := structured[unitListOut](t, h, "systemd_list", map[string]any{})
+	if len(out.Units) != 1 || out.Units[0].Name != "ssh.service" {
+		t.Errorf("got %+v", out)
+	}
+}
+
+// An excluded resource must look exactly like one that does not exist.
+func TestExcludedLooksLikeMissing(t *testing.T) {
+	h := newHarnessWith(t, func(d *Deps) { d.Docker = &fakeDocker{err: docker.ErrNotFound} })
+	excluded, err := h.call("docker_status", map[string]any{"name": "secret-vault"})
+	if err != nil || !excluded.IsError {
+		t.Fatalf("%v %+v", err, excluded)
+	}
+	missing, err := h.call("docker_status", map[string]any{"name": "my-web"})
+	if err != nil || !missing.IsError {
+		t.Fatalf("%v %+v", err, missing)
+	}
+	if resultText(excluded) != resultText(missing) {
+		t.Errorf("excluded %q differs from missing %q", resultText(excluded), resultText(missing))
 	}
 }
 
@@ -203,8 +256,10 @@ func TestMissingResourcesAndLeaks(t *testing.T) {
 		tool string
 		args any
 	}{
-		{"docker_status", map[string]any{"name": "web"}},
-		{"docker_logs", map[string]any{"name": "web"}},
+		{"docker_list", map[string]any{}},
+		{"docker_status", map[string]any{"name": "my-web"}},
+		{"docker_logs", map[string]any{"name": "my-web"}},
+		{"systemd_list", map[string]any{}},
 		{"systemd_unit_status", map[string]any{"unit": "ssh.service"}},
 		{"dns_check", map[string]any{"name": "example"}},
 	} {
@@ -234,7 +289,7 @@ func TestMissingResourcesAndLeaks(t *testing.T) {
 		tool string
 		args any
 	}{
-		{"docker_status", map[string]any{"name": "web"}},
+		{"docker_status", map[string]any{"name": "my-web"}},
 		{"systemd_unit_status", map[string]any{"unit": "ssh.service"}},
 	} {
 		res, err := h.call(c.tool, c.args)
@@ -266,7 +321,7 @@ func TestConcurrentCallsAreBounded(t *testing.T) {
 	done := make(chan struct{})
 	for range MaxConcurrentCalls {
 		go func() {
-			h.cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "docker_status", Arguments: map[string]any{"name": "web"}})
+			h.cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "docker_status", Arguments: map[string]any{"name": "my-web"}})
 			done <- struct{}{}
 		}()
 		<-bd.entered

@@ -22,21 +22,27 @@ func (okHost) Load(context.Context) (host.Load, error)         { return host.Loa
 func (okHost) Memory(context.Context) (host.Memory, error)     { return host.Memory{}, nil }
 func (okHost) Disk(context.Context, string) (host.Disk, error) { return host.Disk{}, nil }
 
-type stubDocker struct{ ping, status error }
+type stubDocker struct{ ping, list error }
 
 func (s stubDocker) Ping(context.Context) error { return s.ping }
+func (s stubDocker) List(context.Context) ([]string, error) {
+	return []string{"jellyfin", "secrets-broker", "secrets-vault"}, s.list
+}
 func (s stubDocker) Status(context.Context, string) (docker.Status, error) {
-	return docker.Status{}, s.status
+	return docker.Status{}, nil
 }
 func (s stubDocker) Logs(context.Context, string, int, int) (docker.Logs, error) {
 	return docker.Logs{}, nil
 }
 
-type stubSystemd struct{ ping, status error }
+type stubSystemd struct{ ping, list error }
 
 func (s stubSystemd) Ping(context.Context) error { return s.ping }
+func (s stubSystemd) List(context.Context) ([]systemd.ListedUnit, error) {
+	return []systemd.ListedUnit{{Name: "ssh.service"}, {Name: "vault.service"}}, s.list
+}
 func (s stubSystemd) UnitStatus(context.Context, string) (systemd.UnitStatus, error) {
-	return systemd.UnitStatus{}, s.status
+	return systemd.UnitStatus{}, nil
 }
 
 type stubHealth struct {
@@ -52,9 +58,9 @@ func doctorConfig(t *testing.T) *config.Config {
 	cfg, err := config.Parse([]byte(`
 server: {socket: ` + t.TempDir() + `/l.sock, socket_group: latch-agents}
 docker:
-  services: [{name: web, container: my-web}]
+  exclude: [secrets-*]
 systemd:
-  units: [ssh.service]
+  exclude: [vault.service]
 health:
   dns: [{name: example, host: example.com}]
 `))
@@ -79,7 +85,7 @@ func TestDoctorAllHealthy(t *testing.T) {
 	if !doctor(context.Background(), doctorConfig(t), healthy(), &out, false) {
 		t.Fatalf("expected success:\n%s", out.String())
 	}
-	for _, want := range []string{"OK    socket group latch-agents", "OK    docker daemon", "OK    docker service web (container my-web)", "OK    systemd unit ssh.service", "OK    dns check example", "All checks passed."} {
+	for _, want := range []string{"OK    socket group latch-agents", "OK    docker daemon", "OK    docker containers (1 visible, 2 excluded)", "OK    systemd services (1 visible, 1 excluded)", "OK    dns check example", "All checks passed."} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in:\n%s", want, out.String())
 		}
@@ -99,9 +105,9 @@ func TestDoctorReportsFailures(t *testing.T) {
 			i.groupID = func(string) (uint32, error) { return 0, errors.New("unknown group") }
 		}, "FAIL  socket group latch-agents"},
 		{"docker down", func(i *integrations) { i.docker = stubDocker{ping: errors.New("dial failed")} }, "FAIL  docker daemon"},
-		{"container missing", func(i *integrations) { i.docker = stubDocker{status: docker.ErrNotFound} }, "FAIL  docker service web (container my-web)"},
+		{"container list fails", func(i *integrations) { i.docker = stubDocker{list: errors.New("denied")} }, "FAIL  docker containers"},
 		{"no systemd", func(i *integrations) { i.systemd = stubSystemd{ping: errors.New("no bus")} }, "FAIL  systemd bus"},
-		{"unit missing", func(i *integrations) { i.systemd = stubSystemd{status: systemd.ErrNotFound} }, "FAIL  systemd unit ssh.service"},
+		{"unit list fails", func(i *integrations) { i.systemd = stubSystemd{list: errors.New("denied")} }, "FAIL  systemd services"},
 		{"dns failure", func(i *integrations) {
 			i.health = stubHealth{dns: health.DNSResult{Failure: health.FailureNotFound}}
 		}, "FAIL  dns check example\n      not_found"},
@@ -123,13 +129,13 @@ func TestDoctorReportsFailures(t *testing.T) {
 
 func TestDoctorSummaryCountsProblemsAndHintsAppear(t *testing.T) {
 	in := healthy()
-	in.docker = stubDocker{status: docker.ErrNotFound}
-	in.systemd = stubSystemd{status: systemd.ErrNotFound}
+	in.docker = stubDocker{list: errors.New("denied")}
+	in.systemd = stubSystemd{list: errors.New("denied")}
 	var out bytes.Buffer
 	if doctor(context.Background(), doctorConfig(t), in, &out, false) {
 		t.Fatal("expected failure")
 	}
-	for _, want := range []string{"2 problems found.", "docker ps -a", "systemctl list-unit-files"} {
+	for _, want := range []string{"2 problems found.", "Docker socket", "system bus"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in:\n%s", want, out.String())
 		}

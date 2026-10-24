@@ -55,11 +55,9 @@ host:
   disks:
     - {name: root, path: /}
 docker:
-  services:
-    - {name: web, container: my-web}
-    - {name: db, container: my-db}
+  exclude: [secret-*]
 systemd:
-  units: [ssh.service]
+  exclude: [vault.service]
 health:
   dns:
     - {name: example, host: example.com}
@@ -120,7 +118,7 @@ func TestToolSurfaceIsReadOnlyAndFixed(t *testing.T) {
 	want := map[string]bool{
 		"list_resources": true, "host_load": true, "host_memory": true, "host_disk": true,
 		"docker_list": true, "docker_status": true, "docker_logs": true,
-		"systemd_unit_status": true, "dns_check": true,
+		"systemd_list": true, "systemd_unit_status": true, "dns_check": true,
 	}
 	for _, tool := range res.Tools {
 		if !want[tool.Name] {
@@ -147,8 +145,7 @@ func TestListResources(t *testing.T) {
 	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Disks) != 1 || out.Disks[0] != "root" || len(out.DockerServices) != 2 ||
-		len(out.SystemdUnits) != 1 || len(out.DNSChecks) != 1 {
+	if len(out.Disks) != 1 || out.Disks[0] != "root" || len(out.DNSChecks) != 1 {
 		t.Errorf("got %+v", out)
 	}
 }

@@ -55,6 +55,7 @@ func TestEscapePath(t *testing.T) {
 func fullProps() map[string]map[string]dbus.Variant {
 	return map[string]map[string]dbus.Variant{
 		ifaceUnit: {
+			"Id":                   v("ssh.service"),
 			"LoadState":            v("loaded"),
 			"ActiveState":          v("active"),
 			"SubState":             v("running"),
@@ -104,6 +105,7 @@ func TestReadStatusService(t *testing.T) {
 
 func TestReadStatusNonService(t *testing.T) {
 	f := &fakeReader{props: fullProps()}
+	f.props[ifaceUnit]["Id"] = v("apt-daily.timer")
 	got, err := readStatus(context.Background(), f, "apt-daily.timer")
 	if err != nil {
 		t.Fatal(err)
@@ -153,10 +155,35 @@ func TestBuildStatusEdgeCases(t *testing.T) {
 
 func TestReadStatusNotFound(t *testing.T) {
 	f := &fakeReader{props: map[string]map[string]dbus.Variant{
-		ifaceUnit: {"LoadState": v("not-found")}, ifaceService: {},
+		ifaceUnit: {"Id": v("nope.service"), "LoadState": v("not-found")}, ifaceService: {},
 	}}
 	if _, err := readStatus(context.Background(), f, "nope.service"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// A unit alias answers with the real unit's properties. That must not be
+// returned, or an excluded unit could be read under its alias.
+func TestAliasIsNotFound(t *testing.T) {
+	f := &fakeReader{props: fullProps()}
+	if _, err := readStatus(context.Background(), f, "sshd.service"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestBuildList(t *testing.T) {
+	rows := []listRow{
+		{Name: "ssh.service", Description: "SSH", Active: "active", Sub: "running"},
+		{Name: "cron.service", Active: "active", Sub: "running"},
+		{Name: "cron.service", Active: "active", Sub: "running"},
+		{Name: "dbus.socket", Active: "active"},
+		{Name: "-.mount", Active: "active"},
+		{Name: "bad name.service"},
+		{Name: "../x.service"},
+	}
+	got := buildList(rows)
+	if len(got) != 2 || got[0].Name != "cron.service" || got[1].Name != "ssh.service" || got[1].ActiveState != "active" {
+		t.Errorf("got %+v", got)
 	}
 }
 

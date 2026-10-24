@@ -1,8 +1,8 @@
-// Package systemd reports the state of allowlisted systemd units.
+// Package systemd reports the state of systemd units.
 //
-// It only performs read-only D-Bus property reads (Properties.GetAll/Get on a
-// computed unit object path). It never calls a Manager method, so it cannot
-// start, stop, enable or otherwise change anything. Unit names come from
+// It only performs read-only D-Bus calls: Properties.GetAll/Get on a computed
+// unit object path, and Manager.ListUnits. It never calls a Manager method that
+// starts, stops, enables or otherwise changes anything. Unit names come from
 // policy and are re-validated here. Output is a fixed projection: only the
 // listed properties are copied out, so ExecStart, Environment and the like
 // are never returned or retained.
@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ const (
 	ifaceService = "org.freedesktop.systemd1.Service"
 	ifaceManager = "org.freedesktop.systemd1.Manager"
 	ifaceProps   = "org.freedesktop.DBus.Properties"
+	listMethod   = ifaceManager + ".ListUnits"
 	callTimeout  = 5 * time.Second
 )
 
@@ -48,6 +50,14 @@ type UnitStatus struct {
 	ExecMainStatus int32  `json:"exec_main_status"`
 }
 
+// ListedUnit is one loaded service unit and its state.
+type ListedUnit struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ActiveState string `json:"active_state"`
+	SubState    string `json:"sub_state"`
+}
+
 // ErrNotFound is returned when systemd reports LoadState "not-found".
 var ErrNotFound = errors.New("unit not found")
 
@@ -55,6 +65,9 @@ var ErrNotFound = errors.New("unit not found")
 type Client interface {
 	// Ping checks that the system bus is reachable and systemd answers.
 	Ping(ctx context.Context) error
+	// List returns the loaded service units, sorted by name. The caller must
+	// filter the result through policy.
+	List(ctx context.Context) ([]ListedUnit, error)
 	// UnitStatus takes a unit name that has already been resolved by policy.
 	UnitStatus(ctx context.Context, unit string) (UnitStatus, error)
 }
@@ -118,6 +131,43 @@ func (*Bus) Ping(ctx context.Context) error {
 	return nil
 }
 
+// List returns the loaded service units known to systemd.
+func (*Bus) List(ctx context.Context) ([]ListedUnit, error) {
+	ctx, cancel, conn, err := open(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	defer func() { _ = conn.Close() }()
+	var rows []listRow
+	if err := conn.Object(busName, managerPath).CallWithContext(ctx, listMethod, 0).Store(&rows); err != nil {
+		return nil, fmt.Errorf("list units: %w", err)
+	}
+	return buildList(rows), nil
+}
+
+// listRow is the (ssssssouso) struct returned by Manager.ListUnits.
+type listRow struct {
+	Name, Description, Load, Active, Sub, Following string
+	Path                                            dbus.ObjectPath
+	JobID                                           uint32
+	JobType                                         string
+	JobPath                                         dbus.ObjectPath
+}
+
+// buildList keeps valid service names only and projects them.
+func buildList(rows []listRow) []ListedUnit {
+	out := make([]ListedUnit, 0, len(rows))
+	for _, r := range rows {
+		if !unitName.MatchString(r.Name) || !strings.HasSuffix(r.Name, ".service") {
+			continue
+		}
+		out = append(out, ListedUnit{Name: r.Name, Description: r.Description, ActiveState: r.Active, SubState: r.Sub})
+	}
+	slices.SortFunc(out, func(a, b ListedUnit) int { return strings.Compare(a.Name, b.Name) })
+	return slices.CompactFunc(out, func(a, b ListedUnit) bool { return a.Name == b.Name })
+}
+
 // UnitStatus reads the projected status of a unit.
 func (*Bus) UnitStatus(ctx context.Context, unit string) (UnitStatus, error) {
 	if !unitName.MatchString(unit) {
@@ -147,6 +197,12 @@ func readStatus(ctx context.Context, r propertyReader, unit string) (UnitStatus,
 		if svcProps, err = r.getAll(ctx, path, ifaceService); err != nil {
 			return UnitStatus{}, err
 		}
+	}
+	// An alias resolves to the unit it points at. Policy matched the alias
+	// name, not the real one, so an excluded unit could be reached through
+	// it. Only the unit's own name is accepted.
+	if id := get[string](unitProps, "Id"); id != unit {
+		return UnitStatus{}, ErrNotFound
 	}
 	return buildStatus(unitProps, svcProps)
 }

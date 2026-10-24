@@ -15,6 +15,7 @@ import (
 	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
+	"github.com/mhmdxsadk/latch/internal/policy"
 	"github.com/mhmdxsadk/latch/internal/server"
 	"github.com/mhmdxsadk/latch/internal/systemd"
 )
@@ -136,6 +137,8 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 	r.check("socket group "+cfg.Server.SocketGroup, err,
 		"Create it with 'groupadd --system "+cfg.Server.SocketGroup+"', or set socket_group to a group that exists.")
 
+	pol := policy.New(cfg)
+
 	const linuxHint = "Only available on Linux."
 	hostHint := func(err error) string {
 		if errors.Is(err, host.ErrUnsupported) {
@@ -152,36 +155,24 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 		r.check("disk "+d.Name+" ("+d.Path+")", err, "Check that the path exists and is a mount point or directory.")
 	}
 
-	if len(cfg.Docker.Services) > 0 {
-		if err := in.docker.Ping(ctx); err != nil {
-			r.check("docker daemon", err, "Is Docker running? Check docker.socket in the config ("+cfg.Docker.Socket+") and that the latch service can read it.")
-		} else {
-			r.check("docker daemon", nil, "")
-			for _, s := range cfg.Docker.Services {
-				_, err := in.docker.Status(ctx, s.Container)
-				hint := ""
-				if errors.Is(err, docker.ErrNotFound) {
-					hint = "No container has exactly this name. Check 'docker ps -a'."
-				}
-				r.check(fmt.Sprintf("docker service %s (container %s)", s.Name, s.Container), err, hint)
-			}
-		}
+	if err := in.docker.Ping(ctx); err != nil {
+		r.check("docker daemon", err, "Is Docker running? Check docker.socket in the config ("+cfg.Docker.Socket+") and that the latch service can read it.")
+	} else {
+		r.check("docker daemon", nil, "")
+		names, err := in.docker.List(ctx)
+		r.check("docker containers"+visible(names, err, pol.ContainerVisible), err, "Can the latch service read the Docker socket?")
 	}
 
-	if len(cfg.Systemd.Units) > 0 {
-		if err := in.systemd.Ping(ctx); err != nil {
-			r.check("systemd bus", err, "Is systemd running, and can the latch service reach /run/dbus/system_bus_socket?")
-		} else {
-			r.check("systemd bus", nil, "")
-			for _, u := range cfg.Systemd.Units {
-				_, err := in.systemd.UnitStatus(ctx, u)
-				hint := ""
-				if errors.Is(err, systemd.ErrNotFound) {
-					hint = "No unit with this name is installed. Check 'systemctl list-unit-files'."
-				}
-				r.check("systemd unit "+u, err, hint)
-			}
+	if err := in.systemd.Ping(ctx); err != nil {
+		r.check("systemd bus", err, "Is systemd running, and can the latch service reach /run/dbus/system_bus_socket?")
+	} else {
+		r.check("systemd bus", nil, "")
+		units, err := in.systemd.List(ctx)
+		var names []string
+		for _, u := range units {
+			names = append(names, u.Name)
 		}
+		r.check("systemd services"+visible(names, err, pol.UnitVisible), err, "Can the latch service reach the system bus?")
 	}
 
 	for _, t := range cfg.Health.DNS {
@@ -194,4 +185,18 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 
 	r.summary()
 	return r.failed == 0
+}
+
+// visible describes how many of names the agent can see, e.g. " (12 visible, 2 excluded)".
+func visible(names []string, err error, ok func(string) bool) string {
+	if err != nil {
+		return ""
+	}
+	n := 0
+	for _, name := range names {
+		if ok(name) {
+			n++
+		}
+	}
+	return fmt.Sprintf(" (%d visible, %d excluded)", n, len(names)-n)
 }

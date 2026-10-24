@@ -1,7 +1,7 @@
-// Package docker inspects a single container through the Docker Engine API.
+// Package docker inspects containers through the Docker Engine API.
 //
 // It is strictly read-only: it speaks plain HTTP over the Docker Unix socket,
-// issues only GET requests to three fixed endpoints (/_ping,
+// issues only GET requests to four fixed endpoints (/_ping, /containers/json,
 // /containers/{name}/json, /containers/{name}/logs), never follows redirects
 // or uses proxies, and caps every response read. Inspect output is decoded into
 // a private struct and projected onto a small Status, so environment variables,
@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -29,13 +31,16 @@ var ErrNotFound = errors.New("container not found")
 const (
 	defaultTimeout = 10 * time.Second
 	maxInspectBody = 4 << 20
+	maxListBody    = 8 << 20
 	baseURL        = "http://docker"
 )
 
 var (
 	// containerName mirrors the pattern enforced by config.
 	containerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
-	// containerID is a full Docker container ID.
+	// containerID is a full Docker container ID. Containers are only ever
+	// addressed by name, never by ID, so an excluded container cannot be
+	// reached through its ID.
 	containerID = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
@@ -78,6 +83,9 @@ type Logs struct {
 // Client is the Docker interface the MCP layer uses; tests substitute a fake.
 type Client interface {
 	Ping(ctx context.Context) error
+	// List returns the names of all containers (running or not), sorted.
+	// The caller must filter the result through policy.
+	List(ctx context.Context) ([]string, error)
 	// Status and Logs take a container name already resolved by policy.
 	Status(ctx context.Context, container string) (Status, error)
 	Logs(ctx context.Context, container string, lines, maxBytes int) (Logs, error)
@@ -176,6 +184,33 @@ func (e *Engine) Ping(ctx context.Context) error {
 	return resp.Body.Close()
 }
 
+// List returns the primary name of every container, running or not. Names
+// that Docker accepts but Latch would refuse to address are skipped.
+func (e *Engine) List(ctx context.Context) ([]string, error) {
+	resp, cancel, err := e.get(ctx, "/containers/json", "all=true")
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	defer resp.Body.Close()
+	var items []struct{ Names []string }
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxListBody)).Decode(&items); err != nil {
+		return nil, errors.New("docker: malformed list response")
+	}
+	names := make([]string, 0, len(items))
+	for _, it := range items {
+		for _, n := range it.Names {
+			// Primary names look like "/web"; link aliases look like "/a/b".
+			if name, ok := strings.CutPrefix(n, "/"); ok && containerName.MatchString(name) {
+				names = append(names, name)
+				break
+			}
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names), nil
+}
+
 // inspect is the only part of the inspect document that is ever decoded.
 type inspect struct {
 	ID    string `json:"Id"`
@@ -220,10 +255,11 @@ func (e *Engine) inspect(ctx context.Context, name string) (inspect, error) {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxInspectBody)).Decode(&in); err != nil {
 		return in, errors.New("docker: malformed inspect response")
 	}
-	// Docker also resolves a name as an ID prefix, so if the configured
-	// container is gone an unrelated container whose ID happens to start with
-	// the name would answer. Accept only an exact name or full-ID match.
-	if in.Name != "/"+name && in.ID != name {
+	// Docker also resolves a name as an ID or ID prefix, so if the container
+	// is gone an unrelated container whose ID happens to start with the name
+	// would answer, and an excluded container could be reached through its
+	// ID. Accept only an exact name match.
+	if in.Name != "/"+name {
 		return inspect{}, ErrNotFound
 	}
 	if !containerID.MatchString(in.ID) {

@@ -11,16 +11,15 @@ import (
 type listResourcesIn struct{}
 
 type listResourcesOut struct {
-	DockerServices []string `json:"docker_services"`
-	SystemdUnits   []string `json:"systemd_units"`
-	Disks          []string `json:"disks"`
-	DNSChecks      []string `json:"dns_checks"`
+	Disks     []string `json:"disks"`
+	DNSChecks []string `json:"dns_checks"`
 }
 
 func registerResources(s *sdk.Server, d *Deps) {
 	sdk.AddTool(s, &sdk.Tool{
-		Name:        "list_resources",
-		Description: "List the names of every resource this Latch instance allows you to query.",
+		Name: "list_resources",
+		Description: "List the named disks and DNS checks this Latch instance allows you to query. " +
+			"Docker containers and systemd units are not named in advance: use docker_list and systemd_list.",
 		Annotations: readOnly,
 	}, wrap(d, "list_resources", func(context.Context, listResourcesIn) (listResourcesOut, string, error) {
 		// Slices are never nil so the output schema (array) always validates.
@@ -31,10 +30,8 @@ func registerResources(s *sdk.Server, d *Deps) {
 			return []string{}
 		}
 		return listResourcesOut{
-			DockerServices: nz(policy.KindDocker),
-			SystemdUnits:   nz(policy.KindSystemd),
-			Disks:          nz(policy.KindDisk),
-			DNSChecks:      nz(policy.KindDNS),
+			Disks:     nz(policy.KindDisk),
+			DNSChecks: nz(policy.KindDNS),
 		}, "", nil
 	}))
 }

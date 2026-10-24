@@ -1,7 +1,8 @@
 # Latch example configuration.
 #
-# This file declares WHICH resources an agent may inspect. It cannot define
-# commands, arguments, or file paths to read. Unknown keys are rejected.
+# This file declares WHICH resources an agent may NOT inspect (Docker
+# containers, systemd units) and which disks and DNS names it may. It cannot
+# define commands, arguments, or file paths to read. Unknown keys are rejected.
 # Copy to /etc/latch/config.yaml and edit.
 
 server:
@@ -23,19 +24,19 @@ audit:
 
 docker:
   socket: /var/run/docker.sock
-  services:
-    # name: what the agent sees. container: the Docker container name.
-    # The agent can read these containers' recent logs (bounded by limits),
-    # so do not list containers that log secrets.
-    - name: web
-      container: my-web-container
-    - name: database
-      container: my-db-container
+  # Every container is visible to the agent (state, health, recent logs, all
+  # bounded by limits) EXCEPT the ones named here. Logs often contain secrets,
+  # so exclude containers that log them. A new container is visible as soon as
+  # it exists, so review this list when you add one.
+  # Names are exact; * matches any run of characters and ? one character.
+  exclude:
+    - secrets-broker
+    - vault-*
 
 systemd:
-  units:
-    - docker.service
-    - ssh.service
+  # Every unit is visible to the agent EXCEPT the full unit names listed here.
+  exclude:
+    - vault.service
 
 host:
   disks:

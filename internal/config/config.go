@@ -1,9 +1,11 @@
 // Package config loads and validates Latch's configuration.
 //
-// The configuration only declares WHICH resources Latch may expose. It has no
-// way to express commands, arguments, or paths to read: every field is either a
-// resource name, a fixed identifier (container, unit, mount point), or a bound.
-// Unknown keys are rejected so a typo can never silently widen or drop policy.
+// The configuration only declares WHICH resources Latch may expose or hide. It
+// has no way to express commands, arguments, or paths to read: every field is
+// either a resource name, a name pattern, a fixed identifier (mount point), or
+// a bound. Docker containers and systemd units are exposed by default and the
+// operator lists the ones to exclude. Unknown keys are rejected so a typo can
+// never silently widen or drop policy.
 package config
 
 import (
@@ -12,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -44,6 +47,10 @@ var (
 	// unitName matches a fully qualified systemd unit name. Template
 	// instances ("foo@bar.service") are allowed; path separators are not.
 	unitName = regexp.MustCompile(`^[A-Za-z0-9:_.\\@-]{1,200}\.(service|socket|timer|mount|target|path)$`)
+	// excludePattern is a name pattern: name characters plus the * and ?
+	// wildcards. Backslash and brackets are not allowed, so path.Match can
+	// never see an escape or a character class.
+	excludePattern = regexp.MustCompile(`^[A-Za-z0-9:_.@*?-]{1,200}$`)
 	// groupName is a conservative Unix group name.
 	groupName = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 	// dnsName is a conservative hostname check (no wildcards, no underscores).
@@ -52,6 +59,24 @@ var (
 
 // ValidResourceName reports whether s is a syntactically valid resource name.
 func ValidResourceName(s string) bool { return resourceName.MatchString(s) }
+
+// ValidContainerName reports whether s is a syntactically valid container name.
+func ValidContainerName(s string) bool { return containerName.MatchString(s) }
+
+// ValidUnitName reports whether s is a syntactically valid full unit name.
+func ValidUnitName(s string) bool { return unitName.MatchString(s) }
+
+// MatchesAny reports whether name matches any of the exclude patterns. A
+// pattern is a plain name, optionally with * (any run of characters) and ?
+// (one character). Patterns are validated by Config.Validate.
+func MatchesAny(patterns []string, name string) bool {
+	for _, p := range patterns {
+		if ok, _ := path.Match(p, name); ok {
+			return true
+		}
+	}
+	return false
+}
 
 // Config is the root of the configuration file.
 type Config struct {
@@ -86,21 +111,17 @@ type Audit struct {
 	File string `yaml:"file"`
 }
 
-// Docker lists the containers Latch may inspect.
+// Docker configures container access. Every container may be inspected and its
+// logs read unless its name matches an Exclude pattern.
 type Docker struct {
-	Socket   string          `yaml:"socket"`
-	Services []DockerService `yaml:"services"`
+	Socket  string   `yaml:"socket"`
+	Exclude []string `yaml:"exclude"`
 }
 
-// DockerService maps an agent-visible name to a container name.
-type DockerService struct {
-	Name      string `yaml:"name"`
-	Container string `yaml:"container"`
-}
-
-// Systemd lists the units Latch may inspect.
+// Systemd configures unit access. Every unit may be inspected unless its full
+// name matches an Exclude pattern.
 type Systemd struct {
-	Units []string `yaml:"units"`
+	Exclude []string `yaml:"exclude"`
 }
 
 // Host lists the filesystems whose usage may be reported.
@@ -245,29 +266,12 @@ func (c *Config) Validate() error {
 	if !filepath.IsAbs(c.Docker.Socket) {
 		add("docker.socket must be an absolute path")
 	}
-	seen := map[string]bool{}
-	for i, s := range c.Docker.Services {
-		if !resourceName.MatchString(s.Name) {
-			add("docker.services[%d].name is not a valid resource name", i)
-		} else if seen["docker/"+s.Name] {
-			add("docker.services: duplicate name %q", s.Name)
-		}
-		seen["docker/"+s.Name] = true
-		if !containerName.MatchString(s.Container) {
-			add("docker.services[%d].container is not a valid container name", i)
-		}
-	}
+	checkPatterns(add, "docker.exclude", c.Docker.Exclude)
 
 	// systemd
-	for i, u := range c.Systemd.Units {
-		if !unitName.MatchString(u) {
-			add("systemd.units[%d] must be a full unit name such as \"ssh.service\"", i)
-		} else if seen["unit/"+u] {
-			add("systemd.units: duplicate unit %q", u)
-		}
-		seen["unit/"+u] = true
-	}
+	checkPatterns(add, "systemd.exclude", c.Systemd.Exclude)
 
+	seen := map[string]bool{}
 	// host
 	for i, d := range c.Host.Disks {
 		if !resourceName.MatchString(d.Name) {
@@ -295,4 +299,18 @@ func (c *Config) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// checkPatterns validates a list of exclude patterns.
+func checkPatterns(add func(string, ...any), field string, patterns []string) {
+	seen := map[string]bool{}
+	for i, p := range patterns {
+		switch {
+		case !excludePattern.MatchString(p):
+			add("%s[%d] must be a name, optionally with * or ? wildcards", field, i)
+		case seen[p]:
+			add("%s: duplicate pattern %q", field, p)
+		}
+		seen[p] = true
+	}
 }

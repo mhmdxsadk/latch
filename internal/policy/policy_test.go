@@ -14,10 +14,9 @@ func testPolicy(t *testing.T) *Policy {
 server: {socket: /run/l.sock, socket_group: latch-agents}
 limits: {max_log_lines: 50}
 docker:
-  services:
-    - {name: web, container: my-web}
+  exclude: [secrets-broker, 'infisical*']
 systemd:
-  units: [ssh.service]
+  exclude: [vault.service, 'getty@*.service']
 host:
   disks:
     - {name: root, path: /}
@@ -31,13 +30,17 @@ health:
 	return New(c)
 }
 
-func TestResolvesConfiguredNames(t *testing.T) {
+func TestOpenByDefaultExceptExcluded(t *testing.T) {
 	p := testPolicy(t)
-	if s, err := p.DockerService("web"); err != nil || s.Container != "my-web" {
-		t.Errorf("docker: %+v %v", s, err)
+	for _, n := range []string{"web", "my-web", "jellyfin", "Infisical", "a.b_c-d", strings.Repeat("a", 128)} {
+		if got, err := p.Container(n); err != nil || got != n {
+			t.Errorf("Container(%q) = %q, %v", n, got, err)
+		}
 	}
-	if u, err := p.SystemdUnit("ssh.service"); err != nil || u != "ssh.service" {
-		t.Errorf("unit: %q %v", u, err)
+	for _, n := range []string{"ssh.service", "docker.service", "getty-pre.target", "user@1000.service", "a\\x2db.mount"} {
+		if got, err := p.SystemdUnit(n); err != nil || got != n {
+			t.Errorf("SystemdUnit(%q) = %q, %v", n, got, err)
+		}
 	}
 	if d, err := p.Disk("root"); err != nil || d.Path != "/" {
 		t.Errorf("disk: %+v %v", d, err)
@@ -47,35 +50,54 @@ func TestResolvesConfiguredNames(t *testing.T) {
 	}
 }
 
-func TestUnknownResourcesAreRejected(t *testing.T) {
+func TestExcludedResourcesAreRefused(t *testing.T) {
 	p := testPolicy(t)
-	for name, fn := range map[string]func(string) error{
-		"docker":  func(n string) error { _, e := p.DockerService(n); return e },
-		"disk":    func(n string) error { _, e := p.Disk(n); return e },
-		"dns":     func(n string) error { _, e := p.DNSTarget(n); return e },
-		"systemd": func(n string) error { _, e := p.SystemdUnit(n); return e },
-	} {
-		if err := fn("nope"); !errors.Is(err, ErrNotAllowed) {
-			t.Errorf("%s: unknown well-formed name: got %v, want ErrNotAllowed", name, err)
+	for _, n := range []string{"secrets-broker", "infisical", "infisical-redis", "infisical-postgres"} {
+		if _, err := p.Container(n); !errors.Is(err, ErrNotAllowed) {
+			t.Errorf("Container(%q): got %v, want ErrNotAllowed", n, err)
+		}
+		if p.ContainerVisible(n) {
+			t.Errorf("ContainerVisible(%q) = true", n)
+		}
+	}
+	for _, n := range []string{"vault.service", "getty@tty1.service", "getty@.service"} {
+		if _, err := p.SystemdUnit(n); !errors.Is(err, ErrNotAllowed) {
+			t.Errorf("SystemdUnit(%q): got %v, want ErrNotAllowed", n, err)
+		}
+		if p.UnitVisible(n) {
+			t.Errorf("UnitVisible(%q) = true", n)
+		}
+	}
+	for _, n := range []string{"secrets-broker2", "my-secrets-broker", "vault.socket"} {
+		if !p.ContainerVisible(n) && !p.UnitVisible(n) {
+			t.Errorf("%q should not be excluded", n)
 		}
 	}
 }
 
-// Anything that tries to reach outside the allowlist by manipulating the name
-// must be rejected, whether as malformed or as unknown. It must never resolve.
+func TestUnknownDisksAndDNSAreRejected(t *testing.T) {
+	p := testPolicy(t)
+	if _, err := p.Disk("nope"); !errors.Is(err, ErrNotAllowed) {
+		t.Errorf("disk: %v", err)
+	}
+	if _, err := p.DNSTarget("nope"); !errors.Is(err, ErrNotAllowed) {
+		t.Errorf("dns: %v", err)
+	}
+}
+
+// Malformed names must never resolve, so an exclude pattern is never the only
+// thing between the agent and an injected argument or path.
 func TestEscapeAttemptsNeverResolve(t *testing.T) {
 	p := testPolicy(t)
 	attempts := []string{
-		"", " ", "web ", " web", "WEB", "web\n", "web\x00", "web/../x", "../web", "/web",
+		"", " ", "web ", " web", "web\n", "web\x00", "web/../x", "../web", "/web",
 		"web;id", "web && id", "$(id)", "`id`", "web|cat", "--privileged", "-v", "web=1",
-		"my-web",                // the real container name is not an agent-visible name
-		"ssh",                   // bare unit name must not be auto-suffixed
 		"web\u202e", "w\u0435b", // RTL override, Cyrillic 'е' lookalike
 		strings.Repeat("a", 5000),
 	}
 	for _, a := range attempts {
-		if s, err := p.DockerService(a); err == nil {
-			t.Errorf("DockerService(%q) resolved to %+v", a, s)
+		if s, err := p.Container(a); err == nil {
+			t.Errorf("Container(%q) resolved to %q", a, s)
 		}
 		if d, err := p.Disk(a); err == nil {
 			t.Errorf("Disk(%q) resolved to %+v", a, d)
@@ -84,7 +106,7 @@ func TestEscapeAttemptsNeverResolve(t *testing.T) {
 			t.Errorf("DNSTarget(%q) resolved", a)
 		}
 	}
-	for _, a := range []string{"ssh", "SSH.service", "ssh.service ", "ssh.service\n", "../ssh.service", "ssh.service/../x", "", "docker.service"} {
+	for _, a := range []string{"ssh", "ssh.service ", "ssh.service\n", "../ssh.service", "ssh.service/../x", "", "*.service", "ssh.*", "a b.service"} {
 		if u, err := p.SystemdUnit(a); err == nil {
 			t.Errorf("SystemdUnit(%q) resolved to %q", a, u)
 		}
@@ -93,7 +115,10 @@ func TestEscapeAttemptsNeverResolve(t *testing.T) {
 
 func TestMalformedNamesReportInvalid(t *testing.T) {
 	p := testPolicy(t)
-	if _, err := p.DockerService("web;id"); !errors.Is(err, ErrInvalidName) {
+	if _, err := p.Container("web;id"); !errors.Is(err, ErrInvalidName) {
+		t.Errorf("got %v", err)
+	}
+	if _, err := p.SystemdUnit("ssh"); !errors.Is(err, ErrInvalidName) {
 		t.Errorf("got %v", err)
 	}
 }
@@ -115,9 +140,9 @@ func TestLogLimits(t *testing.T) {
 
 func TestNamesIsACopy(t *testing.T) {
 	p := testPolicy(t)
-	n := p.Names(KindDocker)
+	n := p.Names(KindDisk)
 	n[0] = "tampered"
-	if p.Names(KindDocker)[0] != "web" {
+	if p.Names(KindDisk)[0] != "root" {
 		t.Error("Names must return a copy")
 	}
 }

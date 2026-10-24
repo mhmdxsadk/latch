@@ -85,7 +85,8 @@ func newFake(t *testing.T, h http.HandlerFunc) (*Engine, *recorder) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec.add(r)
 		ok := r.Method == http.MethodGet &&
-			(r.URL.Path == "/_ping" || r.URL.Path == "/containers/web/json" ||
+			(r.URL.Path == "/_ping" || r.URL.Path == "/containers/json" || r.URL.Path == "/containers/web/json" ||
+				r.URL.Path == "/containers/"+testID+"/json" ||
 				r.URL.Path == "/containers/"+testID+"/logs")
 		if !ok {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL)
@@ -723,5 +724,53 @@ func TestLogsLongLineMemoryBounded(t *testing.T) {
 func TestSanitizeStripsFormatCharacters(t *testing.T) {
 	if got := sanitize("safe\u202etxt.exe\u200b!"); got != "safetxt.exe!" {
 		t.Errorf("got %q", got)
+	}
+}
+
+// A container must be reachable by name only: its ID resolves in Docker but
+// would let an excluded container be addressed under a different string.
+func TestFullIDIsNotAName(t *testing.T) {
+	e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(fixture(false))) })
+	if _, err := e.Status(context.Background(), testID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Status by ID err = %v", err)
+	}
+	if _, err := e.Logs(context.Background(), testID, 10, 100); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Logs by ID err = %v", err)
+	}
+}
+
+func TestList(t *testing.T) {
+	e, rec := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "all=true" {
+			t.Errorf("query = %q", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`[
+			{"Id":"x","Names":["/zeta"],"Env":["SECRET=hunter2"]},
+			{"Id":"y","Names":["/web","/other/web"]},
+			{"Id":"z","Names":["/other/alias","/linked"]},
+			{"Id":"w","Names":["/bad name"]},
+			{"Id":"v","Names":["/web"]}
+		]`))
+	})
+	got, err := e.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "linked,web,zeta"; strings.Join(got, ",") != want {
+		t.Errorf("got %v, want %s", got, want)
+	}
+	if rec.count() != 1 {
+		t.Errorf("requests = %d", rec.count())
+	}
+}
+
+func TestListErrors(t *testing.T) {
+	e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"not":"a list"}`)) })
+	if _, err := e.List(context.Background()); err == nil {
+		t.Error("malformed list accepted")
+	}
+	e, _ = newFake(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
+	if _, err := e.List(context.Background()); err == nil {
+		t.Errorf("err = %v", err)
 	}
 }

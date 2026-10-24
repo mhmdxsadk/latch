@@ -11,11 +11,14 @@ brain.
 
 The agent is untrusted. Latch is the policy enforcement boundary.
 
-- The operator lists the resources the agent may touch (Docker services, systemd
-  units, disks, DNS names) in a config file.
-- The agent can only refer to those resources by name. It cannot supply commands,
-  container IDs, unit names, file paths or URLs of its own, and the config cannot
-  express a command or argument.
+- Docker containers and systemd units are visible by default. The operator lists
+  the ones to exclude in a config file. Disks and DNS names are still listed
+  explicitly, since they need a path or hostname.
+- An excluded resource behaves as if it does not exist. The agent cannot supply
+  commands, file paths or URLs of its own, and the config cannot express a
+  command or argument. Containers are addressed by exact name only (not by ID)
+  and units by their own full name only (not by alias), so an exclusion cannot
+  be bypassed by another name for the same thing.
 - Every tool argument is treated as hostile input. Invalid or disallowed requests
   fail closed, and error messages never echo input or leak integration details.
 - Every call is written to a structured audit log.
@@ -31,14 +34,16 @@ reach Latch's socket.
 
 Latch is pre-release (v0.x) and read-only. Currently available:
 
-- `list_resources`: the resources the operator has exposed
+- `list_resources`: the named disks and DNS checks the operator has exposed
 - `host_load`, `host_memory`, `host_disk`: host metrics
-- `docker_list`, `docker_status`: container state, exit code, restarts, image
+- `docker_list`, `docker_status`: every container's state, exit code, restarts, image
   and health. Never environment variables, labels, mounts or commands.
 - `docker_logs`: recent stdout and stderr, capped by `limits` in the config.
-  Logs often contain secrets, so only list containers whose logs the agent may
-  read.
-- `systemd_unit_status`: load, active and sub state of allowlisted units
+  Logs often contain secrets, so exclude containers whose logs the agent must
+  not read. A new container is visible as soon as it exists.
+- `systemd_list`: loaded services and their state.
+- `systemd_unit_status`: load, active and sub state of any unit that is not
+  excluded.
 - `dns_check`: resolve a configured hostname and return its addresses.
 
 Run `latch doctor` to check that every configured resource is reachable.
@@ -55,7 +60,7 @@ The script verifies the download, installs Latch under systemd, and writes an
 example config. It does not start the service. Pin a release with
 `--version X.Y.Z`. Re-run it to upgrade; your config is kept.
 
-Then list the resources the agent may see in `/etc/latch/config.yaml` (see
+Then list the containers and units to hide, and the disks and DNS names to expose, in `/etc/latch/config.yaml` (see
 [`config/example.yaml`](config/example.yaml) for all options), validate, and
 start:
 

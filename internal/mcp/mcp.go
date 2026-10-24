@@ -50,10 +50,13 @@ func (e userError) Error() string { return e.msg }
 // Safe messages. Deliberately do not echo agent input.
 var (
 	errInvalidName = userError{"invalid resource name"}
-	errNotAllowed  = userError{"resource is not configured"}
+	// errNotAllowed and errMissing read the same on purpose: an excluded
+	// resource must not be distinguishable from one that does not exist. Only
+	// the audit reason differs.
+	errNotAllowed  = userError{"resource does not exist or is not allowed"}
 	errUnavailable = userError{"operation failed; see the Latch audit log"}
 	errUnsupported = userError{"not supported on this host"}
-	errMissing     = userError{"resource is configured but does not exist on this host"}
+	errMissing     = userError{"resource does not exist or is not allowed"}
 	errBusy        = userError{"too many concurrent requests; retry shortly"}
 )
 
@@ -115,8 +118,8 @@ func NewServer(d *Deps) *sdk.Server {
 	d.sem = make(chan struct{}, MaxConcurrentCalls)
 	s := sdk.NewServer(&sdk.Implementation{Name: "latch", Version: d.Version}, &sdk.ServerOptions{
 		Instructions: "Latch gives read-only visibility into one server. " +
-			"Call list_resources first to see which named resources you may query. " +
-			"Only configured names are accepted.",
+			"Use docker_list and systemd_list to see containers and services, and list_resources for named disks and DNS checks. " +
+			"Some resources may be excluded by the operator; they behave as if they do not exist.",
 	})
 	registerResources(s, d)
 	registerHost(s, d)
