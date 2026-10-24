@@ -1,8 +1,9 @@
 # Latch example configuration.
 #
 # This file declares WHICH resources an agent may NOT inspect (Docker
-# containers, systemd units) and which disks and DNS names it may. It cannot
-# define commands, arguments, or file paths to read. Unknown keys are rejected.
+# containers, systemd units, files) and which disks and DNS names it may. It
+# cannot define commands or arguments, and it can only hide files, never add
+# them. Unknown keys are rejected.
 # Copy to /etc/latch/config.yaml and edit.
 
 server:
@@ -49,3 +50,19 @@ health:
   dns:
     - name: example
       host: example.com
+
+files:
+  # The agent can read, list and search any file on the disk EXCEPT these
+  # (always blocked, whatever this list says): /proc, /sys, /dev, /etc/shadow,
+  # /etc/gshadow and their "-" backups, SSH host keys (/etc/ssh/*_key), every
+  # file in a .ssh folder except *.pub, authorized_keys, known_hosts and
+  # config, files named *.key, *.pem, .env and .env.*, /var/lib/docker,
+  # /etc/latch, /var/lib/latch, this config file, the home folders of the
+  # users in server.socket_group, and folders mounted into excluded
+  # containers. Blocked files behave as if they do not exist.
+  # Each entry is an absolute path (blocks that file or the whole folder) or a
+  # file name with optional * and ? wildcards and no slash (blocks every file
+  # or folder with that name, anywhere).
+  exclude:
+    - /srv/backups
+    - "*.secret"

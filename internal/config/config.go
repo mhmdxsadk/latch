@@ -1,9 +1,10 @@
 // Package config loads and validates Latch's configuration.
 //
 // The configuration only declares WHICH resources Latch may expose or hide. It
-// has no way to express commands, arguments, or paths to read: every field is
-// either a resource name, a name pattern, a fixed identifier (mount point), or
-// a bound. Docker containers and systemd units are exposed by default and the
+// has no way to express commands or arguments: every field is either a
+// resource name, a name pattern, a fixed identifier (mount point), a path or
+// file name to hide, or a bound. Files are readable by default and the config
+// can only take paths away. Docker containers and systemd units are exposed by default and the
 // operator lists the ones to exclude. Unknown keys are rejected so a typo can
 // never silently widen or drop policy.
 package config
@@ -18,7 +19,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -51,6 +54,10 @@ var (
 	// wildcards. Backslash and brackets are not allowed, so path.Match can
 	// never see an escape or a character class.
 	excludePattern = regexp.MustCompile(`^[A-Za-z0-9:_.@*?-]{1,200}$`)
+	// fileNamePattern is a file name pattern for files.exclude: name
+	// characters plus the * and ? wildcards. Slash, backslash and brackets are
+	// not allowed, so path.Match can never see an escape or a character class.
+	fileNamePattern = regexp.MustCompile(`^[A-Za-z0-9:_.@*?+=,~-]{1,255}$`)
 	// groupName is a conservative Unix group name.
 	groupName = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 	// dnsName is a conservative hostname check (no wildcards, no underscores).
@@ -87,6 +94,7 @@ type Config struct {
 	Systemd Systemd `yaml:"systemd"`
 	Host    Host    `yaml:"host"`
 	Health  Health  `yaml:"health"`
+	Files   Files   `yaml:"files"`
 }
 
 // Server configures the agent-facing Unix socket.
@@ -133,6 +141,16 @@ type Host struct {
 type Disk struct {
 	Name string `yaml:"name"`
 	Path string `yaml:"path"`
+}
+
+// Files configures the read-only file tools. The whole disk is readable except
+// a built-in block list (see package files) and the entries in Exclude.
+type Files struct {
+	// Exclude entries are either a clean absolute path, which blocks that file
+	// or directory and everything below it, or a name pattern with no slash
+	// (* and ? wildcards), which blocks every file or directory with a
+	// matching name and everything below it.
+	Exclude []string `yaml:"exclude"`
 }
 
 // Health lists the fixed DNS check targets.
@@ -298,7 +316,52 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// files
+	checkFileExcludes(add, c.Files.Exclude)
+
 	return errors.Join(errs...)
+}
+
+// MaxFilePathLen is the longest path accepted in files.exclude and by the file
+// tools.
+const MaxFilePathLen = 4096
+
+// ValidFilePath reports whether p is a clean absolute path of at most
+// MaxFilePathLen bytes, valid UTF-8, with no control characters.
+func ValidFilePath(p string) bool {
+	if p == "" || len(p) > MaxFilePathLen || p[0] != '/' || !utf8.ValidString(p) || filepath.Clean(p) != p {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] < 0x20 || p[i] == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// checkFileExcludes validates files.exclude: each entry is a clean absolute
+// path or a file name pattern.
+func checkFileExcludes(add func(string, ...any), patterns []string) {
+	seen := map[string]bool{}
+	for i, p := range patterns {
+		switch {
+		case strings.Contains(p, ".."):
+			add("files.exclude[%d] must not contain \"..\"", i)
+		case strings.HasPrefix(p, "/"):
+			if !ValidFilePath(p) {
+				add("files.exclude[%d] must be a clean absolute path", i)
+			}
+		case p == ".":
+			add("files.exclude[%d] must be an absolute path or a file name pattern", i)
+		case !fileNamePattern.MatchString(p):
+			add("files.exclude[%d] must be an absolute path or a file name, optionally with * or ? wildcards", i)
+		}
+		if seen[p] {
+			add("files.exclude: duplicate entry %q", p)
+		}
+		seen[p] = true
+	}
 }
 
 // checkPatterns validates a list of exclude patterns.

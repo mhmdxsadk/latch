@@ -55,6 +55,20 @@ func TestParseRejects(t *testing.T) {
 		{"dns host with scheme", validBase + "health:\n  dns:\n    - {name: a, host: 'http://x'}\n", "hostname"},
 		{"dns wildcard", validBase + "health:\n  dns:\n    - {name: a, host: '*.example.com'}\n", "hostname"},
 		{"not yaml mapping", "- just\n- a list\n", "parse config"},
+		{"files unknown key", validBase + "files:\n  include: [/etc]\n", "field include not found"},
+		{"files exclude relative path", validBase + "files:\n  exclude: ['etc/x']\n", "files.exclude[0]"},
+		{"files exclude dotdot path", validBase + "files:\n  exclude: ['/etc/../root']\n", "files.exclude[0]"},
+		{"files exclude dotdot name", validBase + "files:\n  exclude: ['..']\n", "files.exclude[0]"},
+		{"files exclude dot name", validBase + "files:\n  exclude: ['.']\n", "files.exclude[0]"},
+		{"files exclude unclean path", validBase + "files:\n  exclude: ['/etc//x']\n", "files.exclude[0]"},
+		{"files exclude trailing slash", validBase + "files:\n  exclude: ['/srv/']\n", "files.exclude[0]"},
+		{"files exclude empty", validBase + "files:\n  exclude: ['']\n", "files.exclude[0]"},
+		{"files exclude class", validBase + "files:\n  exclude: ['a[bc]']\n", "files.exclude[0]"},
+		{"files exclude backslash", validBase + "files:\n  exclude: ['a\\\\*']\n", "files.exclude[0]"},
+		{"files exclude control char", validBase + "files:\n  exclude: [\"/srv/a\\tb\"]\n", "files.exclude[0]"},
+		{"files exclude space in name", validBase + "files:\n  exclude: ['a b']\n", "files.exclude[0]"},
+		{"files exclude duplicate", validBase + "files:\n  exclude: ['*.secret', '*.secret']\n", "duplicate"},
+		{"files exclude duplicate path", validBase + "files:\n  exclude: [/srv/x, /srv/x]\n", "duplicate"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -95,6 +109,29 @@ func TestExcludeListsAccepted(t *testing.T) {
 	}
 	if len(c.Docker.Exclude) != 2 || len(c.Systemd.Exclude) != 2 {
 		t.Errorf("got %+v", c)
+	}
+}
+
+func TestFilesExcludeAccepted(t *testing.T) {
+	c, err := Parse([]byte(validBase + "files:\n  exclude: [/srv/backups, '*.secret', credentials.json, 'id_?sa', /]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Files.Exclude) != 5 {
+		t.Errorf("got %+v", c.Files)
+	}
+}
+
+func TestValidFilePath(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/": true, "/etc/hosts": true, "/srv/my file.txt": true, "/srv/é": true,
+		"": false, "etc": false, "/etc/": false, "/etc//x": false, "/etc/../x": false, "/etc/./x": false,
+		"/a\x00b": false, "/a\nb": false, "/a\x7fb": false, "/\xff": false,
+		"/" + strings.Repeat("a", MaxFilePathLen): false,
+	} {
+		if got := ValidFilePath(p); got != want {
+			t.Errorf("ValidFilePath(%q) = %v, want %v", p, got, want)
+		}
 	}
 }
 
