@@ -42,7 +42,7 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg, err := config.Load(*path)
 	if err != nil {
-		configProblem(stdout, *path, err, useColor(stdout))
+		printConfigProblems(stderr, *path, err)
 		return 1
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), doctorTimeout)
@@ -85,21 +85,17 @@ func (r *report) paint(code, s string) string {
 	return "\x1b[" + code + "m" + s + "\x1b[0m"
 }
 
-func (r *report) section(name string) {
-	fmt.Fprintf(r.out, "\n%s\n", r.paint("1", name))
-}
-
 // check records one result. hint is only shown on failure.
 func (r *report) check(name string, err error, hint string) {
 	if err == nil {
-		fmt.Fprintf(r.out, "  %s %s\n", r.paint("32", "✓"), name)
+		fmt.Fprintf(r.out, "%s  %s\n", r.paint("32", "OK  "), name)
 		return
 	}
 	r.failed++
-	fmt.Fprintf(r.out, "  %s %s\n", r.paint("31", "✗"), name)
-	fmt.Fprintf(r.out, "    %s\n", err)
+	fmt.Fprintf(r.out, "%s  %s\n", r.paint("31", "FAIL"), name)
+	fmt.Fprintf(r.out, "      %s\n", err)
 	if hint != "" {
-		fmt.Fprintf(r.out, "    %s\n", r.paint("2", hint))
+		fmt.Fprintf(r.out, "      fix: %s\n", strings.ToLower(hint[:1])+hint[1:])
 	}
 }
 
@@ -115,25 +111,12 @@ func (r *report) summary() {
 	}
 }
 
-// configProblem prints the report for a config that cannot be loaded. Nothing
-// else can be checked without a valid config, so it is the whole report.
-func configProblem(out io.Writer, path string, err error, color bool) {
-	r := &report{out: out, color: color}
-	fmt.Fprintln(out, r.paint("1", "Latch doctor"))
-	r.section("Config")
-	r.check("config "+path, errors.New(strings.ReplaceAll(strings.TrimSpace(err.Error()), "\n", "\n    ")),
-		"Fix this, then run 'latch validate' to recheck. Nothing else can be checked until the config loads.")
-	r.summary()
-}
-
 func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Writer, color bool) bool {
 	r := &report{out: out, color: color}
 	fmt.Fprintln(out, r.paint("1", "Latch doctor"))
 
-	r.section("Config")
+	fmt.Fprintln(out)
 	r.check("config valid", nil, "")
-
-	r.section("Socket")
 	dir := filepath.Dir(cfg.Server.Socket)
 	const dirHint = "Use a dedicated directory that other accounts cannot write to."
 	if fi, err := os.Stat(dir); err != nil {
@@ -141,19 +124,18 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 		if errors.Is(err, os.ErrNotExist) {
 			hint = "The service creates it when it starts, so this is expected before the first start."
 		}
-		r.check("directory "+dir, err, hint)
+		r.check("socket directory "+dir, err, hint)
 	} else if !fi.IsDir() {
-		r.check("directory "+dir, errors.New("not a directory"), dirHint)
+		r.check("socket directory "+dir, errors.New("not a directory"), dirHint)
 	} else if fi.Mode().Perm()&0o002 != 0 {
-		r.check("directory "+dir, errors.New("anyone can write to it"), dirHint)
+		r.check("socket directory "+dir, errors.New("anyone can write to it"), dirHint)
 	} else {
-		r.check("directory "+dir, nil, "")
+		r.check("socket directory "+dir, nil, "")
 	}
 	_, err := in.groupID(cfg.Server.SocketGroup)
-	r.check("group "+cfg.Server.SocketGroup, err,
+	r.check("socket group "+cfg.Server.SocketGroup, err,
 		"Create it with 'groupadd --system "+cfg.Server.SocketGroup+"', or set socket_group to a group that exists.")
 
-	r.section("Host")
 	const linuxHint = "Only available on Linux."
 	hostHint := func(err error) string {
 		if errors.Is(err, host.ErrUnsupported) {
@@ -162,61 +144,56 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 		return ""
 	}
 	_, err = in.host.Load(ctx)
-	r.check("load", err, hostHint(err))
+	r.check("host load", err, hostHint(err))
 	_, err = in.host.Memory(ctx)
-	r.check("memory", err, hostHint(err))
+	r.check("host memory", err, hostHint(err))
 	for _, d := range cfg.Host.Disks {
 		_, err := in.host.Disk(ctx, d.Path)
 		r.check("disk "+d.Name+" ("+d.Path+")", err, "Check that the path exists and is a mount point or directory.")
 	}
 
 	if len(cfg.Docker.Services) > 0 {
-		r.section("Docker")
 		if err := in.docker.Ping(ctx); err != nil {
-			r.check("daemon", err, "Is Docker running? Check docker.socket in the config ("+cfg.Docker.Socket+") and that the latch service can read it.")
+			r.check("docker daemon", err, "Is Docker running? Check docker.socket in the config ("+cfg.Docker.Socket+") and that the latch service can read it.")
 		} else {
-			r.check("daemon", nil, "")
+			r.check("docker daemon", nil, "")
 			for _, s := range cfg.Docker.Services {
 				_, err := in.docker.Status(ctx, s.Container)
 				hint := ""
 				if errors.Is(err, docker.ErrNotFound) {
 					hint = "No container has exactly this name. Check 'docker ps -a'."
 				}
-				r.check(fmt.Sprintf("%s (container %s)", s.Name, s.Container), err, hint)
+				r.check(fmt.Sprintf("docker service %s (container %s)", s.Name, s.Container), err, hint)
 			}
 		}
 	}
 
 	if len(cfg.Systemd.Units) > 0 {
-		r.section("systemd")
 		if err := in.systemd.Ping(ctx); err != nil {
-			r.check("system bus", err, "Is systemd running, and can the latch service reach /run/dbus/system_bus_socket?")
+			r.check("systemd bus", err, "Is systemd running, and can the latch service reach /run/dbus/system_bus_socket?")
 		} else {
-			r.check("system bus", nil, "")
+			r.check("systemd bus", nil, "")
 			for _, u := range cfg.Systemd.Units {
 				_, err := in.systemd.UnitStatus(ctx, u)
 				hint := ""
 				if errors.Is(err, systemd.ErrNotFound) {
 					hint = "No unit with this name is installed. Check 'systemctl list-unit-files'."
 				}
-				r.check(u, err, hint)
+				r.check("systemd unit "+u, err, hint)
 			}
 		}
 	}
 
-	if len(cfg.Health.HTTP) > 0 || len(cfg.Health.DNS) > 0 {
-		r.section("Health checks")
-	}
 	for _, t := range cfg.Health.HTTP {
 		res, err := in.health.HTTP(ctx, t)
-		r.check("http "+t.Name, httpProblem(t, res, err), httpHint(res.Failure))
+		r.check("http check "+t.Name, httpProblem(t, res, err), httpHint(res.Failure))
 	}
 	for _, t := range cfg.Health.DNS {
 		res, err := in.health.DNS(ctx, t)
 		if err == nil && !res.OK {
 			err = errors.New(string(res.Failure))
 		}
-		r.check("dns "+t.Name, err, "Check the hostname and that this server can reach a DNS resolver.")
+		r.check("dns check "+t.Name, err, "Check the hostname and that this server can reach a DNS resolver.")
 	}
 
 	r.summary()

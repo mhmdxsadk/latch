@@ -35,8 +35,8 @@ func TestRunDispatch(t *testing.T) {
 
 func TestVersionText(t *testing.T) {
 	tests := []struct{ version, commit, want string }{
-		{"0.2.1", "ada46060e063e1766edc78a8b782c1ef3b60cc9a", "latch 0.2.1\ncommit ada4606 · linux/amd64\n"},
-		{"0.2.1", "abc", "latch 0.2.1\ncommit abc · linux/amd64\n"},
+		{"0.2.1", "ada46060e063e1766edc78a8b782c1ef3b60cc9a", "latch 0.2.1\ncommit ada4606, linux/amd64\n"},
+		{"0.2.1", "abc", "latch 0.2.1\ncommit abc, linux/amd64\n"},
 		{"dev", "none", "latch dev\nlinux/amd64\n"},
 		{"dev", "", "latch dev\nlinux/amd64\n"},
 	}

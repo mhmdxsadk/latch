@@ -38,7 +38,7 @@ func versionText(version, commit, goos, goarch string) string {
 		if len(commit) > 7 {
 			commit = commit[:7]
 		}
-		detail = "commit " + commit + " · " + detail
+		detail = "commit " + commit + ", " + detail
 	}
 	return "latch " + version + "\n" + detail + "\n"
 }
@@ -82,6 +82,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+// printConfigProblems prints one "latch: file[:line]: message" line per
+// problem, the way compilers and tools like nginx -t and sshd -t do.
+func printConfigProblems(w io.Writer, path string, err error) {
+	for _, p := range config.Problems(err) {
+		if p.Line > 0 {
+			fmt.Fprintf(w, "latch: %s:%d: %s\n", path, p.Line, p.Text)
+		} else {
+			fmt.Fprintf(w, "latch: %s: %s\n", path, p.Text)
+		}
+	}
+}
+
 func configFlag(fs *flag.FlagSet) *string {
 	return fs.String("config", "/etc/latch/config.yaml", "path to the configuration file")
 }
@@ -94,10 +106,10 @@ func cmdValidate(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if _, err := config.Load(*path); err != nil {
-		fmt.Fprintf(stderr, "invalid configuration:\n%v\n", err)
+		printConfigProblems(stderr, *path, err)
 		return 1
 	}
-	fmt.Fprintln(stdout, "configuration OK")
+	fmt.Fprintf(stdout, "latch: %s: configuration OK\n", *path)
 	return 0
 }
 
@@ -112,7 +124,7 @@ func cmdServe(args []string, stderr io.Writer) int {
 
 	cfg, err := config.Load(*path)
 	if err != nil {
-		fmt.Fprintf(stderr, "latch: invalid configuration:\n%v\n", err)
+		printConfigProblems(stderr, *path, err)
 		return 1
 	}
 

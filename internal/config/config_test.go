@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,8 +31,8 @@ func TestParseRejects(t *testing.T) {
 		{"no socket group", "server:\n  socket: /run/latch.sock\n", "server.socket_group"},
 		{"socket group with path", "server:\n  socket: /run/latch.sock\n  socket_group: ../x\n", "server.socket_group"},
 		{"socket group numeric", "server:\n  socket: /run/latch.sock\n  socket_group: '0'\n", "server.socket_group"},
-		{"removed allowed_uids", validBase + "  allowed_uids: [1000]\n", "were removed"},
-		{"removed allowed_gids", validBase + "  allowed_gids: []\n", "were removed"},
+		{"old allowed_uids key", validBase + "  allowed_uids: [1000]\n", "field allowed_uids not found"},
+		{"old allowed_gids key", validBase + "  allowed_gids: []\n", "field allowed_gids not found"},
 		{"relative socket", "server:\n  socket: latch.sock\n  socket_group: latch-agents\n", "server.socket"},
 		{"socket path traversal", "server:\n  socket: /run/../etc/x.sock\n  socket_group: latch-agents\n", "server.socket"},
 		{"log lines above hard cap", validBase + "limits:\n  max_log_lines: 100000\n", "max_log_lines"},
@@ -106,5 +107,31 @@ func TestOversizedConfigRejected(t *testing.T) {
 func TestMissingFile(t *testing.T) {
 	if _, err := Load("/nonexistent/latch.yaml"); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestProblems(t *testing.T) {
+	_, err := Parse([]byte(validBase + "  allowed_uids: [1]\nlimits:\n  max_log_lines: 5000\n"))
+	got := Problems(err)
+	if len(got) != 1 || got[0].Line != 5 || got[0].Text != `unknown field "allowed_uids"` {
+		t.Errorf("unknown field: %+v", got)
+	}
+
+	_, err = Parse([]byte("server:\n  socket: relative\nlimits:\n  max_log_lines: 5000\n"))
+	got = Problems(err)
+	if len(got) != 3 {
+		t.Fatalf("want 3 validation problems (socket, socket_group, max_log_lines), got %+v", got)
+	}
+	for _, p := range got {
+		if p.Line != 0 || strings.Contains(p.Text, "\n") {
+			t.Errorf("validation problems are single-line and have no line: %+v", p)
+		}
+	}
+
+	if Problems(nil) != nil {
+		t.Error("nil error has no problems")
+	}
+	if got := Problems(errors.New("open config: no such file")); len(got) != 1 || got[0].Text != "open config: no such file" {
+		t.Errorf("plain error: %+v", got)
 	}
 }

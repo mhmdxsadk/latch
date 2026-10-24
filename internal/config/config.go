@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,11 +75,6 @@ type Server struct {
 	// whose processes may connect, verified with kernel-supplied peer
 	// credentials. Required.
 	SocketGroup string `yaml:"socket_group"`
-
-	// Removed in 0.2. Kept only so old configs get a clear error instead of
-	// a generic unknown-field one.
-	RemovedAllowedUIDs any `yaml:"allowed_uids"`
-	RemovedAllowedGIDs any `yaml:"allowed_gids"`
 }
 
 // Limits bounds what a single call may return.
@@ -159,6 +155,51 @@ func Load(path string) (*Config, error) {
 	return Parse(data)
 }
 
+// Problem is one thing wrong with a config file. Line is 0 when the problem is
+// not tied to a line.
+type Problem struct {
+	Line int
+	Text string
+}
+
+var yamlFieldError = regexp.MustCompile(`^line (\d+): field (\S+) not found in type `)
+var yamlLineError = regexp.MustCompile(`^line (\d+): (.*)$`)
+
+// Problems splits an error from Load or Parse into one Problem per line of
+// output, so callers can print "file:line: message" like other tools do.
+func Problems(err error) []Problem {
+	if err == nil {
+		return nil
+	}
+	var te *yaml.TypeError
+	if errors.As(err, &te) {
+		var out []Problem
+		for _, e := range te.Errors {
+			if m := yamlFieldError.FindStringSubmatch(e); m != nil {
+				out = append(out, Problem{Line: atoi(m[1]), Text: fmt.Sprintf("unknown field %q", m[2])})
+			} else if m := yamlLineError.FindStringSubmatch(e); m != nil {
+				out = append(out, Problem{Line: atoi(m[1]), Text: m[2]})
+			} else {
+				out = append(out, Problem{Text: e})
+			}
+		}
+		return out
+	}
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		var out []Problem
+		for _, e := range j.Unwrap() {
+			out = append(out, Problems(e)...)
+		}
+		return out
+	}
+	return []Problem{{Text: err.Error()}}
+}
+
+func atoi(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
+}
+
 // Parse parses and validates config bytes.
 func Parse(data []byte) (*Config, error) {
 	if len(data) > MaxConfigBytes {
@@ -210,9 +251,6 @@ func (c *Config) Validate() error {
 	}
 	if !groupName.MatchString(c.Server.SocketGroup) {
 		add("server.socket_group must be a valid group name")
-	}
-	if c.Server.RemovedAllowedUIDs != nil || c.Server.RemovedAllowedGIDs != nil {
-		add("server.allowed_uids and server.allowed_gids were removed: processes in socket_group may connect; delete these lines")
 	}
 
 	// limits
