@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/mhmdxsadk/latch/compare/v0.2.0...v0.3.0) (2026-10-24)
+
+
+### Features
+
+* **cli:** shorten version output ([7e21167](https://github.com/mhmdxsadk/latch/commit/7e2116780fc326c5bda1ee59b2b796a538128833))
+* **doctor:** group results, add hints and a summary ([51d452a](https://github.com/mhmdxsadk/latch/commit/51d452af502a0ad1ac9fd28a3e154f8d6bfc1cbf))
+
 ## [0.2.0](https://github.com/mhmdxsadk/latch/compare/v0.1.0...v0.2.0) (2026-10-24)
 
 
