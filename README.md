@@ -14,8 +14,9 @@ Latch treats the agent as untrusted and enforces the policy itself.
   to exclude in a config file. Disks and DNS names must still be listed, because
   each needs a path or a hostname.
 - An excluded resource behaves as if it does not exist.
-- The agent cannot supply its own commands, file paths or URLs, and the config
-  cannot express a command or argument.
+- The agent cannot supply its own commands or URLs, and the config cannot
+  express a command or argument. It can name files to read, except blocked
+  ones.
 - Containers are addressed by exact name, never by ID. Units are addressed by
   their full name, never by alias. This stops an exclusion from being bypassed
   through another name for the same thing.
@@ -56,6 +57,27 @@ excluding the container is the real one.
 - `systemd_unit_status` returns the load, active and sub state of any unit that
   is not excluded.
 - `dns_check` resolves a configured hostname and returns its addresses.
+- `file_read` returns lines of a text file: 200 by default, at most 2000 lines
+  or 256 KiB, from any start line. Binary files are refused.
+- `file_list` lists a directory: name, type, size, permissions, modification
+  time and symlink targets. Symlinks are not followed.
+- `file_find` finds files by name, with `*` and `?` wildcards, under a
+  directory. It goes at most 8 levels deep and returns at most 200 paths.
+- `file_grep` finds lines containing exact text in a file or under a
+  directory. It skips binary files and files over 4 MiB, and returns at most
+  200 lines.
+
+The file tools can read the whole disk except what is blocked. Some paths are
+always blocked: `/proc`, `/sys`, `/dev`, `/etc/shadow` and `/etc/gshadow`
+(with their backups), SSH host keys, everything in a `.ssh` folder except
+`*.pub`, `authorized_keys`, `known_hosts` and `config`, files named `*.key`,
+`*.pem`, `.env` and `.env.*`, `/var/lib/docker`, `/etc/latch`,
+`/var/lib/latch`, Latch's config file, the home folders of the users in
+`socket_group` (the agent's own keys and history), and folders mounted into
+excluded containers. Add your own paths or file names under `files.exclude`.
+A blocked file behaves as if it does not exist. Latch never follows a symlink
+into a blocked folder, and secret-looking values in file text are shown as
+`[hidden]`.
 
 Run `latch doctor` to check that every configured resource is reachable.
 
