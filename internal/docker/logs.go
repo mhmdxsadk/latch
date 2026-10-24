@@ -24,8 +24,11 @@ const (
 	maxLogSource = 64 << 20
 )
 
-// csi matches ANSI CSI escape sequences.
-var csi = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
+// escape matches terminal escape sequences: CSI, terminated string
+// sequences (OSC, DCS, SOS, PM, APC) and two-character escapes. An
+// unterminated string sequence loses only its introducer, so it cannot hide
+// the rest of the line.
+var escape = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|[\]PX^_][^\x07\x1b]*(?:\x07|\x1b\\)|[ -/]*[0-~])`)
 
 // Logs returns the newest log lines of the container, at most lines entries
 // and maxBytes bytes of text in total.
@@ -225,13 +228,20 @@ func cutTimestamp(b []byte) (string, []byte, bool) {
 }
 
 // sanitize makes s valid UTF-8 and removes escape sequences, control
-// characters other than tab, and invisible format characters (bidi
-// overrides, zero-width characters) that could disguise the text.
+// characters other than tab, and invisible characters (bidi overrides,
+// zero-width and tag characters, variation selectors, fillers) that could
+// disguise the text or smuggle hidden data. Line and paragraph separators
+// become spaces so one entry cannot pose as several.
 func sanitize(s string) string {
 	s = strings.ToValidUTF8(s, "�")
-	s = csi.ReplaceAllString(s, "")
+	s = escape.ReplaceAllString(s, "")
 	return strings.Map(func(r rune) rune {
-		if r != '\t' && (unicode.IsControl(r) || unicode.Is(unicode.Cf, r)) {
+		switch {
+		case r == '\t':
+			return r
+		case unicode.In(r, unicode.Zl, unicode.Zp):
+			return ' '
+		case unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point):
 			return -1
 		}
 		return r
