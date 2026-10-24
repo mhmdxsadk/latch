@@ -60,6 +60,10 @@ var (
 	errBusy        = userError{"too many concurrent requests; retry shortly"}
 )
 
+// errPartial lets a tool return its output while auditing that part of it
+// failed. It never reaches the agent.
+var errPartial = errors.New("partial result")
+
 // classify maps any error to a safe user-facing error and an audit outcome.
 func classify(err error) (userError, audit.Outcome, string) {
 	var ue userError
@@ -94,6 +98,10 @@ func wrap[In, Out any](d *Deps, tool string, fn func(context.Context, In) (Out, 
 			return nil, zero, errBusy
 		}
 		out, resource, err := fn(ctx, in)
+		if errors.Is(err, errPartial) {
+			d.Audit.Call(ctx, tool, resource, audit.OutcomeError, "partial", time.Since(start))
+			return nil, out, nil
+		}
 		if err != nil {
 			ue, outcome, reason := classify(err)
 			d.Audit.Call(ctx, tool, resource, outcome, reason, time.Since(start))

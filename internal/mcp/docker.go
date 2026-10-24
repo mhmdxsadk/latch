@@ -51,23 +51,36 @@ func registerDocker(s *sdk.Server, d *Deps) {
 			return dockerListOut{}, "", err
 		}
 		out := dockerListOut{Services: []serviceSummary{}}
+		var failed error
+		nFailed := 0
 		for _, name := range names {
 			if !d.Policy.ContainerVisible(name) {
 				continue
 			}
 			sum := serviceSummary{Name: name, State: "unknown", Health: "unknown"}
 			// One failing container must not hide the others, and its error
-			// text is never surfaced.
+			// text is never surfaced. A container removed since List is not a
+			// failure.
 			st, err := d.Docker.Status(ctx, name)
 			switch {
 			case err == nil:
 				sum.State, sum.Running, sum.Health = st.State, st.Running, st.Health.Status
 			case errors.Is(err, docker.ErrNotFound):
 				sum.State = "not_found"
+			default:
+				failed = err
+				nFailed++
 			}
 			out.Services = append(out.Services, sum)
 		}
-		return out, "", nil
+		switch {
+		case nFailed == 0:
+			return out, "", nil
+		case nFailed == len(out.Services):
+			return dockerListOut{}, "", failed
+		default:
+			return out, "", errPartial
+		}
 	}))
 
 	sdk.AddTool(s, &sdk.Tool{

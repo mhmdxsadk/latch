@@ -141,6 +141,33 @@ func TestDockerListToleratesPerServiceFailures(t *testing.T) {
 	if len(out.Services) != 2 || out.Services[0].State != "not_found" || out.Services[1].State != "unknown" {
 		t.Errorf("got %+v", out)
 	}
+	if a := h.audit.String(); !strings.Contains(a, `"outcome":"error","reason":"partial"`) || strings.Contains(a, "SECRET") {
+		t.Errorf("audit: %s", a)
+	}
+}
+
+func TestDockerListAllFailedIsAnError(t *testing.T) {
+	fd := &fakeDocker{errFor: map[string]error{
+		"my-db":  errors.New("SECRET daemon detail"),
+		"my-web": errors.New("SECRET daemon detail"),
+	}}
+	h := newHarnessWith(t, func(d *Deps) { d.Docker = fd })
+	res, err := h.call("docker_list", map[string]any{})
+	if err != nil || !res.IsError || strings.Contains(resultText(res), "SECRET") {
+		t.Fatalf("want a sanitized tool error, got %v %s", err, resultText(res))
+	}
+	if a := h.audit.String(); !strings.Contains(a, `"reason":"integration_error"`) || strings.Contains(a, `"outcome":"ok"`) {
+		t.Errorf("audit: %s", a)
+	}
+}
+
+func TestDockerListMissingOnlyIsOK(t *testing.T) {
+	fd := &fakeDocker{errFor: map[string]error{"my-db": docker.ErrNotFound, "my-web": docker.ErrNotFound}}
+	h := newHarnessWith(t, func(d *Deps) { d.Docker = fd })
+	out := structured[dockerListOut](t, h, "docker_list", map[string]any{})
+	if len(out.Services) != 2 || !strings.Contains(h.audit.String(), `"outcome":"ok"`) {
+		t.Errorf("got %+v, audit %s", out, h.audit.String())
+	}
 }
 
 func TestDockerRejections(t *testing.T) {
