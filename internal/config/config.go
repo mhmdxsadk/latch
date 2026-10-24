@@ -13,11 +13,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -55,7 +57,33 @@ var (
 	groupName = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 	// dnsName is a conservative hostname check (no wildcards, no underscores).
 	dnsName = regexp.MustCompile(`^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?$`)
+	// queryName is dnsName with underscores, for DNS lookups of names such
+	// as _dmarc.example.com or _imap._tcp.example.com.
+	queryName = regexp.MustCompile(`^([A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?\.)*[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?\.?$`)
 )
+
+// MaxHostnameLen is the longest hostname accepted anywhere.
+const MaxHostnameLen = 253
+
+// ValidHostname reports whether s is a conservative hostname: letters, digits
+// and hyphens in dot-separated labels, an optional trailing dot, at most 253
+// bytes. No wildcards or underscores.
+func ValidHostname(s string) bool { return len(s) <= MaxHostnameLen && dnsName.MatchString(s) }
+
+// ValidQueryName is ValidHostname that also allows underscores, for DNS
+// lookups only. Names with underscores are never connected to.
+func ValidQueryName(s string) bool { return len(s) <= MaxHostnameLen && queryName.MatchString(s) }
+
+// NormalizeHost lowercases a hostname and removes one trailing dot, so
+// "Example.COM." and "example.com" compare equal. IP literals are returned in
+// canonical form (IPv4-mapped IPv6 as IPv4).
+func NormalizeHost(s string) string {
+	s = strings.TrimSuffix(strings.ToLower(s), ".")
+	if a, err := netip.ParseAddr(s); err == nil && a.Zone() == "" {
+		return a.Unmap().String()
+	}
+	return s
+}
 
 // ValidResourceName reports whether s is a syntactically valid resource name.
 func ValidResourceName(s string) bool { return resourceName.MatchString(s) }
@@ -87,6 +115,16 @@ type Config struct {
 	Systemd Systemd `yaml:"systemd"`
 	Host    Host    `yaml:"host"`
 	Health  Health  `yaml:"health"`
+	Network Network `yaml:"network"`
+}
+
+// Network configures the network diagnostic tools. Any address may be
+// checked except excluded containers (blocked automatically) and the names
+// listed in Exclude.
+type Network struct {
+	// Exclude lists exact hostnames (no wildcards) or IP addresses the
+	// network tools must never reach.
+	Exclude []string `yaml:"exclude"`
 }
 
 // Server configures the agent-facing Unix socket.
@@ -293,9 +331,24 @@ func (c *Config) Validate() error {
 			add("health.dns: duplicate name %q", t.Name)
 		}
 		seen["dns/"+t.Name] = true
-		if len(t.Host) > 253 || !dnsName.MatchString(t.Host) {
+		if !ValidHostname(t.Host) {
 			add("health.dns[%d].host is not a valid hostname", i)
 		}
+	}
+
+	// network
+	seenHost := map[string]bool{}
+	for i, h := range c.Network.Exclude {
+		a, err := netip.ParseAddr(h)
+		switch {
+		case err == nil && a.Zone() != "":
+			add("network.exclude[%d] must not have an IPv6 zone", i)
+		case err != nil && !ValidHostname(h):
+			add("network.exclude[%d] must be an exact hostname or IP address (no wildcards)", i)
+		case seenHost[NormalizeHost(h)]:
+			add("network.exclude: duplicate entry %q", h)
+		}
+		seenHost[NormalizeHost(h)] = true
 	}
 
 	return errors.Join(errs...)
