@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/mhmdxsadk/latch/compare/v0.3.0...v0.4.0) (2026-10-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** print config errors as file:line messages and plain doctor output
+
+### Features
+
+* **cli:** print config errors as file:line messages and plain doctor output ([1574b56](https://github.com/mhmdxsadk/latch/commit/1574b5678e3587d2879016b8c5f6d1a61092d421))
+
+
+### Bug Fixes
+
+* **doctor:** format invalid-config errors like the rest of the report ([da79949](https://github.com/mhmdxsadk/latch/commit/da79949401e3e23de2ddc0ef2d00a5a062f7ac75))
+
 ## [0.3.0](https://github.com/mhmdxsadk/latch/compare/v0.2.0...v0.3.0) (2026-10-24)
 
 
