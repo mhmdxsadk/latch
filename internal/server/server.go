@@ -25,7 +25,9 @@ const (
 	// SocketMode is fixed. Access is further restricted by peer credentials.
 	SocketMode os.FileMode = 0o660
 
-	// Endpoint is the only HTTP path served.
+	// Endpoint is the MCP path. The socket root is served too because some
+	// clients (Docker Agent) post to "/" when given a unix:// URL. No other
+	// path is served.
 	Endpoint = "/mcp"
 
 	maxBodyBytes = 64 << 10
@@ -149,6 +151,7 @@ func (l *credListener) Accept() (net.Conn, error) {
 func ServeUnix(ctx context.Context, ln net.Listener, handler http.Handler, gid uint32, al *audit.Logger) error {
 	mux := http.NewServeMux()
 	mux.Handle(Endpoint, limitBody(handler))
+	mux.Handle("/{$}", limitBody(handler)) // exactly "/", not a catch-all
 
 	srv := &http.Server{
 		Handler:           mux,

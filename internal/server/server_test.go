@@ -192,10 +192,29 @@ func TestGroupIDRefusesRootGroup(t *testing.T) {
 	}
 }
 
+func TestMCPClientAtSocketRoot(t *testing.T) {
+	e := start(t, uint32(os.Getgid()))
+	client := sdk.NewClient(&sdk.Implementation{Name: "t", Version: "0"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cs, err := client.Connect(ctx, &sdk.StreamableClientTransport{
+		Endpoint:   "http://latch/",
+		HTTPClient: unixClient(e.path),
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect at /: %v", err)
+	}
+	defer cs.Close()
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "host_disk", Arguments: map[string]any{"name": "root"}})
+	if err != nil || res.IsError {
+		t.Fatalf("call: %v %+v", err, res)
+	}
+}
+
 func TestOnlyMCPEndpointIsServed(t *testing.T) {
 	e := start(t, uint32(os.Getgid()))
 	c := unixClient(e.path)
-	for _, path := range []string{"/", "/etc/passwd", "/mcp/../x", "/metrics", "/debug/pprof/"} {
+	for _, path := range []string{"/etc/passwd", "/mcp/../x", "/mcp/", "/metrics", "/debug/pprof/", "/index.html"} {
 		resp, err := c.Get("http://latch" + path)
 		if err != nil {
 			t.Fatal(err)
