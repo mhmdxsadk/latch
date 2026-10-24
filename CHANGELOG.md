@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/mhmdxsadk/latch/compare/v0.7.0...v0.8.0) (2026-10-24)
+
+
+### Features
+
+* **docker:** add docker_settings, hide secret-looking values ([d0f97c4](https://github.com/mhmdxsadk/latch/commit/d0f97c4852490993c56046aabe616f6cfa5e5c5e))
+
 ## [0.7.0](https://github.com/mhmdxsadk/latch/compare/v0.6.0...v0.7.0) (2026-10-24)
 
 
