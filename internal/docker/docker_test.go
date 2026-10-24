@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -734,6 +735,21 @@ func TestHealthOutputBounded(t *testing.T) {
 	}
 }
 
+func TestOutputIsRedacted(t *testing.T) {
+	if got := healthOutput("curl failed\nDB_PASSWORD=hunter2"); got != "curl failed\nDB_PASSWORD=[hidden]" {
+		t.Errorf("health output %q", got)
+	}
+	body := cat(frame(1, "2024-05-01T10:00:00Z start token=abc123 ok\n"), frame(2, "2024-05-01T10:00:01Z \u001b[31mAuthorization: Bearer abcdef123456\u001b[0m\n"))
+	e, _ := logServer(t, false, body)
+	got, err := e.Logs(context.Background(), "web", 10, 1000)
+	if err != nil || len(got.Entries) != 2 {
+		t.Fatalf("got %+v %v", got, err)
+	}
+	if got.Entries[0].Text != "start token=[hidden] ok" || got.Entries[1].Text != "Authorization: Bearer [hidden]" {
+		t.Errorf("entries %+v", got.Entries)
+	}
+}
+
 func TestSanitize(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"safe\u202etxt.exe\u200b!", "safetxt.exe!"},                 // bidi override, zero-width space
@@ -803,5 +819,110 @@ func TestListErrors(t *testing.T) {
 	e, _ = newFake(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
 	if _, err := e.List(context.Background()); err == nil {
 		t.Errorf("err = %v", err)
+	}
+}
+
+const settingsFixture = `{
+  "Id": "4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a",
+  "Name": "/web",
+  "Config": {
+    "Image": "ghcr.io/example/web:1.2",
+    "Env": ["API_KEY=envsecret", "PATH=/usr/bin"],
+    "Cmd": ["serve", "--password=cmdsecret"],
+    "Entrypoint": ["/entry", "--token=entrysecret"],
+    "Labels": {
+      "com.docker.compose.project": "media",
+      "com.docker.compose.project.config_files": "/srv/media/compose.yaml",
+      "db_password": "labelsecret",
+      "note": "token=abc123",
+      "bad\u202ekey": "ok"
+    },
+    "Healthcheck": {
+      "Test": ["CMD-SHELL", "curl -fsS -u admin:pw http://localhost:3000/health?token=hcsecret || exit 1"],
+      "Interval": 30000000000, "Timeout": 5000000000, "Retries": 3
+    }
+  },
+  "HostConfig": {"NetworkMode": "media_default", "RestartPolicy": {"Name": "on-failure", "MaximumRetryCount": 5}},
+  "NetworkSettings": {
+    "Ports": {"3000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}], "9000/tcp": null},
+    "Networks": {"media_default": {"IPAddress": "172.18.0.4"}}
+  },
+  "Mounts": [
+    {"Type": "bind", "Source": "/srv/media/config", "Destination": "/config", "RW": true},
+    {"Type": "volume", "Name": "cache", "Source": "/var/lib/docker/volumes/cache/_data", "Destination": "/cache", "RW": false}
+  ]
+}`
+
+func TestSettings(t *testing.T) {
+	e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(settingsFixture)) })
+	got, err := e.Settings(context.Background(), "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Image != "ghcr.io/example/web:1.2" || got.RestartPolicy != "on-failure:5" || got.NetworkMode != "media_default" {
+		t.Errorf("basics %+v", got)
+	}
+	if len(got.Ports) != 1 || got.Ports[0] != (Port{Container: "3000/tcp", HostIP: "0.0.0.0", HostPort: "8080"}) {
+		t.Errorf("ports %+v", got.Ports)
+	}
+	wantMounts := []Mount{
+		{Type: "bind", Source: "/srv/media/config", Destination: "/config"},
+		{Type: "volume", Source: "cache", Destination: "/cache", ReadOnly: true},
+	}
+	if !slices.Equal(got.Mounts, wantMounts) {
+		t.Errorf("mounts %+v", got.Mounts)
+	}
+	if len(got.Networks) != 1 || got.Networks[0] != (Network{Name: "media_default", IPAddress: "172.18.0.4"}) {
+		t.Errorf("networks %+v", got.Networks)
+	}
+	if got.Labels["com.docker.compose.project.config_files"] != "/srv/media/compose.yaml" ||
+		got.Labels["db_password"] != "[hidden]" || got.Labels["note"] != "[hidden]" || got.Labels["badkey"] != "ok" {
+		t.Errorf("labels %+v", got.Labels)
+	}
+	hc := got.HealthCheck
+	if hc == nil || hc.Kind != "CMD-SHELL" || hc.Interval != "30s" || hc.Timeout != "5s" || hc.StartPeriod != "" || hc.Retries != 3 {
+		t.Fatalf("health check %+v", hc)
+	}
+	if !strings.Contains(hc.Command, "http://localhost:3000/health?token=[hidden]") || strings.Contains(hc.Command, "hcsecret") {
+		t.Errorf("health check command %q", hc.Command)
+	}
+
+	// Environment variables and command lines must never come back.
+	b, _ := json.Marshal(got)
+	for _, secret := range []string{"envsecret", "cmdsecret", "entrysecret", "labelsecret", "hcsecret", "abc123", "PATH=", "/entry"} {
+		if strings.Contains(string(b), secret) {
+			t.Errorf("output contains %q: %s", secret, b)
+		}
+	}
+}
+
+func TestSettingsMinimal(t *testing.T) {
+	e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(fixture(false))) })
+	got, err := e.Settings(context.Background(), "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RestartPolicy != "no" || got.HealthCheck != nil || got.Ports == nil || got.Mounts == nil || got.Networks == nil || got.Labels == nil {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestSettingsBounded(t *testing.T) {
+	labels := make([]string, 0, 100)
+	for i := range 100 {
+		labels = append(labels, fmt.Sprintf("%q: %q", fmt.Sprintf("l%03d", i), strings.Repeat("v", 2000)))
+	}
+	doc := `{"Id": "` + testID + `", "Name": "/web", "Config": {"Labels": {` + strings.Join(labels, ",") + `}}}`
+	e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(doc)) })
+	got, err := e.Settings(context.Background(), "web")
+	if err != nil || !got.Truncated || len(got.Labels) != maxLabels || len(got.Labels["l000"]) != maxSettingText {
+		t.Errorf("truncated=%v labels=%d len=%d err=%v", got.Truncated, len(got.Labels), len(got.Labels["l000"]), err)
+	}
+}
+
+func TestSettingsNotFound(t *testing.T) {
+	e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	if _, err := e.Settings(context.Background(), "web"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("got %v", err)
 	}
 }

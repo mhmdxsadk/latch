@@ -117,7 +117,7 @@ func TestToolSurfaceIsReadOnlyAndFixed(t *testing.T) {
 	}
 	want := map[string]bool{
 		"list_resources": true, "host_load": true, "host_memory": true, "host_disk": true,
-		"docker_list": true, "docker_status": true, "docker_logs": true,
+		"docker_list": true, "docker_status": true, "docker_logs": true, "docker_settings": true,
 		"systemd_list": true, "systemd_unit_status": true, "dns_check": true,
 	}
 	for _, tool := range res.Tools {

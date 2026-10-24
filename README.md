@@ -39,11 +39,19 @@ Latch is pre-release (v0.x) and read-only. These tools exist today:
 - `host_load`, `host_memory` and `host_disk` report host metrics.
 - `docker_list` and `docker_status` report each visible container's state, exit
   code, restart count, image and health. `docker_status` also returns the
-  output of the latest health check, which usually says why it failed. They
-  never return environment variables, labels, mounts or commands.
+  output of the latest health check, which usually says why it failed.
+- `docker_settings` returns how a container is configured: image, restart
+  policy, published ports, mounts, networks, labels and the health check
+  definition. It never returns environment variables or the command line.
 - `docker_logs` returns recent stdout and stderr, capped by `limits` in the
   config. Logs often contain secrets, so exclude any container whose logs the
   agent must not read. A new container is visible as soon as it exists.
+
+Text that Latch reads for the agent (logs, health check output, labels) has
+values that look like secrets replaced by `[hidden]`: `PASSWORD=...`,
+`"token": "..."`, URL passwords, `Authorization` headers, private keys and
+well-known token formats. This is best effort. It is a second line of defence;
+excluding the container is the real one.
 - `systemd_list` lists loaded services and their state.
 - `systemd_unit_status` returns the load, active and sub state of any unit that
   is not excluded.

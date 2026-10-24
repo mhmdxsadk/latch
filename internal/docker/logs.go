@@ -12,6 +12,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/mhmdxsadk/latch/internal/redact"
 )
 
 const (
@@ -190,8 +192,8 @@ func (c *collector) emit(stream string, p *partial) {
 		text = tailBytes(text, c.maxBytes)
 		c.truncated = true
 	}
-	text = sanitize(text)
-	if len(text) > c.maxBytes { // replacement characters can grow the text
+	text = redact.Text(sanitize(text))
+	if len(text) > c.maxBytes { // replacement characters and [hidden] can grow the text
 		text = tailBytes(text, c.maxBytes)
 	}
 	c.entries = append(c.entries, LogEntry{Stream: stream, Time: p.time, Text: text})

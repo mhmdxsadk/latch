@@ -49,6 +49,14 @@ func (f *fakeDocker) Logs(_ context.Context, c string, lines, maxBytes int) (doc
 	return docker.Logs{Entries: []docker.LogEntry{{Stream: "stdout", Text: "hello"}}}, f.err
 }
 
+func (f *fakeDocker) Settings(_ context.Context, c string) (docker.Settings, error) {
+	f.containers = append(f.containers, c)
+	return docker.Settings{
+		Image: "nginx:1.27", RestartPolicy: "always",
+		Ports: []docker.Port{}, Mounts: []docker.Mount{}, Networks: []docker.Network{}, Labels: map[string]string{},
+	}, f.err
+}
+
 type fakeSystemd struct {
 	err   error
 	units []string
@@ -103,7 +111,11 @@ func TestDockerToolsResolveThroughPolicy(t *testing.T) {
 	if fd.lines != 100 {
 		t.Errorf("default lines = %d", fd.lines)
 	}
-	if strings.Join(fd.containers, ",") != "my-web,my-db,my-db" {
+	set := structured[dockerSettingsOut](t, h, "docker_settings", map[string]any{"name": "my-web"})
+	if set.Name != "my-web" || set.Settings.RestartPolicy != "always" {
+		t.Errorf("got %+v", set)
+	}
+	if strings.Join(fd.containers, ",") != "my-web,my-db,my-db,my-web" {
 		t.Errorf("integration saw %v; want only the requested container names", fd.containers)
 	}
 }
@@ -179,6 +191,8 @@ func TestDockerRejections(t *testing.T) {
 	}{
 		{"docker_status", map[string]any{"name": "secret-vault"}}, // excluded
 		{"docker_logs", map[string]any{"name": "secret-vault"}},
+		{"docker_settings", map[string]any{"name": "secret-vault"}},
+		{"docker_settings", map[string]any{"name": "../web"}},
 		{"docker_status", map[string]any{"name": "secret-"}},
 		{"docker_status", map[string]any{"name": "../web"}},
 		{"docker_status", map[string]any{"name": "web/../../etc"}},

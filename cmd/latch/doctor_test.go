@@ -35,6 +35,10 @@ func (s stubDocker) Logs(context.Context, string, int, int) (docker.Logs, error)
 	return docker.Logs{}, nil
 }
 
+func (s stubDocker) Settings(context.Context, string) (docker.Settings, error) {
+	return docker.Settings{}, nil
+}
+
 type stubSystemd struct{ ping, list error }
 
 func (s stubSystemd) Ping(context.Context) error { return s.ping }

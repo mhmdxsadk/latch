@@ -4,10 +4,10 @@
 // issues only GET requests to four fixed endpoints (/_ping, /containers/json,
 // /containers/{name}/json, /containers/{name}/logs), never follows redirects
 // or uses proxies, and caps every response read. Inspect output is decoded into
-// a private struct and projected onto a small Status, so environment variables,
-// labels, mounts and commands are never read into memory beyond the decoder
-// and never returned. The newest health-check output is returned, bounded and
-// sanitized like logs, because it is the container's own explanation of why it
+// a private struct and projected onto Status and Settings, so environment
+// variables and command lines are never decoded and never returned. The newest
+// health-check output is returned, bounded and
+// sanitized and redacted like logs, because it is the container's own explanation of why it
 // is unhealthy. Container names come from policy but
 // are re-validated here as defence in depth.
 package docker
@@ -25,6 +25,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/mhmdxsadk/latch/internal/redact"
 )
 
 // ErrNotFound is returned when the configured container does not exist (HTTP 404).
@@ -95,6 +97,7 @@ type Client interface {
 	// Status and Logs take a container name already resolved by policy.
 	Status(ctx context.Context, container string) (Status, error)
 	Logs(ctx context.Context, container string, lines, maxBytes int) (Logs, error)
+	Settings(ctx context.Context, container string) (Settings, error)
 }
 
 // Engine talks to the Docker Engine API over a Unix socket.
@@ -241,9 +244,38 @@ type inspect struct {
 		}
 	}
 	RestartCount int
-	Config       struct {
-		Image string
-		Tty   bool
+	// Config deliberately omits Env, Cmd and Entrypoint: environment
+	// variables and command lines are never decoded.
+	Config struct {
+		Image       string
+		Tty         bool
+		Labels      map[string]string
+		Healthcheck *struct {
+			Test        []string
+			Interval    int64
+			Timeout     int64
+			StartPeriod int64
+			Retries     int
+		}
+	}
+	HostConfig struct {
+		NetworkMode   string
+		RestartPolicy struct {
+			Name              string
+			MaximumRetryCount int
+		}
+	}
+	NetworkSettings struct {
+		Ports    map[string][]struct{ HostIp, HostPort string }
+		Networks map[string]struct{ IPAddress string }
+	}
+	Mounts []struct {
+		Type        string
+		Name        string
+		Source      string
+		Destination string
+		Mode        string
+		RW          bool
 	}
 }
 
@@ -314,7 +346,7 @@ func healthOutput(s string) string {
 	for i, l := range lines {
 		lines[i] = sanitize(strings.TrimSuffix(l, "\r"))
 	}
-	return headBytes(strings.Join(lines, "\n"), maxHealthOutput)
+	return headBytes(redact.Text(strings.Join(lines, "\n")), maxHealthOutput)
 }
 
 // fmtTime normalizes a Docker timestamp to UTC; zero or unparsable becomes "".
