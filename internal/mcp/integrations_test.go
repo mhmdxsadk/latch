@@ -14,6 +14,7 @@ import (
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/health"
+	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/systemd"
 )
 
@@ -91,8 +92,22 @@ func (f *fakeDocker) Settings(_ context.Context, c string) (docker.Settings, err
 }
 
 type fakeSystemd struct {
-	err   error
-	units []string
+	err      error
+	units    []string
+	failed   []systemd.ListedUnit
+	logs     systemd.Logs
+	lines    int
+	maxBytes int
+}
+
+func (f *fakeSystemd) Failed(context.Context) ([]systemd.ListedUnit, error) {
+	return f.failed, f.err
+}
+
+func (f *fakeSystemd) Logs(_ context.Context, u string, lines, maxBytes int) (systemd.Logs, error) {
+	f.units = append(f.units, u)
+	f.lines, f.maxBytes = lines, maxBytes
+	return f.logs, f.err
 }
 
 func (f *fakeSystemd) Ping(context.Context) error { return f.err }
@@ -504,5 +519,91 @@ func TestDockerEventsRejections(t *testing.T) {
 	}
 	if !fd.since.IsZero() {
 		t.Error("rejected call reached the integration")
+	}
+}
+
+func TestSystemdFailedHidesExcluded(t *testing.T) {
+	fs := &fakeSystemd{failed: []systemd.ListedUnit{
+		{Name: "app.service", ActiveState: "failed", SubState: "failed"},
+		{Name: "vault.service", ActiveState: "failed", SubState: "failed"},
+		{Name: "t.timer", ActiveState: "activating", SubState: "auto-restart"},
+	}}
+	h := newHarnessWith(t, func(d *Deps) { d.Systemd = fs })
+	out := structured[unitListOut](t, h, "systemd_failed", map[string]any{})
+	if len(out.Units) != 2 || out.Units[0].Name != "app.service" || out.Units[1].Name != "t.timer" {
+		t.Errorf("got %+v", out)
+	}
+	fs.failed = nil
+	res, _ := h.call("systemd_failed", map[string]any{})
+	b, _ := json.Marshal(res.StructuredContent)
+	if !strings.Contains(string(b), `"units":[]`) {
+		t.Errorf("got %s", b)
+	}
+}
+
+func TestSystemdLogs(t *testing.T) {
+	fs := &fakeSystemd{logs: systemd.Logs{Entries: []systemd.LogEntry{{Priority: 3, PriorityName: "err", PID: 5, Text: "boom"}}, Truncated: true}}
+	h := newHarnessWith(t, func(d *Deps) { d.Systemd = fs })
+	out := structured[unitLogsOut](t, h, "systemd_logs", map[string]any{"unit": "ssh.service", "lines": 30})
+	if out.Unit != "ssh.service" || len(out.Entries) != 1 || !out.Truncated || fs.lines != 30 || fs.maxBytes != config.DefaultMaxLogBytes {
+		t.Errorf("got %+v lines=%d bytes=%d", out, fs.lines, fs.maxBytes)
+	}
+	structured[unitLogsOut](t, h, "systemd_logs", map[string]any{"unit": "ssh.service"})
+	if fs.lines != 100 {
+		t.Errorf("default lines = %d", fs.lines)
+	}
+	fs.logs = systemd.Logs{}
+	res, _ := h.call("systemd_logs", map[string]any{"unit": "ssh.service"})
+	b, _ := json.Marshal(res.StructuredContent)
+	if !strings.Contains(string(b), `"entries":[]`) {
+		t.Errorf("got %s", b)
+	}
+}
+
+func TestSystemdLogsRejections(t *testing.T) {
+	fs := &fakeSystemd{}
+	h := newHarnessWith(t, func(d *Deps) { d.Systemd = fs })
+	for _, args := range []any{
+		map[string]any{"unit": "vault.service"}, // excluded
+		map[string]any{"unit": "ssh"},
+		map[string]any{"unit": "--all.service\n"},
+		map[string]any{"unit": "../ssh.service"},
+		map[string]any{"unit": ""},
+		map[string]any{},
+		map[string]any{"unit": "ssh.service", "lines": config.DefaultMaxLogLines + 1},
+		map[string]any{"unit": "ssh.service", "lines": -1},
+		map[string]any{"unit": "ssh.service", "lines": "all"},
+		map[string]any{"unit": "ssh.service", "follow": true},
+		map[string]any{"unit": "ssh.service", "since": "yesterday"},
+	} {
+		res, err := h.call("systemd_logs", args)
+		if err == nil && !res.IsError {
+			t.Errorf("%v accepted", args)
+		}
+	}
+	if len(fs.units) != 0 {
+		t.Errorf("rejected calls reached the integration: %v", fs.units)
+	}
+}
+
+func TestSystemdLogsExcludedReadsAsMissing(t *testing.T) {
+	h := newHarnessWith(t, func(d *Deps) { d.Systemd = &fakeSystemd{err: systemd.ErrNotFound} })
+	excluded, _ := h.call("systemd_logs", map[string]any{"unit": "vault.service"})
+	missing, _ := h.call("systemd_logs", map[string]any{"unit": "ssh.service"})
+	if !excluded.IsError || !missing.IsError || resultText(excluded) != resultText(missing) {
+		t.Errorf("excluded %q, missing %q", resultText(excluded), resultText(missing))
+	}
+}
+
+func TestSystemdLogsUnsupportedAndLeaks(t *testing.T) {
+	h := newHarnessWith(t, func(d *Deps) { d.Systemd = &fakeSystemd{err: errors.New("SECRET journal path")} })
+	res, err := h.call("systemd_logs", map[string]any{"unit": "ssh.service"})
+	if err != nil || !res.IsError || strings.Contains(resultText(res), "SECRET") {
+		t.Errorf("%v %s", err, resultText(res))
+	}
+	h = newHarnessWith(t, func(d *Deps) { d.Systemd = &fakeSystemd{err: host.ErrUnsupported} })
+	res, _ = h.call("systemd_logs", map[string]any{"unit": "ssh.service"})
+	if !res.IsError || !strings.Contains(resultText(res), "not supported") {
+		t.Errorf("%s", resultText(res))
 	}
 }

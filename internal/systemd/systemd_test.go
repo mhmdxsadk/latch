@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -184,6 +185,43 @@ func TestBuildList(t *testing.T) {
 	got := buildList(rows)
 	if len(got) != 2 || got[0].Name != "cron.service" || got[1].Name != "ssh.service" || got[1].ActiveState != "active" {
 		t.Errorf("got %+v", got)
+	}
+}
+
+func TestBuildFailed(t *testing.T) {
+	rows := []listRow{
+		{Name: "ok.service", Active: "active", Sub: "running"},
+		{Name: "dead.service", Active: "inactive", Sub: "dead"},
+		{Name: "b.service", Description: "Broken \x1b[31mone\x1b[0m password=hunter2", Active: "failed", Sub: "failed"},
+		{Name: "a.service", Active: "activating", Sub: "auto-restart"},
+		{Name: "c.timer", Active: "failed", Sub: "failed"},
+		{Name: "session-1.scope", Active: "failed", Sub: "failed"},
+		{Name: "r.service", Active: "active", Sub: "auto-restart"},
+		{Name: "bad name.service", Active: "failed"},
+		{Name: "../x.service", Active: "failed"},
+		{Name: "x.weird", Active: "failed"},
+		{Name: "a.service", Active: "activating", Sub: "auto-restart"},
+	}
+	got := buildFailed(rows)
+	names := []string{}
+	for _, u := range got {
+		names = append(names, u.Name)
+	}
+	if strings.Join(names, ",") != "a.service,b.service,c.timer,r.service,session-1.scope" {
+		t.Errorf("got %v", names)
+	}
+	if got[1].Description != "Broken one password=[hidden]" {
+		t.Errorf("description %q", got[1].Description)
+	}
+	if buildFailed(nil) == nil {
+		t.Error("nil result")
+	}
+	many := make([]listRow, 0, 600)
+	for i := range 600 {
+		many = append(many, listRow{Name: fmt.Sprintf("u%03d.service", i), Active: "failed"})
+	}
+	if n := len(buildFailed(many)); n != maxFailed {
+		t.Errorf("not capped: %d", n)
 	}
 }
 

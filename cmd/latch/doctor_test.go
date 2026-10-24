@@ -53,6 +53,10 @@ func (s stubSystemd) Ping(context.Context) error { return s.ping }
 func (s stubSystemd) List(context.Context) ([]systemd.ListedUnit, error) {
 	return []systemd.ListedUnit{{Name: "ssh.service"}, {Name: "vault.service"}}, s.list
 }
+func (s stubSystemd) Failed(context.Context) ([]systemd.ListedUnit, error) { return nil, nil }
+func (s stubSystemd) Logs(context.Context, string, int, int) (systemd.Logs, error) {
+	return systemd.Logs{}, nil
+}
 func (s stubSystemd) UnitStatus(context.Context, string) (systemd.UnitStatus, error) {
 	return systemd.UnitStatus{}, nil
 }
