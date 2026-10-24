@@ -40,7 +40,7 @@ type Deps struct {
 
 // MaxConcurrentCalls is the number of tool calls served at once; further
 // calls are refused until one finishes.
-const MaxConcurrentCalls = 8
+const MaxConcurrentCalls = 16
 
 // userError is the only error type whose text reaches the agent.
 type userError struct{ msg string }
