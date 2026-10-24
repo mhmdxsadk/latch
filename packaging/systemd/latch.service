@@ -17,10 +17,11 @@ ExecStart=/usr/local/bin/latch serve --config /etc/latch/config.yaml
 Restart=on-failure
 RestartSec=2s
 
-# Socket directory /run/latch, owned by latch, group-accessible (0750) so only
-# the client group can traverse into it.
+# Socket directory /run/latch, owned by latch:latch. Other accounts need execute
+# (0751) to reach the socket inside; the socket itself is 0660 for the client
+# group and Latch checks every peer, so listing or traversing grants nothing.
 RuntimeDirectory=latch
-RuntimeDirectoryMode=0750
+RuntimeDirectoryMode=0751
 
 # Hardening (defence in depth).
 NoNewPrivileges=yes
