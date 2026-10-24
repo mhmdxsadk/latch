@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -63,6 +64,20 @@ func TestFromConnReportsOwnIdentity(t *testing.T) {
 	}
 	if cred.UID != uint32(os.Getuid()) {
 		t.Errorf("uid = %d, want %d", cred.UID, os.Getuid())
+	}
+	if len(cred.GIDs) == 0 || cred.GIDs[0] != uint32(os.Getgid()) {
+		t.Errorf("gids = %v, want primary group %d first", cred.GIDs, os.Getgid())
+	}
+	if runtime.GOOS == "linux" {
+		groups, err := os.Getgroups()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range groups {
+			if !InGroup(cred, uint32(g)) {
+				t.Errorf("supplementary group %d missing from %v", g, cred.GIDs)
+			}
+		}
 	}
 }
 
