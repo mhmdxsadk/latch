@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0](https://github.com/mhmdxsadk/latch/compare/v0.5.0...v0.6.0) (2026-10-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** docker.services and systemd.units are removed; list_resources no longer returns docker_services or systemd_units.
+
+### Features
+
+* **config:** expose Docker and systemd by default, exclude by name ([9535bb7](https://github.com/mhmdxsadk/latch/commit/9535bb71fe4e235724073da86e7e5c3c94911bb9))
+
+
+### Bug Fixes
+
+* **install:** reuse the socket group named in an existing config ([795bf72](https://github.com/mhmdxsadk/latch/commit/795bf722b60b94dea01b2cdb1efc73c0612f9e23))
+* **mcp:** allow 16 concurrent tool calls ([874c0c3](https://github.com/mhmdxsadk/latch/commit/874c0c32d8de3e5295ee45b0c27d719b161fccd0))
+
 ## [0.5.0](https://github.com/mhmdxsadk/latch/compare/v0.4.0...v0.5.0) (2026-10-24)
 
 
