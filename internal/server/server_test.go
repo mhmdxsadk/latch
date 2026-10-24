@@ -100,7 +100,7 @@ type env struct {
 
 func start(t *testing.T, gid uint32) env {
 	t.Helper()
-	cfg, err := config.Parse([]byte("server: {socket: /run/l.sock, socket_group: latch-clients}\nhost: {disks: [{name: root, path: /}]}\n"))
+	cfg, err := config.Parse([]byte("server: {socket: /run/l.sock, socket_group: latch-agents}\nhost: {disks: [{name: root, path: /}]}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

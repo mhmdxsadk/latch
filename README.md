@@ -71,7 +71,7 @@ sudo systemctl enable --now latch
 ## Connecting an agent
 
 Latch serves MCP over a Unix socket at `/run/latch/latch.sock`. Only processes
-in `socket_group` (`latch-clients` by default) can connect, so add the agent's
+in `socket_group` (`latch-agents` by default) can connect, so add the agent's
 user to that group. Latch checks the group with kernel-verified peer
 credentials, and refuses root's group.
 

@@ -10,7 +10,7 @@ import (
 const validBase = `
 server:
   socket: /run/latch/latch.sock
-  socket_group: latch-clients
+  socket_group: latch-agents
 `
 
 func TestExampleConfigIsValid(t *testing.T) {
@@ -32,8 +32,8 @@ func TestParseRejects(t *testing.T) {
 		{"socket group numeric", "server:\n  socket: /run/latch.sock\n  socket_group: '0'\n", "server.socket_group"},
 		{"removed allowed_uids", validBase + "  allowed_uids: [1000]\n", "were removed"},
 		{"removed allowed_gids", validBase + "  allowed_gids: []\n", "were removed"},
-		{"relative socket", "server:\n  socket: latch.sock\n  socket_group: latch-clients\n", "server.socket"},
-		{"socket path traversal", "server:\n  socket: /run/../etc/x.sock\n  socket_group: latch-clients\n", "server.socket"},
+		{"relative socket", "server:\n  socket: latch.sock\n  socket_group: latch-agents\n", "server.socket"},
+		{"socket path traversal", "server:\n  socket: /run/../etc/x.sock\n  socket_group: latch-agents\n", "server.socket"},
 		{"log lines above hard cap", validBase + "limits:\n  max_log_lines: 100000\n", "max_log_lines"},
 		{"log bytes above hard cap", validBase + "limits:\n  max_log_bytes: 99999999\n", "max_log_bytes"},
 		{"negative log lines", validBase + "limits:\n  max_log_lines: -1\n", "max_log_lines"},

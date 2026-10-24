@@ -11,7 +11,7 @@ server:
   # Group that owns the socket. Only processes in this group may connect
   # (checked by file permissions and again with kernel-verified peer
   # credentials). Add the agent's user to it. Root's group is refused.
-  socket_group: latch-clients
+  socket_group: latch-agents
 
 limits:
   max_log_lines: 200      # hard ceiling 1000

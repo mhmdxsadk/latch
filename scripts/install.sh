@@ -19,7 +19,7 @@ set -eu
 REPO="mhmdxsadk/latch"
 PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/latch"
-CLIENT_GROUP="latch-clients"
+CLIENT_GROUP="latch-agents"
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }

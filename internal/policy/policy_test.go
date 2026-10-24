@@ -11,7 +11,7 @@ import (
 func testPolicy(t *testing.T) *Policy {
 	t.Helper()
 	c, err := config.Parse([]byte(`
-server: {socket: /run/l.sock, socket_group: latch-clients}
+server: {socket: /run/l.sock, socket_group: latch-agents}
 limits: {max_log_lines: 50}
 docker:
   services:
