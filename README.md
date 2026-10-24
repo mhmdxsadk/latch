@@ -43,6 +43,11 @@ Latch is pre-release (v0.x) and read-only. These tools exist today:
 - `docker_settings` returns how a container is configured: image, restart
   policy, published ports, mounts, networks, labels and the health check
   definition. It never returns environment variables or the command line.
+- `docker_usage` returns one sample of a container's CPU, memory, network and
+  disk use and its process count.
+- `docker_events` returns what containers did in the last 1 to 24 hours:
+  die (with exit code), oom, restart, kill, stop, start and health changes.
+  Only the newest 200 are returned.
 - `docker_logs` returns recent stdout and stderr, capped by `limits` in the
   config. Logs often contain secrets, so exclude any container whose logs the
   agent must not read. A new container is visible as soon as it exists.
@@ -55,6 +60,14 @@ excluding the container is the real one.
 - `systemd_list` lists loaded services and their state.
 - `systemd_unit_status` returns the load, active and sub state of any unit that
   is not excluded.
+- `systemd_failed` lists units of any type that are failed or waiting to
+  restart.
+- `systemd_logs` returns recent journal lines of a unit, capped by `limits`
+  like `docker_logs`. Latch runs `journalctl` for this, with fixed options. The
+  user Latch runs as must be allowed to read the journal (for example by
+  being root or in the `systemd-journal` group).
+- `host_ports` lists listening TCP and UDP sockets with the program, unit and
+  container that own each. Linux only.
 - `dns_check` resolves a configured hostname and returns its addresses.
 
 Run `latch doctor` to check that every configured resource is reachable.

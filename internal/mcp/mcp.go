@@ -16,9 +16,11 @@ import (
 
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/docker"
+	"github.com/mhmdxsadk/latch/internal/excluded"
 	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/policy"
+	"github.com/mhmdxsadk/latch/internal/ports"
 	"github.com/mhmdxsadk/latch/internal/systemd"
 )
 
@@ -30,8 +32,12 @@ type Deps struct {
 	Docker  docker.Client
 	Systemd systemd.Client
 	Health  health.Checker
-	Audit   *audit.Logger
-	Version string
+	Ports   ports.Scanner
+	// Excluded reports what excluded containers expose; tools that look at
+	// the whole host refuse to run without it.
+	Excluded *excluded.Tracker
+	Audit    *audit.Logger
+	Version  string
 
 	// sem bounds concurrent tool calls across all connections, so parallel
 	// requests cannot multiply memory use, outbound probes or bus connections.
@@ -134,5 +140,6 @@ func NewServer(d *Deps) *sdk.Server {
 	registerDocker(s, d)
 	registerSystemd(s, d)
 	registerHealth(s, d)
+	registerPorts(s, d)
 	return s
 }

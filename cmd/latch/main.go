@@ -16,10 +16,12 @@ import (
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
+	"github.com/mhmdxsadk/latch/internal/excluded"
 	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/mcp"
 	"github.com/mhmdxsadk/latch/internal/policy"
+	"github.com/mhmdxsadk/latch/internal/ports"
 	"github.com/mhmdxsadk/latch/internal/server"
 	"github.com/mhmdxsadk/latch/internal/systemd"
 )
@@ -140,14 +142,18 @@ func cmdServe(args []string, stderr io.Writer) int {
 	}
 	al := audit.New(slog.New(slog.NewJSONHandler(auditOut, nil)))
 
+	pol := policy.New(cfg)
+	dk := docker.NewEngine(cfg.Docker.Socket)
 	deps := &mcp.Deps{
-		Policy:  policy.New(cfg),
-		Host:    host.System{},
-		Docker:  docker.NewEngine(cfg.Docker.Socket),
-		Systemd: systemd.NewBus(),
-		Health:  health.Prober{},
-		Audit:   al,
-		Version: version,
+		Policy:   pol,
+		Host:     host.System{},
+		Docker:   dk,
+		Systemd:  systemd.NewBus(),
+		Health:   health.Prober{},
+		Ports:    ports.Proc{},
+		Excluded: &excluded.Tracker{Docker: dk, Policy: pol},
+		Audit:    al,
+		Version:  version,
 	}
 	srv := mcp.NewServer(deps)
 

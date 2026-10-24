@@ -13,6 +13,7 @@ import (
 
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/config"
+	"github.com/mhmdxsadk/latch/internal/excluded"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/policy"
 )
@@ -76,6 +77,12 @@ health:
 		Version: "test",
 	}
 	override(deps)
+	if deps.Ports == nil {
+		deps.Ports = &fakePorts{}
+	}
+	if deps.Excluded == nil {
+		deps.Excluded = &excluded.Tracker{Docker: deps.Docker, Policy: deps.Policy}
+	}
 	srv := NewServer(deps)
 	ct, st := sdk.NewInMemoryTransports()
 	ctx := context.Background()
@@ -117,8 +124,8 @@ func TestToolSurfaceIsReadOnlyAndFixed(t *testing.T) {
 	}
 	want := map[string]bool{
 		"list_resources": true, "host_load": true, "host_memory": true, "host_disk": true,
-		"docker_list": true, "docker_status": true, "docker_logs": true, "docker_settings": true,
-		"systemd_list": true, "systemd_unit_status": true, "dns_check": true,
+		"docker_list": true, "docker_status": true, "docker_logs": true, "docker_settings": true, "docker_usage": true, "docker_events": true, "host_ports": true,
+		"systemd_list": true, "systemd_unit_status": true, "systemd_logs": true, "systemd_failed": true, "dns_check": true,
 	}
 	for _, tool := range res.Tools {
 		if !want[tool.Name] {

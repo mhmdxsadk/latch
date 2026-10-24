@@ -1,8 +1,8 @@
 // Package docker inspects containers through the Docker Engine API.
 //
 // It is strictly read-only: it speaks plain HTTP over the Docker Unix socket,
-// issues only GET requests to four fixed endpoints (/_ping, /containers/json,
-// /containers/{name}/json, /containers/{name}/logs), never follows redirects
+// issues only GET requests to fixed endpoints (/_ping, /containers/json,
+// /containers/{name}/json, .../logs, .../stats, /events), never follows redirects
 // or uses proxies, and caps every response read. Inspect output is decoded into
 // a private struct and projected onto Status and Settings, so environment
 // variables and command lines are never decoded and never returned. The newest
@@ -98,6 +98,13 @@ type Client interface {
 	Status(ctx context.Context, container string) (Status, error)
 	Logs(ctx context.Context, container string, lines, maxBytes int) (Logs, error)
 	Settings(ctx context.Context, container string) (Settings, error)
+	// Usage takes a container name already resolved by policy.
+	Usage(ctx context.Context, container string) (Usage, error)
+	// Events returns recent container events, see events.go.
+	Events(ctx context.Context, since, until time.Time, visible func(name string) bool, limit int) (Events, error)
+	// IDs maps full container IDs to primary names. The caller must filter
+	// the result through policy.
+	IDs(ctx context.Context) (map[string]string, error)
 }
 
 // Engine talks to the Docker Engine API over a Unix socket.
