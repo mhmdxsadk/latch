@@ -25,6 +25,17 @@ agent:
   # Extra Docker Agent flags. Each message runs as:
   #   docker-agent run CONFIG --exec --last --session ID ARGS... -
   # with the message on standard input.
+  #
+  # Nobody can answer a prompt in Telegram, so use restricted: read-only
+  # tools run, everything else is denied. Latch's change tools are not
+  # read-only, so list them in the agent config, where Latch's own approval
+  # stays the gate:
+  #   permissions:
+  #     allow: [docker_restart, systemd_restart, docker_stop, docker_start,
+  #             systemd_stop, systemd_start, docker_compose_up, file_edit,
+  #             file_create, file_restore, http_request]
+  # Allowed tools skip pre_tool_use hooks; put checks that must always run
+  # under tool_guard instead.
   args: [--safety, restricted]
   # A turn that takes longer is stopped.
   timeout: 10m

@@ -297,7 +297,9 @@ To set it up:
 2. Find your user id (for example with @userinfobot) and copy the example:
    `sudo cp /etc/latch/telegram.example.yaml /etc/latch/telegram.yaml`.
    Set `owner_id`, and either fill in the `agent` section or remove it for
-   approvals only. [`config/telegram.example.yaml`](config/telegram.example.yaml)
+   approvals only. With `--safety restricted`, the agent config must allow
+   Latch's change tools (the example shows how), or the agent cannot ask for
+   any change. [`config/telegram.example.yaml`](config/telegram.example.yaml)
    explains every option.
 3. Check and start it, then send your bot a message:
 
