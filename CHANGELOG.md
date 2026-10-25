@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/mhmdxsadk/latch/compare/v0.9.0...v0.9.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* **network:** always block cloud metadata addresses ([3172ff0](https://github.com/mhmdxsadk/latch/commit/3172ff095951a8b24fb180fa48bbd13ffef3eed0))
+
 ## [0.9.0](https://github.com/mhmdxsadk/latch/compare/v0.8.0...v0.9.0) (2026-10-25)
 
 
