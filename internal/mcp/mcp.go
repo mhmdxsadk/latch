@@ -51,6 +51,13 @@ type Deps struct {
 	Actions        *approval.Store
 	DockerActions  docker.Mutator
 	SystemdActions systemd.Mutator
+	// Editor changes files (file_edit, file_create, file_restore); HTTP
+	// sends approved HTTP writes.
+	Editor *files.Editor
+	HTTP   netcheck.Sender
+	// RestartSettle is how long Latch waits after the restart that follows
+	// a file change before checking the target; 0 means 30 seconds.
+	RestartSettle time.Duration
 
 	// sem bounds concurrent tool calls across all connections, so parallel
 	// requests cannot multiply memory use, outbound probes or bus connections.
@@ -80,14 +87,26 @@ var (
 
 	// errFileMissing is shared by blocked, missing and unreadable paths so
 	// the agent cannot tell them apart; the audit reason differs.
-	errFileMissing = userError{"path does not exist or is not allowed"}
-	errBadPath     = userError{"invalid path: it must be absolute and clean, with no control characters"}
-	errNotFile     = userError{"not a regular file"}
-	errNotDir      = userError{"not a directory"}
-	errBinary      = userError{"binary file; only text files can be read"}
-	errBadRange    = userError{"offset must be 1 or more, lines between 1 and 2000, and the start line within the first 64 MiB"}
-	errBadPattern  = userError{"name must be a file name with optional * and ? wildcards, without slashes, brackets or backslashes"}
-	errBadText     = userError{"text must be 1 to 200 bytes with no line breaks or control characters"}
+	errFileMissing   = userError{"path does not exist or is not allowed"}
+	errBadPath       = userError{"invalid path: it must be absolute and clean, with no control characters"}
+	errNotFile       = userError{"not a regular file"}
+	errNotDir        = userError{"not a directory"}
+	errBinary        = userError{"binary file; only text files can be read"}
+	errBadRange      = userError{"offset must be 1 or more, lines between 1 and 2000, and the start line within the first 64 MiB"}
+	errBadPattern    = userError{"name must be a file name with optional * and ? wildcards, without slashes, brackets or backslashes"}
+	errEditTooLarge  = userError{"file too large: Latch edits files of at most 1 MiB, and old and new text of at most 64 KiB"}
+	errEditNoMatch   = userError{"old text not found; copy it exactly as file_read shows it"}
+	errEditMany      = userError{"old text occurs more than once; include more surrounding lines so it matches once"}
+	errEditMultiLine = userError{"this file has hidden values that span several lines (such as a private key) and cannot be edited through Latch"}
+	errEditNewHidden = userError{"a changed line contains [hidden]; leave lines with [hidden] unchanged, or write the full value"}
+	errEditNoChange  = userError{"the edit changes nothing"}
+	errEditBadText   = userError{"text must be plain text: no control or invisible characters"}
+	errEditChanged   = userError{"the file changed while the request was prepared; read it again"}
+	errEditExists    = userError{"the file exists; use file_edit to change it"}
+	errEditSpecial   = userError{"files with setuid, setgid or sticky bits cannot be changed through Latch"}
+	errBackupUnsafe  = userError{"the backup folder is not safe to use; the owner must check /var/lib/latch/backups (latch doctor)"}
+	errNoSuchBackup  = userError{"no backup with that id; see file_backups"}
+	errBadText       = userError{"text must be 1 to 200 bytes with no line breaks or control characters"}
 	// errTargetNotAllowed is the one message for every blocked network
 	// target, whatever the reason.
 	errTargetNotAllowed = userError{"target is not allowed"}
@@ -137,6 +156,30 @@ func classify(err error) (userError, audit.Outcome, string) {
 		return errBinary, audit.OutcomeDenied, "binary"
 	case errors.Is(err, files.ErrBadRequest):
 		return errBadRange, audit.OutcomeDenied, "bad_request"
+	case errors.Is(err, files.ErrTooLarge):
+		return errEditTooLarge, audit.OutcomeDenied, "too_large"
+	case errors.Is(err, files.ErrNoMatch):
+		return errEditNoMatch, audit.OutcomeDenied, "no_match"
+	case errors.Is(err, files.ErrManyMatches):
+		return errEditMany, audit.OutcomeDenied, "many_matches"
+	case errors.Is(err, files.ErrMultiLineHidden):
+		return errEditMultiLine, audit.OutcomeDenied, "multi_line_hidden"
+	case errors.Is(err, files.ErrNewHidden):
+		return errEditNewHidden, audit.OutcomeDenied, "new_hidden"
+	case errors.Is(err, files.ErrNoChange):
+		return errEditNoChange, audit.OutcomeDenied, "no_change"
+	case errors.Is(err, files.ErrBadText):
+		return errEditBadText, audit.OutcomeDenied, "bad_text"
+	case errors.Is(err, files.ErrChanged):
+		return errEditChanged, audit.OutcomeDenied, "changed"
+	case errors.Is(err, files.ErrExists):
+		return errEditExists, audit.OutcomeDenied, "exists"
+	case errors.Is(err, files.ErrSpecialBits):
+		return errEditSpecial, audit.OutcomeDenied, "special_bits"
+	case errors.Is(err, files.ErrBackupUnsafe):
+		return errBackupUnsafe, audit.OutcomeError, "backup_unsafe"
+	case errors.Is(err, files.ErrNoBackup):
+		return errNoSuchBackup, audit.OutcomeDenied, "no_backup"
 	case errors.Is(err, files.ErrUnavailable):
 		return errUnavailable, audit.OutcomeError, "excluded_unknown"
 	default:
@@ -208,5 +251,7 @@ func NewServer(d *Deps) *sdk.Server {
 	registerFiles(s, d)
 	registerNetwork(s, d)
 	registerActions(s, d)
+	registerFileActions(s, d)
+	registerHTTPWrite(s, d)
 	return s
 }

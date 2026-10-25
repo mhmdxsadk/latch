@@ -34,6 +34,8 @@ type Mutator interface {
 	Restart(ctx context.Context, unit string) (JobResult, error)
 	Stop(ctx context.Context, unit string) (JobResult, error)
 	Start(ctx context.Context, unit string) (JobResult, error)
+	// Reload makes systemd reread its unit files (systemctl daemon-reload).
+	Reload(ctx context.Context) error
 }
 
 // verb is one of the three Manager methods Actions may call. The method name
@@ -65,6 +67,9 @@ type jobBus interface {
 	enqueue(ctx context.Context, method, unit string) (dbus.ObjectPath, error)
 	// wait returns the result of job once systemd removes it.
 	wait(ctx context.Context, job dbus.ObjectPath) (string, error)
+	// reload calls Manager.Reload, which returns once systemd has reread
+	// every unit file.
+	reload(ctx context.Context) error
 	close()
 }
 
@@ -94,6 +99,27 @@ func (a *Actions) Stop(ctx context.Context, unit string) (JobResult, error) {
 // Start starts the unit and waits for the job.
 func (a *Actions) Start(ctx context.Context, unit string) (JobResult, error) {
 	return a.do(ctx, verbStart, unit)
+}
+
+// ReloadTimeout bounds a daemon-reload.
+const ReloadTimeout = 60 * time.Second
+
+// ErrReload means the daemon-reload failed.
+var ErrReload = errors.New("systemd daemon-reload failed")
+
+// Reload runs a daemon-reload (Manager.Reload) and waits for it to finish.
+func (a *Actions) Reload(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, ReloadTimeout)
+	defer cancel()
+	bus, err := a.connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer bus.close()
+	if err := bus.reload(ctx); err != nil {
+		return fmt.Errorf("%w: %w", ErrReload, err)
+	}
+	return nil
 }
 
 func (a *Actions) do(ctx context.Context, v verb, unit string) (JobResult, error) {
@@ -170,6 +196,10 @@ func (b *dbusJobBus) enqueue(ctx context.Context, method, unit string) (dbus.Obj
 	var job dbus.ObjectPath
 	err := b.conn.Object(busName, managerPath).CallWithContext(ctx, method, 0, unit, "replace").Store(&job)
 	return job, err
+}
+
+func (b *dbusJobBus) reload(ctx context.Context) error {
+	return b.conn.Object(busName, managerPath).CallWithContext(ctx, ifaceManager+".Reload", 0).Err
 }
 
 func (b *dbusJobBus) wait(ctx context.Context, job dbus.ObjectPath) (string, error) {

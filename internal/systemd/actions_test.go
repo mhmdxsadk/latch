@@ -13,11 +13,18 @@ import (
 // fakeJobBus answers unit properties and records enqueued jobs.
 type fakeJobBus struct {
 	fakeReader
-	methods []string
-	units   []string
-	result  string
-	waitErr error
-	closed  bool
+	methods   []string
+	units     []string
+	result    string
+	waitErr   error
+	closed    bool
+	reloads   int
+	reloadErr error
+}
+
+func (f *fakeJobBus) reload(context.Context) error {
+	f.reloads++
+	return f.reloadErr
 }
 
 func (f *fakeJobBus) enqueue(_ context.Context, method, unit string) (dbus.ObjectPath, error) {
@@ -166,5 +173,16 @@ func TestVerbMethodsAreTheOnlyMutations(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "org.freedesktop.systemd1.Manager.RestartUnit,org.freedesktop.systemd1.Manager.StopUnit,org.freedesktop.systemd1.Manager.StartUnit" {
 		t.Errorf("methods = %v", got)
+	}
+}
+
+func TestReloadCallsManagerReload(t *testing.T) {
+	f := &fakeJobBus{}
+	if err := actionsWith(f).Reload(context.Background()); err != nil || f.reloads != 1 || !f.closed || len(f.methods) != 0 {
+		t.Fatalf("err %v reloads %d closed %v methods %v", err, f.reloads, f.closed, f.methods)
+	}
+	f = &fakeJobBus{reloadErr: errors.New("access denied")}
+	if err := actionsWith(f).Reload(context.Background()); !errors.Is(err, ErrReload) {
+		t.Errorf("err = %v", err)
 	}
 }

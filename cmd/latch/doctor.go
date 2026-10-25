@@ -13,6 +13,7 @@ import (
 
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
+	"github.com/mhmdxsadk/latch/internal/files"
 	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/policy"
@@ -32,6 +33,8 @@ type integrations struct {
 	euid    func() int
 	// compose reports which docker CLI runs "docker compose".
 	compose func(ctx context.Context) (string, error)
+	// backups checks the backup folder: whether it exists and is safe.
+	backups func() (bool, error)
 }
 
 // cmdDoctor checks that every configured integration is reachable. It never
@@ -59,6 +62,7 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 		groupID: server.GroupID,
 		euid:    os.Geteuid,
 		compose: func(ctx context.Context) (string, error) { return docker.CheckComposeCLI(ctx, cfg.Docker.Socket) },
+		backups: func() (bool, error) { return files.CheckBackupRoot(files.DefaultBackupRoot, 0) },
 	}, stdout, useColor(stdout))
 	if !ok {
 		return 1
@@ -161,6 +165,15 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 	r.checkDir("socket directory", filepath.Dir(cfg.Server.Socket))
 	if adminDir := filepath.Dir(cfg.Server.AdminSocket); adminDir != filepath.Dir(cfg.Server.Socket) {
 		r.checkDir("admin socket directory", adminDir)
+	}
+	switch exists, err := in.backups(); {
+	case err != nil:
+		r.check("backup folder "+files.DefaultBackupRoot, err,
+			"It must be a real folder (not a symlink) owned by root with mode 0700, like every folder above it under /var/lib/latch.")
+	case !exists:
+		r.check("backup folder "+files.DefaultBackupRoot+" (created on the first file change)", nil, "")
+	default:
+		r.check("backup folder "+files.DefaultBackupRoot, nil, "")
 	}
 	_, err := in.groupID(cfg.Server.SocketGroup)
 	r.check("socket group "+cfg.Server.SocketGroup, err,

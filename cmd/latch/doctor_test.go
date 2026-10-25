@@ -100,6 +100,7 @@ func healthy() integrations {
 		groupID: func(string) (uint32, error) { return 1500, nil },
 		euid:    func() int { return 0 },
 		compose: func(context.Context) (string, error) { return "/usr/bin/docker", nil },
+		backups: func() (bool, error) { return true, nil },
 	}
 }
 

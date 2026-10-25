@@ -156,21 +156,8 @@ func (p *Prober) HTTPGet(ctx context.Context, rawURL string, insecureTLS bool) (
 	defer cancel()
 	start := time.Now()
 
-	tr := &http.Transport{
-		Proxy:                  nil,
-		DialContext:            g.dialHTTP,
-		TLSClientConfig:        &tls.Config{InsecureSkipVerify: insecureTLS, RootCAs: p.roots}, //nolint:gosec // opt-in per call, reported in the result
-		TLSHandshakeTimeout:    httpTimeout,
-		ResponseHeaderTimeout:  httpTimeout,
-		MaxResponseHeaderBytes: maxHeaderBytes,
-		DisableKeepAlives:      true,
-		DisableCompression:     true,
-	}
+	client, tr := p.client(g, insecureTLS)
 	defer tr.CloseIdleConnections()
-	client := &http.Client{
-		Transport:     tr,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
 
 	res := HTTPResult{URL: displayURL(cur), Redirects: []string{}, Headers: map[string]string{}}
 	done := func() (HTTPResult, error) {
@@ -217,6 +204,25 @@ func (p *Prober) HTTPGet(ctx context.Context, rawURL string, insecureTLS bool) (
 		resp.Body.Close()
 		return done()
 	}
+}
+
+// client returns an HTTP client that dials through g and never follows a
+// redirect itself.
+func (p *Prober) client(g *guard, insecureTLS bool) (*http.Client, *http.Transport) {
+	tr := &http.Transport{
+		Proxy:                  nil,
+		DialContext:            g.dialHTTP,
+		TLSClientConfig:        &tls.Config{InsecureSkipVerify: insecureTLS, RootCAs: p.roots}, //nolint:gosec // opt-in per call, reported in the result
+		TLSHandshakeTimeout:    httpTimeout,
+		ResponseHeaderTimeout:  httpTimeout,
+		MaxResponseHeaderBytes: maxHeaderBytes,
+		DisableKeepAlives:      true,
+		DisableCompression:     true,
+	}
+	return &http.Client{
+		Transport:     tr,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}, tr
 }
 
 func isRedirect(code int) bool {

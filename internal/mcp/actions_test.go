@@ -33,7 +33,7 @@ func (f *actDocker) Status(_ context.Context, c string) (docker.Status, error) {
 	if f.missing[c] {
 		return docker.Status{}, docker.ErrNotFound
 	}
-	return docker.Status{State: "running", Health: docker.Health{Status: "healthy"}}, nil
+	return docker.Status{State: "running", Running: true, Health: docker.Health{Status: "healthy"}}, nil
 }
 func (f *actDocker) setMissing(name string) {
 	f.mu.Lock()
@@ -140,6 +140,12 @@ func (f *fakeSystemdActions) Stop(_ context.Context, u string) (systemd.JobResul
 func (f *fakeSystemdActions) Start(_ context.Context, u string) (systemd.JobResult, error) {
 	return f.do("start", u)
 }
+func (f *fakeSystemdActions) Reload(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "daemon-reload")
+	return nil
+}
 func (f *fakeSystemdActions) Calls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -178,7 +184,7 @@ systemd:
   approve: [cron.service]
 `
 
-func newActHarness(t *testing.T, autoWait time.Duration) *actHarness {
+func newActHarness(t *testing.T, autoWait time.Duration, extra ...func(*Deps)) *actHarness {
 	t.Helper()
 	cfg, err := config.Parse([]byte(actionsConfig))
 	if err != nil {
@@ -195,6 +201,9 @@ func newActHarness(t *testing.T, autoWait time.Duration) *actHarness {
 		d.Systemd, d.SystemdActions = a.sd, a.sa
 		a.store = approval.New(approval.Options{Audit: d.Audit, Explain: ExplainActionError, Now: a.clk.now, AutoWait: autoWait})
 		d.Actions = a.store
+		for _, f := range extra {
+			f(d)
+		}
 	})
 	t.Cleanup(a.store.Wait)
 	return a
