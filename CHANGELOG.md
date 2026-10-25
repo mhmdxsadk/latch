@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/mhmdxsadk/latch/compare/v0.11.0...v0.11.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* **packaging:** let latch-telegram start the agent as its own account ([85c0603](https://github.com/mhmdxsadk/latch/commit/85c06032f6bc14b305b2b515467383ff72904af0))
+
 ## [0.11.0](https://github.com/mhmdxsadk/latch/compare/v0.10.0...v0.11.0) (2026-10-25)
 
 
