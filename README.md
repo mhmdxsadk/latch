@@ -120,9 +120,11 @@ into a blocked folder, and secret-looking values in file text are shown as
 
 The network tools run without approval and may reach any address, including
 this server and the LAN. They cannot reach excluded containers, ports that
-excluded containers publish on this server, or the hostnames and addresses in
-`network.exclude`. A listed hostname blocks the addresses it resolves to as
-well, so another name for the same server cannot reach it. Latch resolves
+excluded containers publish on this server, the hostnames and addresses in
+`network.exclude`, or the cloud metadata addresses (such as `169.254.169.254`)
+where cloud servers hand out their own credentials. A listed hostname blocks
+the addresses it resolves to as well, so another name for the same server
+cannot reach it. Latch resolves
 names itself and checks the address again when it connects, so a changing DNS
 answer or a redirect cannot get around this. Ping needs unprivileged ICMP (`net.ipv4.ping_group_range`, open on
 Debian by default).

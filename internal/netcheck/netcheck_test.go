@@ -566,3 +566,21 @@ func TestExcludedNameAddressesBlocked(t *testing.T) {
 		t.Errorf("after a failed lookup: %v", err)
 	}
 }
+
+// Cloud metadata addresses hand out the server's cloud credentials; no name,
+// spelling or tool may reach them.
+func TestCloudMetadataBlocked(t *testing.T) {
+	e := newEnv(t)
+	e.name("metadata.google.internal", addrs("169.254.169.254"))
+	for _, host := range []string{
+		"169.254.169.254", "::ffff:169.254.169.254", "64:ff9b::a9fe:a9fe", "metadata.google.internal",
+		"fd00:ec2::254", "169.254.170.2", "100.100.100.200", "168.63.129.16",
+	} {
+		if _, err := e.p.TCP(context.Background(), host, 80); !errors.Is(err, ErrNotAllowed) {
+			t.Errorf("TCP(%s) = %v, want ErrNotAllowed", host, err)
+		}
+	}
+	if _, err := e.p.HTTPGet(context.Background(), "http://169.254.169.254/latest/meta-data/", false); !errors.Is(err, ErrNotAllowed) {
+		t.Errorf("HTTPGet = %v", err)
+	}
+}

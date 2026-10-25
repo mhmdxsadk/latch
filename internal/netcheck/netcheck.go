@@ -296,8 +296,19 @@ func (g *guard) allowed(a netip.Addr, port uint16) bool {
 	return true
 }
 
+// cloudMetadata are the addresses where cloud servers hand out their own
+// credentials to any program that asks. They are always blocked: on a cloud
+// server a plain GET there returns keys to the cloud account.
+var cloudMetadata = []netip.Addr{
+	netip.MustParseAddr("169.254.169.254"), // AWS, Google Cloud, Azure, Oracle, DigitalOcean, Hetzner and others
+	netip.MustParseAddr("fd00:ec2::254"),   // AWS over IPv6
+	netip.MustParseAddr("169.254.170.2"),   // AWS ECS task credentials
+	netip.MustParseAddr("100.100.100.200"), // Alibaba Cloud
+	netip.MustParseAddr("168.63.129.16"),   // Azure WireServer
+}
+
 func (g *guard) allowedOne(a netip.Addr, port uint16) bool {
-	if !a.IsValid() || g.snap.HasAddr(a) || g.p.rules.NetworkAddrExcluded(a) || slices.Contains(g.nameAddrs, a) {
+	if !a.IsValid() || slices.Contains(cloudMetadata, a) || g.snap.HasAddr(a) || g.p.rules.NetworkAddrExcluded(a) || slices.Contains(g.nameAddrs, a) {
 		return false
 	}
 	if port == 0 || !g.snap.HasPort(port) {
