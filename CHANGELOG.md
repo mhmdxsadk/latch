@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.10.0](https://github.com/mhmdxsadk/latch/compare/v0.9.1...v0.10.0) (2026-10-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **mcp:** action_status and actions_list are now request_status and request_list. Update agent prompts that name them.
+* the host.disks and health.dns config sections and the list_resources and dns_check tools are removed. Delete both sections from the config before upgrading.
+
+### Features
+
+* **files:** apply compose file edits with docker compose up ([7dbef43](https://github.com/mhmdxsadk/latch/commit/7dbef439203cc2e356cf1b1dc2605a98565bfacd))
+* **files:** hide compose files of excluded containers ([ddfaf49](https://github.com/mhmdxsadk/latch/commit/ddfaf49d72ebec540f539638805beebb7b3ddc49))
+* **files:** let the owner choose after a failed change ([53542f8](https://github.com/mhmdxsadk/latch/commit/53542f890410fb0cec901e616596a1aaca98e683))
+* **mcp:** rename action tools to request_status and request_list ([fb88c42](https://github.com/mhmdxsadk/latch/commit/fb88c42013eb93ea299ba6de4a657a4d79302589))
+* report every disk, drop dns_check and list_resources ([cbcdcfe](https://github.com/mhmdxsadk/latch/commit/cbcdcfea39a5a1531a1f488a0b5579ce67e3677f))
+
+
+### Bug Fixes
+
+* **approval:** keep request ids counting across restarts ([0cfcf73](https://github.com/mhmdxsadk/latch/commit/0cfcf73e05eaed8bf64be4ddb86a90726a866298))
+* **mcp:** list every change that needs approval ([248dbff](https://github.com/mhmdxsadk/latch/commit/248dbff805b62131d6d8ec168b231b6b0c1008a0))
+
 ## [0.9.1](https://github.com/mhmdxsadk/latch/compare/v0.9.0...v0.9.1) (2026-10-25)
 
 
