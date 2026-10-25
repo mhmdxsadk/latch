@@ -127,7 +127,7 @@ func TestFileEditKeepsHiddenValues(t *testing.T) {
 	if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o640 {
 		t.Errorf("mode %v", fi.Mode())
 	}
-	done := f.act(t, "action_status", map[string]any{"id": out.ID})
+	done := f.act(t, "request_status", map[string]any{"id": out.ID})
 	if done.Status != "done" || !strings.Contains(done.Result.Summary, "edited "+p+", backup ") {
 		t.Errorf("status %+v", done)
 	}
@@ -175,7 +175,7 @@ func TestFileEditRefusesChangedFile(t *testing.T) {
 	out := f.act(t, "file_edit", map[string]any{"path": p, "old": "a=1", "new": "a=2"})
 	f.write(t, "a.conf", "a=1\nb=1\n")
 	f.approve(t, out.ID)
-	done := f.act(t, "action_status", map[string]any{"id": out.ID})
+	done := f.act(t, "request_status", map[string]any{"id": out.ID})
 	if done.Status != "failed" || !strings.Contains(done.Result.Summary, "changed") || read(t, p) != "a=1\nb=1\n" {
 		t.Errorf("got %+v, file %q", done, read(t, p))
 	}
@@ -194,7 +194,7 @@ func TestFileEditRefusesSymlinkSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.approve(t, out.ID)
-	done := f.act(t, "action_status", map[string]any{"id": out.ID})
+	done := f.act(t, "request_status", map[string]any{"id": out.ID})
 	if done.Status != "failed" || read(t, other) != "a=1\n" {
 		t.Errorf("got %+v, target %q", done, read(t, other))
 	}
@@ -210,7 +210,7 @@ func TestFileEditRestartUp(t *testing.T) {
 	}
 	out := f.act(t, "file_edit", map[string]any{"path": p, "old": "listen 80", "new": "listen 81", "restart": map[string]any{"container": "my-web"}})
 	f.approve(t, out.ID)
-	done := f.act(t, "action_status", map[string]any{"id": out.ID})
+	done := f.act(t, "request_status", map[string]any{"id": out.ID})
 	if done.Status != "done" || !strings.Contains(done.Result.Summary, "restarted container my-web, up") || read(t, p) != "listen 81\n" {
 		t.Fatalf("up: %+v %q", done, read(t, p))
 	}
@@ -229,7 +229,7 @@ func failEdit(t *testing.T, f *editHarness) (p string, edit, undo int64) {
 	p = f.write(t, "web.conf", "listen 80\n")
 	out := f.act(t, "file_edit", map[string]any{"path": p, "old": "listen 80", "new": "listen 81", "restart": map[string]any{"unit": "nginx.service"}})
 	f.approve(t, out.ID)
-	done := f.act(t, "action_status", map[string]any{"id": out.ID})
+	done := f.act(t, "request_status", map[string]any{"id": out.ID})
 	if done.Status != "failed" || !strings.Contains(done.Result.Summary, "the change stays for now") || read(t, p) != "listen 81\n" {
 		t.Fatalf("failed edit: %+v %q", done, read(t, p))
 	}
@@ -313,7 +313,7 @@ func TestRestartWaitsForHealthCheck(t *testing.T) {
 	p := f.write(t, "web.conf", "listen 80\n")
 	out := f.act(t, "file_edit", map[string]any{"path": p, "old": "listen 80", "new": "listen 81", "restart": map[string]any{"container": "my-web"}})
 	f.approve(t, out.ID)
-	done := f.act(t, "action_status", map[string]any{"id": out.ID})
+	done := f.act(t, "request_status", map[string]any{"id": out.ID})
 	if done.Status != "done" || !strings.Contains(done.Result.Summary, "health check was still starting") {
 		t.Errorf("still starting: %+v", done.Result)
 	}
@@ -321,7 +321,7 @@ func TestRestartWaitsForHealthCheck(t *testing.T) {
 	f.dk.setHealth("unhealthy")
 	out = f.act(t, "file_edit", map[string]any{"path": p, "old": "listen 81", "new": "listen 82", "restart": map[string]any{"container": "my-web"}})
 	f.approve(t, out.ID)
-	done = f.act(t, "action_status", map[string]any{"id": out.ID})
+	done = f.act(t, "request_status", map[string]any{"id": out.ID})
 	if done.Status != "failed" || !strings.Contains(done.Result.Summary, "container my-web was unhealthy") {
 		t.Errorf("unhealthy: %+v", done.Result)
 	}
@@ -428,7 +428,7 @@ func TestHTTPRequestNeedsApproval(t *testing.T) {
 		}
 	}
 	f.approve(t, out.ID)
-	done := f.act(t, "action_status", map[string]any{"id": out.ID})
+	done := f.act(t, "request_status", map[string]any{"id": out.ID})
 	if done.Status != "done" || done.Result.Summary != "POST https://api.example/v1/x: status 201" || len(f.http.sent) != 1 {
 		t.Errorf("got %+v %v", done, f.http.sent)
 	}
@@ -448,7 +448,7 @@ func TestHTTPRequestNeedsApproval(t *testing.T) {
 	out = f.act(t, "http_request", map[string]any{"method": "DELETE", "url": "https://api.example/v1/x"})
 	f.http.target = netcheck.ErrNotAllowed
 	f.approve(t, out.ID)
-	if done := f.act(t, "action_status", map[string]any{"id": out.ID}); done.Status != "failed" || len(f.http.sent) != 1 {
+	if done := f.act(t, "request_status", map[string]any{"id": out.ID}); done.Status != "failed" || len(f.http.sent) != 1 {
 		t.Errorf("re-check: %+v", done)
 	}
 }

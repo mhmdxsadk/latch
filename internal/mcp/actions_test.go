@@ -278,10 +278,10 @@ func TestAgentCannotApprove(t *testing.T) {
 		}
 	}
 	for _, args := range []map[string]any{{"id": out.ID, "approve": true}, {"id": out.ID, "status": "approved"}} {
-		a.refusal(t, "action_status", args)
+		a.refusal(t, "request_status", args)
 	}
 	a.store.Wait()
-	if got := a.act(t, "action_status", map[string]any{"id": out.ID}); got.Status != "pending" || len(a.da.Calls()) != 0 {
+	if got := a.act(t, "request_status", map[string]any{"id": out.ID}); got.Status != "pending" || len(a.da.Calls()) != 0 {
 		t.Errorf("request moved without the owner: %+v %v", got, a.da.Calls())
 	}
 }
@@ -298,7 +298,7 @@ func TestDockerRestartRunsAutomatically(t *testing.T) {
 	if got := a.da.Calls(); !slices.Equal(got, []string{"restart my-web"}) {
 		t.Errorf("calls %v", got)
 	}
-	st := a.act(t, "action_status", map[string]any{"id": out.ID})
+	st := a.act(t, "request_status", map[string]any{"id": out.ID})
 	if st.Status != "done" || st.Message != "request 1 is done" || st.FinishedAt == "" {
 		t.Errorf("status %+v", st)
 	}
@@ -323,7 +323,7 @@ func TestRestartRateLimitBecomesApproval(t *testing.T) {
 		t.Errorf("executed %d", n)
 	}
 	a.approve(t, out.ID)
-	if got := a.act(t, "action_status", map[string]any{"id": out.ID}); got.Status != "done" || got.Result.Summary != "systemd job result done; unit is active (running)" {
+	if got := a.act(t, "request_status", map[string]any{"id": out.ID}); got.Status != "done" || got.Result.Summary != "systemd job result done; unit is active (running)" {
 		t.Errorf("got %+v", got)
 	}
 	// The window slides: an hour after the first restart, one runs again.
@@ -389,10 +389,10 @@ func TestStopAndStartAlwaysNeedApproval(t *testing.T) {
 	if got := a.sa.Calls(); !slices.Equal(got, []string{"stop nginx.service", "start nginx.service"}) {
 		t.Errorf("systemd calls %v", got)
 	}
-	if got := a.act(t, "action_status", map[string]any{"id": ids[1]}); got.Result.Summary != "container my-web was already running; state running, health healthy" {
+	if got := a.act(t, "request_status", map[string]any{"id": ids[1]}); got.Result.Summary != "container my-web was already running; state running, health healthy" {
 		t.Errorf("got %+v", got.Result)
 	}
-	list := structured[actionsListOut](t, a.harness, "actions_list", map[string]any{})
+	list := structured[actionsListOut](t, a.harness, "request_list", map[string]any{})
 	if len(list.Requests) != 4 || list.Requests[0].ID != ids[0] {
 		t.Errorf("list %+v", list)
 	}
@@ -448,9 +448,9 @@ func TestInvalidInputRejectedBeforeIntegration(t *testing.T) {
 		a.refusal(t, tool, map[string]any{"unit": "nginx.service", "mode": "isolate"})
 	}
 	for _, id := range []any{0, -1, "1", 1.5, nil} {
-		a.refusal(t, "action_status", map[string]any{"id": id})
+		a.refusal(t, "request_status", map[string]any{"id": id})
 	}
-	if msg := a.refusal(t, "action_status", map[string]any{"id": 99}); !strings.Contains(msg, "does not exist") {
+	if msg := a.refusal(t, "request_status", map[string]any{"id": 99}); !strings.Contains(msg, "does not exist") {
 		t.Errorf("unknown id: %q", msg)
 	}
 	a.dk.mu.Lock()
@@ -483,7 +483,7 @@ func TestComposeUpWaitsAndRunsStoredTarget(t *testing.T) {
 	if len(a.da.composed) != 1 || !a.da.composed[0].Same(composeTarget()) || !a.da.pulls[0] {
 		t.Fatalf("ran %+v %v", a.da.composed, a.da.pulls)
 	}
-	got := a.act(t, "action_status", map[string]any{"id": out.ID})
+	got := a.act(t, "request_status", map[string]any{"id": out.ID})
 	if got.Status != "done" || got.Result.Summary != "docker compose exited with status 0" || len(got.Result.Details) != 2 {
 		t.Errorf("got %+v", got)
 	}
@@ -496,7 +496,7 @@ func TestComposeUpFailureReportsExitStatus(t *testing.T) {
 	a.da.composeErr = docker.ErrComposeFailed
 	out := a.act(t, "docker_compose_up", map[string]any{"name": "my-web"})
 	a.approve(t, out.ID)
-	got := a.act(t, "action_status", map[string]any{"id": out.ID})
+	got := a.act(t, "request_status", map[string]any{"id": out.ID})
 	if got.Status != "failed" || got.Result.Summary != "docker compose exited with status 1" || len(got.Result.Details) != 1 {
 		t.Errorf("got %+v", got)
 	}
@@ -533,7 +533,7 @@ func TestComposeLabelsChangedBeforeApproval(t *testing.T) {
 	a.da.target.ConfigFiles = []string{"/srv/other/compose.yaml"}
 	a.da.mu.Unlock()
 	a.approve(t, out.ID)
-	got := a.act(t, "action_status", map[string]any{"id": out.ID})
+	got := a.act(t, "request_status", map[string]any{"id": out.ID})
 	if got.Status != "failed" || !strings.Contains(got.Result.Summary, "compose labels changed") || len(a.da.composed) != 0 {
 		t.Errorf("got %+v, ran %v", got, a.da.composed)
 	}
@@ -544,7 +544,7 @@ func TestResourceGoneBeforeApprovalFails(t *testing.T) {
 	out := a.act(t, "docker_stop", map[string]any{"name": "my-web"})
 	a.dk.setMissing("my-web")
 	a.approve(t, out.ID)
-	got := a.act(t, "action_status", map[string]any{"id": out.ID})
+	got := a.act(t, "request_status", map[string]any{"id": out.ID})
 	if got.Status != "failed" || got.Result.Summary != "the resource no longer exists or is not allowed" || len(a.da.Calls()) != 0 {
 		t.Errorf("got %+v %v", got, a.da.Calls())
 	}
@@ -575,7 +575,7 @@ func TestBusyResourceRefused(t *testing.T) {
 	}
 	close(a.da.block)
 	a.store.Wait()
-	if got := a.act(t, "action_status", map[string]any{"id": out.ID}); got.Status != "done" {
+	if got := a.act(t, "request_status", map[string]any{"id": out.ID}); got.Status != "done" {
 		t.Errorf("got %+v", got)
 	}
 }

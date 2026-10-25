@@ -153,7 +153,7 @@ These tools change something:
   back. Restoring backs up the current content first.
 - `http_request` sends a POST, PUT, PATCH or DELETE with a text body. The
   targets are checked like `net_http_get`, and redirects are not followed.
-- `action_status` and `actions_list` show what happened to a request.
+- `request_status` and `request_list` show what happened to a request.
 
 File changes and HTTP requests always wait for your approval. `latch pending`
 shows the diff of the change as the agent sees the file (with `[hidden]`

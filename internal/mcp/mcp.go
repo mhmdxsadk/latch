@@ -242,8 +242,8 @@ func NewServer(d *Deps) *sdk.Server {
 			"Reading is automatic. Restarting a container or unit runs automatically within a limit; every other change " +
 			"(stop, start, docker_compose_up, file edits, creates and restores, http_request) waits for the server owner's " +
 			"approval. A change tool returns a request id: when its status is " +
-			"\"pending\", tell the user the id and check action_status later. Never claim a change happened until " +
-			"action_status says \"done\". There are no arbitrary commands.",
+			"\"pending\", tell the user the id and check request_status later. Never claim a change happened until " +
+			"request_status says \"done\". There are no arbitrary commands.",
 	})
 	registerHost(s, d)
 	registerDocker(s, d)

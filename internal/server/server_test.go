@@ -151,7 +151,7 @@ func TestMCPClientOverUnixSocketInGroup(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	defer cs.Close()
-	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "actions_list", Arguments: map[string]any{}})
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "request_list", Arguments: map[string]any{}})
 	if err != nil || res.IsError {
 		t.Fatalf("call: %v %+v", err, res)
 	}
@@ -205,7 +205,7 @@ func TestMCPClientAtSocketRoot(t *testing.T) {
 		t.Fatalf("connect at /: %v", err)
 	}
 	defer cs.Close()
-	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "actions_list", Arguments: map[string]any{}})
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "request_list", Arguments: map[string]any{}})
 	if err != nil || res.IsError {
 		t.Fatalf("call: %v %+v", err, res)
 	}
