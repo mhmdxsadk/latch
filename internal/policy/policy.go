@@ -37,10 +37,24 @@ var (
 type Policy struct {
 	dockerExclude  []string
 	systemdExclude []string
+	dockerApprove  []string
+	systemdApprove []string
 	disks          map[string]config.Disk
 	dns            map[string]config.DNSTarget
 	limits         config.Limits
 	ordered        map[Kind][]string
+}
+
+// BuiltinApproveUnits are units whose every change needs the owner's
+// approval, whatever the config says: losing one of them can cut the owner
+// off from the server or take Latch itself down.
+var BuiltinApproveUnits = []string{
+	"docker.service",
+	"ssh.service",
+	"sshd.service",
+	"systemd-networkd.service",
+	"networking.service",
+	"latch.service",
 }
 
 // New builds a Policy from a config that has already passed Validate.
@@ -48,6 +62,8 @@ func New(c *config.Config) *Policy {
 	p := &Policy{
 		dockerExclude:  slices.Clone(c.Docker.Exclude),
 		systemdExclude: slices.Clone(c.Systemd.Exclude),
+		dockerApprove:  slices.Clone(c.Docker.Approve),
+		systemdApprove: append(slices.Clone(BuiltinApproveUnits), c.Systemd.Approve...),
 		disks:          map[string]config.Disk{},
 		dns:            map[string]config.DNSTarget{},
 		limits:         c.Limits,
@@ -105,6 +121,18 @@ func (p *Policy) SystemdUnit(name string) (string, error) {
 // listings; lookups go through SystemdUnit.
 func (p *Policy) UnitVisible(name string) bool {
 	return !config.MatchesAny(p.systemdExclude, name)
+}
+
+// ContainerNeedsApproval reports whether every change to the container, even
+// a restart, must wait for the owner's approval (docker.approve).
+func (p *Policy) ContainerNeedsApproval(name string) bool {
+	return config.MatchesAny(p.dockerApprove, name)
+}
+
+// UnitNeedsApproval reports whether every change to the unit, even a restart,
+// must wait for the owner's approval (systemd.approve or the built-in list).
+func (p *Policy) UnitNeedsApproval(name string) bool {
+	return config.MatchesAny(p.systemdApprove, name)
 }
 
 // Disk resolves an agent-supplied disk name.
