@@ -107,6 +107,20 @@ func TestPendingApproveDenyCommands(t *testing.T) {
 	if runs.Load() != 1 || a.ID != 1 || b.ID != 2 {
 		t.Errorf("runs = %d", runs.Load())
 	}
+
+	// latch requests shows how each ended.
+	out.Reset()
+	if code := run([]string{"requests", "--admin-socket", sock}, &out, &errb); code != 0 {
+		t.Fatalf("requests: %d %s", code, errb.String())
+	}
+	for _, want := range []string{
+		"request 1  docker_stop  jellyfin  done\n  asked less than a minute ago, finished less than a minute ago\n  result: stopped\n",
+		"request 2  docker_stop  caddy  denied\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("requests output missing %q:\n%s", want, out.String())
+		}
+	}
 }
 
 func TestDecideArgumentErrors(t *testing.T) {

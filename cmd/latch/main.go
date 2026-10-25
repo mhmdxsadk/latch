@@ -60,6 +60,7 @@ Commands:
   pending    List changes waiting for approval
   approve    Approve a pending change: latch approve ID
   deny       Deny a pending change: latch deny ID
+  requests   List recent changes and how they ended
   version    Print version information
 
 Run "latch <command> -h" for command flags.
@@ -87,6 +88,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdDecide("approve", args[1:], stdout, stderr)
 	case "deny":
 		return cmdDecide("deny", args[1:], stdout, stderr)
+	case "requests":
+		return cmdRequests(args[1:], stdout, stderr)
 	case "version", "--version", "-v":
 		fmt.Fprint(stdout, versionText(version, commit, runtime.GOOS, runtime.GOARCH))
 		return 0

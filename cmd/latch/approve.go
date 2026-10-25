@@ -50,14 +50,25 @@ func connError(stderr io.Writer, sock string, err error) {
 }
 
 func cmdPending(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("pending", flag.ContinueOnError)
+	return listCommand("pending", args, stdout, stderr, (*admin.Client).Pending, printPending)
+}
+
+func cmdRequests(args []string, stdout, stderr io.Writer) int {
+	return listCommand("requests", args, stdout, stderr, (*admin.Client).Recent, printRequests)
+}
+
+// listCommand runs a command that fetches requests and prints them.
+func listCommand(name string, args []string, stdout, stderr io.Writer,
+	fetch func(*admin.Client, context.Context) ([]approval.Request, error),
+	print func(io.Writer, []approval.Request, time.Time)) int {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	socket := adminFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "latch: pending takes no arguments")
+		fmt.Fprintf(stderr, "latch: %s takes no arguments\n", name)
 		return 2
 	}
 	sock, ok := socket(stderr)
@@ -66,7 +77,7 @@ func cmdPending(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), adminTimeout)
 	defer cancel()
-	reqs, err := admin.NewClient(sock).Pending(ctx)
+	reqs, err := fetch(admin.NewClient(sock), ctx)
 	var ae *admin.APIError
 	switch {
 	case errors.As(err, &ae):
@@ -76,8 +87,38 @@ func cmdPending(args []string, stdout, stderr io.Writer) int {
 		connError(stderr, sock, err)
 		return 1
 	}
-	printPending(stdout, reqs, time.Now())
+	print(stdout, reqs, time.Now())
 	return 0
+}
+
+// printRequests prints one plain block per recent request with its outcome:
+//
+//	request 42  docker_stop  jellyfin  done
+//	  asked 3 minutes ago, finished 2 minutes ago
+//	  result: stopped; container state exited
+func printRequests(w io.Writer, reqs []approval.Request, now time.Time) {
+	if len(reqs) == 0 {
+		fmt.Fprintln(w, "latch: no requests")
+		return
+	}
+	clean := func(s string) string { return textsafe.Line(s) }
+	for i, r := range reqs {
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintf(w, "request %d  %s  %s  %s\n", r.ID, clean(r.Action), clean(r.Resource.Name), clean(string(r.Status)))
+		when := "asked " + ago(now.Sub(r.CreatedAt))
+		if !r.FinishedAt.IsZero() {
+			when += ", finished " + ago(now.Sub(r.FinishedAt))
+		}
+		fmt.Fprintf(w, "  %s\n", when)
+		if r.Result != nil {
+			fmt.Fprintf(w, "  result: %s\n", clean(r.Result.Summary))
+			for _, d := range r.Result.Details {
+				fmt.Fprintf(w, "    %s\n", clean(d))
+			}
+		}
+	}
 }
 
 // printPending prints one plain block per request, like:

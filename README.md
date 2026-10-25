@@ -149,6 +149,7 @@ you. On the server, as root:
 sudo latch pending       # every waiting request, with what exactly will run
 sudo latch approve 42
 sudo latch deny 42
+sudo latch requests      # recent changes and how they ended
 ```
 
 Latch then runs exactly that request, once. Requests expire after an hour.
