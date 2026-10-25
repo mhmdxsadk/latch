@@ -155,10 +155,13 @@ socket (`/run/latch/admin.sock`) that only root can use.
 
 To protect a container or unit, list it under `docker.approve` or
 `systemd.approve` (same patterns as `exclude`). It stays readable, but every
-change to it, restarts included, waits for your approval. `docker.service`,
-`ssh.service`, `sshd.service`, `systemd-networkd.service`,
-`networking.service` and `latch.service` are always on that list. Excluded
-resources cannot be changed at all.
+change to it, restarts included, waits for your approval. Some units are
+always on that list, because losing them can lock you out or stop every
+container: Docker and containerd (with `docker.socket`), SSH (with
+`ssh.socket`), D-Bus, every `systemd-*` unit, networking and firewall
+services, and `latch.service`. Only services restart automatically; restarting
+a timer, socket, target or mount always waits for approval. Excluded resources
+cannot be changed at all.
 
 Run `latch doctor` to check that every configured resource is reachable.
 

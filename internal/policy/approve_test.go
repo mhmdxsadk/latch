@@ -28,6 +28,11 @@ systemd: {approve: [cron.service]}
 		"cron.service": true, "nginx.service": false,
 		"docker.service": true, "ssh.service": true, "sshd.service": true,
 		"systemd-networkd.service": true, "networking.service": true, "latch.service": true,
+		"systemd-resolved.service": true, "docker.socket": true, "containerd.service": true, "dbus.service": true,
+		// Only services restart automatically; other unit types change many
+		// services at once.
+		"cron.timer": true, "shutdown.target": true, "reboot.target": true, "nginx.socket": true, "srv.mount": true,
+		"nginx@a.service": false,
 	} {
 		if got := p.UnitNeedsApproval(name); got != want {
 			t.Errorf("unit %s: %v", name, got)

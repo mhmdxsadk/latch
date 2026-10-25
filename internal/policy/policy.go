@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 
 	"github.com/mhmdxsadk/latch/internal/config"
 )
@@ -50,13 +51,15 @@ type Policy struct {
 
 // BuiltinApproveUnits are units whose every change needs the owner's
 // approval, whatever the config says: losing one of them can cut the owner
-// off from the server or take Latch itself down.
+// off from the server or take Latch itself down. Restarting a unit restarts
+// the units that depend on it, so the sockets and daemons these rely on are
+// listed too. Patterns use the exclude syntax.
 var BuiltinApproveUnits = []string{
-	"docker.service",
-	"ssh.service",
-	"sshd.service",
-	"systemd-networkd.service",
-	"networking.service",
+	"docker.service", "docker.socket", "containerd.service",
+	"ssh.service", "sshd.service", "ssh.socket",
+	"systemd-*", "dbus.service", "dbus.socket", "dbus-broker.service",
+	"networking.service", "NetworkManager.service", "wpa_supplicant.service",
+	"nftables.service", "ufw.service", "firewalld.service", "netfilter-persistent.service",
 	"latch.service",
 }
 
@@ -143,8 +146,12 @@ func (p *Policy) ContainerNeedsApproval(name string) bool {
 
 // UnitNeedsApproval reports whether every change to the unit, even a restart,
 // must wait for the owner's approval (systemd.approve or the built-in list).
+//
+// Only services restart without approval: restarting a target, socket, mount
+// or other unit type can stop many services at once (shutdown.target,
+// docker.socket), so those always need approval.
 func (p *Policy) UnitNeedsApproval(name string) bool {
-	return config.MatchesAny(p.systemdApprove, name)
+	return !strings.HasSuffix(name, ".service") || config.MatchesAny(p.systemdApprove, name)
 }
 
 // Disk resolves an agent-supplied disk name.
