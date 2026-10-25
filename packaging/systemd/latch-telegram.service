@@ -15,9 +15,10 @@ ExecStart=/usr/local/bin/latch-telegram serve --config /etc/latch/telegram.yaml
 Restart=on-failure
 RestartSec=10s
 
-# The bot token, from a root-only file. The service reads it from
-# $CREDENTIALS_DIRECTORY; it never reaches the agent.
-LoadCredential=telegram-token:/etc/latch/telegram-token
+# The bot token comes from token_file in telegram.yaml (a root-only file,
+# or a secrets manager's env file with token_key). It never reaches the
+# agent. A missing token makes the service exit and retry every 10 seconds,
+# so it starts as soon as a secrets manager has written the file.
 
 # Which requests were shown and the conversation list.
 StateDirectory=latch-telegram

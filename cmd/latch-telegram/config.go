@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,8 +21,8 @@ const (
 	defaultAdminSocket = "/run/latch/admin.sock"
 	defaultStateDir    = "/var/lib/latch-telegram"
 	defaultCommand     = "/usr/local/bin/docker-agent"
-	// credentialName is the systemd credential holding the token
-	// (LoadCredential=telegram-token:/etc/latch/telegram-token).
+	// credentialName is a systemd credential that, when a unit override
+	// passes one (LoadCredential=telegram-token:PATH), replaces token_file.
 	credentialName = "telegram-token"
 	maxConfigBytes = 64 << 10
 	maxTimeout     = time.Hour
@@ -30,8 +31,11 @@ const (
 // Config is /etc/latch/telegram.yaml. Unknown keys are refused.
 type Config struct {
 	// OwnerID is the owner's Telegram user id. Nobody else is answered.
-	OwnerID     int64  `yaml:"owner_id"`
-	TokenFile   string `yaml:"token_file"`
+	OwnerID   int64  `yaml:"owner_id"`
+	TokenFile string `yaml:"token_file"`
+	// TokenKey, when set, reads token_file as KEY=value lines (an env file,
+	// for example one a secrets manager writes) and takes this key.
+	TokenKey    string `yaml:"token_key"`
 	AdminSocket string `yaml:"admin_socket"`
 	StateDir    string `yaml:"state_dir"`
 	// Agent is optional: without it the bot only handles approvals.
@@ -66,6 +70,7 @@ var (
 	userName = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 	label    = regexp.MustCompile(`^[A-Za-z0-9 _.-]{1,32}$`)
 	token    = regexp.MustCompile(`^[0-9]{1,20}:[A-Za-z0-9_-]{30,100}$`)
+	envKey   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 	// argPattern keeps extra args to plain flags and values.
 	argPattern = regexp.MustCompile(`^[A-Za-z0-9_./=:,@+-]{1,200}$`)
 )
@@ -136,6 +141,9 @@ func (c *Config) validate() error {
 		}
 	}
 	absPath("token_file", c.TokenFile)
+	if c.TokenKey != "" && !envKey.MatchString(c.TokenKey) {
+		add("token_key: %q must be an environment variable name like TELEGRAM_BOT_TOKEN", c.TokenKey)
+	}
 	absPath("admin_socket", c.AdminSocket)
 	absPath("state_dir", c.StateDir)
 	if a := c.Agent; a != nil {
@@ -166,7 +174,9 @@ func (c *Config) validate() error {
 }
 
 // readToken reads the bot token: the systemd credential when the unit passes
-// one, otherwise token_file, which must be readable by its owner only.
+// one, otherwise token_file, which must be readable by its owner only. With
+// token_key the file is KEY=value lines and the token is that key's value.
+// Errors never include the file's content.
 func readToken(c *Config) (string, error) {
 	path := c.TokenFile
 	if dir := os.Getenv("CREDENTIALS_DIRECTORY"); dir != "" {
@@ -186,10 +196,51 @@ func readToken(c *Config) (string, error) {
 		return "", err
 	}
 	t := strings.TrimSpace(string(b))
+	if c.TokenKey != "" {
+		v, ok := envValue(string(b), c.TokenKey)
+		if !ok {
+			return "", fmt.Errorf("%s: no %s line", path, c.TokenKey)
+		}
+		t = strings.TrimSpace(v)
+	}
 	if !token.MatchString(t) {
-		return "", fmt.Errorf("%s: does not look like a bot token from @BotFather", path)
+		what := path
+		if c.TokenKey != "" {
+			what += ": " + c.TokenKey
+		}
+		return "", fmt.Errorf("%s: does not look like a bot token from @BotFather", what)
 	}
 	return t, nil
+}
+
+// envValue returns key's value from env-file text: KEY=value lines, with
+// optional "export ", and a value that is bare, 'single-quoted' or a
+// "double-quoted" JSON string (the form secrets managers write with jq @json).
+// The last line for key wins.
+func envValue(text, key string) (string, bool) {
+	var val string
+	found := false
+	for line := range strings.Lines(text) {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "export ")
+		k, v, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(k) != key {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		switch {
+		case len(v) >= 2 && v[0] == '"':
+			var s string
+			if json.Unmarshal([]byte(v), &s) != nil {
+				return "", false
+			}
+			v = s
+		case len(v) >= 2 && v[0] == '\'' && v[len(v)-1] == '\'':
+			v = v[1 : len(v)-1]
+		}
+		val, found = v, true
+	}
+	return val, found
 }
 
 func fileExists(p string) bool {

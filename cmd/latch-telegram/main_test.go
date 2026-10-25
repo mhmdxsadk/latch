@@ -62,6 +62,43 @@ func TestConfigErrors(t *testing.T) {
 	}
 }
 
+func TestReadTokenFromEnvFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "secrets.env")
+	good := "123456:" + strings.Repeat("B", 35)
+	// The form the owner's secrets broker writes: sorted KEY="json" lines.
+	os.WriteFile(p, []byte("OTHER=\"x\"\nTELEGRAM_BOT_TOKEN=\""+good+"\"\n"), 0o600)
+	c := &Config{TokenFile: p, TokenKey: "TELEGRAM_BOT_TOKEN"}
+	if tok, err := readToken(c); err != nil || tok != good {
+		t.Fatalf("%q %v", tok, err)
+	}
+	c.TokenKey = "MISSING"
+	if _, err := readToken(c); err == nil || !strings.Contains(err.Error(), "no MISSING line") {
+		t.Fatalf("missing key: %v", err)
+	}
+	os.WriteFile(p, []byte("TELEGRAM_BOT_TOKEN=\"not-a-token-secret\"\n"), 0o600)
+	c.TokenKey = "TELEGRAM_BOT_TOKEN"
+	if _, err := readToken(c); err == nil || strings.Contains(err.Error(), "not-a-token-secret") {
+		t.Fatalf("bad token: %v", err)
+	}
+	for _, tc := range []struct{ text, want string }{
+		{"K=plain", "plain"},
+		{"export K='single'", "single"},
+		{"K=\"a\\u0021\"", "a!"},
+		{"# K=comment\nK=last\nK=final", "final"},
+		{"  K = spaced ", "spaced"},
+	} {
+		if v, ok := envValue(tc.text, "K"); !ok || v != tc.want {
+			t.Errorf("%q: %q %v", tc.text, v, ok)
+		}
+	}
+	if _, ok := envValue("KEY=x\nK2=y", "K"); ok {
+		t.Error("matched a different key")
+	}
+	if _, err := loadConfig(writeConfig(t, "owner_id: 1\ntoken_key: \"bad key\"\n")); err == nil || !strings.Contains(err.Error(), "token_key") {
+		t.Errorf("bad token_key: %v", err)
+	}
+}
+
 func TestReadToken(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "token")

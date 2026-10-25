@@ -284,7 +284,9 @@ How it stays safe:
   with `sudo latch approve <id>` after reading it in full.
 - The bridge runs as root because the admin socket only accepts root, with
   only the capabilities it needs to start and stop the agent. The bot token
-  stays in a root-only file and never reaches the agent or the latch daemon.
+  must be in a root-only file and never reaches the agent or the latch
+  daemon. Keep that file out of the agent's reach too: under `/etc/latch`,
+  or in a folder listed in `files.exclude`.
 - Telegram bot chats are not end-to-end encrypted. What the agent shows you
   (logs, config files) passes through Telegram's servers. Hidden values stay
   hidden, but excluding a resource is the real protection.
@@ -293,7 +295,8 @@ To set it up:
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and save its token:
    `sudo install -m 600 /dev/null /etc/latch/telegram-token`, then put the
-   token in that file.
+   token in that file. If a secrets manager writes an env file for you,
+   point `token_file` at it and set `token_key` to the variable instead.
 2. Find your user id (for example with @userinfobot) and copy the example:
    `sudo cp /etc/latch/telegram.example.yaml /etc/latch/telegram.yaml`.
    Set `owner_id`, and either fill in the `agent` section or remove it for

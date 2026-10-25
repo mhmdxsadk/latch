@@ -5,9 +5,13 @@
 # with the bot; everyone else is ignored. Ask @userinfobot for your id.
 owner_id: 123456789
 
-# The bot token from @BotFather, alone in a file (root, mode 0600). The
-# systemd unit passes it to the service as a credential.
+# The bot token from @BotFather, alone in a file (root, mode 0600).
 # token_file: /etc/latch/telegram-token
+#
+# Or take it from an env file a secrets manager writes (KEY=value lines;
+# quoted values are fine), still root-only:
+# token_file: /run/secrets-broker/latch/secrets.env
+# token_key: TELEGRAM_BOT_TOKEN
 
 # admin_socket: /run/latch/admin.sock
 # state_dir: /var/lib/latch-telegram

@@ -75,7 +75,11 @@ func doctor(ctx context.Context, cfg *Config, in checks, out io.Writer) bool {
 	check("running as root", rootErr, "run doctor with sudo; the service runs as root to reach the admin socket")
 
 	tok, err := in.token(cfg)
-	check("bot token", err, "put the token from @BotFather in "+cfg.TokenFile+" (root, mode 0600)")
+	hint := "put the token from @BotFather in " + cfg.TokenFile + " (root, mode 0600)"
+	if cfg.TokenKey != "" {
+		hint = "add " + cfg.TokenKey + " to " + cfg.TokenFile + " (root, mode 0600), for example through your secrets manager"
+	}
+	check("bot token", err, hint)
 	if err == nil {
 		check("bot token accepted by Telegram", in.botMe(ctx, tok), "check the token, and that this server can reach api.telegram.org")
 	}
