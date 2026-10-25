@@ -76,6 +76,8 @@ excluding the container is the real one.
   restart.
 - `systemd_logs` returns recent journal lines of a unit, capped by `limits`
   like `docker_logs`. Latch runs `journalctl` for this, with fixed options.
+  Lines that containers write through Docker's journald log driver are left
+  out; read them with `docker_logs`, where `docker.exclude` applies.
 - `host_ports` lists listening TCP and UDP sockets with the program, unit and
   container that own each. Linux only.
 - `dns_check` resolves a configured hostname and returns its addresses.
@@ -120,9 +122,9 @@ The network tools run without approval and may reach any address, including
 this server and the LAN. They cannot reach excluded containers, ports that
 excluded containers publish on this server, or the hostnames and addresses in
 `network.exclude`. A listed hostname blocks the addresses it resolves to as
-well, so another name for the same server cannot reach it. Latch resolves names itself and checks the address again
-when it connects, so a changing DNS answer or a redirect cannot get around
-this. Ping needs unprivileged ICMP (`net.ipv4.ping_group_range`, open on
+well, so another name for the same server cannot reach it. Latch resolves
+names itself and checks the address again when it connects, so a changing DNS
+answer or a redirect cannot get around this. Ping needs unprivileged ICMP (`net.ipv4.ping_group_range`, open on
 Debian by default).
 
 ## Changes

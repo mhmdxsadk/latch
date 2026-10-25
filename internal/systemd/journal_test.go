@@ -48,7 +48,7 @@ func TestJournalArgsAreFixed(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"--unit=ssh.service", "--lines=50", "--output=json", "--no-pager", "--quiet",
-		"--output-fields=MESSAGE,PRIORITY,_PID,__REALTIME_TIMESTAMP"}
+		"--output-fields=MESSAGE,PRIORITY,_PID,__REALTIME_TIMESTAMP,CONTAINER_ID"}
 	if strings.Join(f.args, "|") != strings.Join(want, "|") {
 		t.Errorf("args %v", f.args)
 	}
@@ -71,6 +71,19 @@ func TestJournalInvalidInputRejectedBeforeRun(t *testing.T) {
 	}
 	if f.calls != 0 {
 		t.Errorf("journalctl was started %d times", f.calls)
+	}
+}
+
+// Docker's journald log driver logs container output under docker.service;
+// it must not bypass docker.exclude through systemd_logs.
+func TestJournalDropsContainerOutput(t *testing.T) {
+	out := entry(1_700_000_000_000_000, "6", "1", `"dockerd says hi"`) +
+		`{"__REALTIME_TIMESTAMP":"1700000001000000","PRIORITY":"6","MESSAGE":"vault token","CONTAINER_ID":"4f3c2b1a4f3c","CONTAINER_NAME":"vault"}` + "\n" +
+		`{"__REALTIME_TIMESTAMP":"1700000002000000","PRIORITY":"6","MESSAGE":"after","CONTAINER_ID":null}` + "\n"
+	f := &fakeRun{out: out}
+	got, err := readJournal(context.Background(), f.run, "docker.service", 100, 10000)
+	if err != nil || len(got.Entries) != 2 || got.Entries[0].Text != "dockerd says hi" || got.Entries[1].Text != "after" {
+		t.Fatalf("got %+v %v", got, err)
 	}
 }
 
