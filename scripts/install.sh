@@ -24,6 +24,7 @@ set -eu
 REPO="mhmdxsadk/latch"
 PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/latch"
+STATE_DIR="/var/lib/latch"
 CLIENT_GROUP="latch-agents"
 
 say() { printf '%s\n' "$*"; }
@@ -155,6 +156,14 @@ main() {
 	install -d -m 0700 -o root -g root "$CONFIG_DIR"
 	chown root:root "$CONFIG_DIR"
 	chmod 0700 "$CONFIG_DIR"
+	# Backups of the files Latch changes live here. Latch refuses a symlinked
+	# or group/world-accessible folder, so do not create one.
+	if [ -L "$STATE_DIR" ]; then
+		die "$STATE_DIR is a symlink; Latch keeps file backups there and needs a real folder"
+	fi
+	install -d -m 0700 -o root -g root "$STATE_DIR"
+	chown root:root "$STATE_DIR"
+	chmod 0700 "$STATE_DIR"
 
 	fresh=0
 	if [ ! -e "$CONFIG_DIR/config.yaml" ]; then
