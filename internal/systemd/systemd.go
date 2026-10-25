@@ -1,8 +1,10 @@
-// Package systemd reports the state of systemd units.
+// Package systemd reports the state of systemd units and, through the
+// separate Actions type, starts, stops and restarts them.
 //
-// It only performs read-only D-Bus calls: Properties.GetAll/Get on a computed
+// Bus only performs read-only D-Bus calls: Properties.GetAll/Get on a computed
 // unit object path, and Manager.ListUnits. It never calls a Manager method that
-// starts, stops, enables or otherwise changes anything. Unit names come from
+// starts, stops, enables or otherwise changes anything; only Actions calls
+// Manager.RestartUnit, StopUnit and StartUnit. Unit names come from
 // policy and are re-validated here. Output is a fixed projection: only the
 // listed properties are copied out, so ExecStart, Environment and the like
 // are never returned or retained.

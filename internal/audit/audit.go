@@ -25,6 +25,9 @@ type Logger struct{ l *slog.Logger }
 // New wraps an slog.Logger (normally a JSON handler).
 func New(l *slog.Logger) *Logger { return &Logger{l: l} }
 
+// Discard returns a Logger that drops every record.
+func Discard() *Logger { return New(slog.New(slog.DiscardHandler)) }
+
 // Peer is the kernel-verified identity of the caller.
 type Peer struct {
 	UID uint32
@@ -53,4 +56,58 @@ func (a *Logger) Connection(ctx context.Context, p Peer, outcome Outcome, reason
 		slog.String("outcome", string(outcome)),
 		slog.String("reason", reason),
 	)
+}
+
+// ActionRequested records a new change request. action and resource are
+// validated identifiers; parameters are never logged, since later action
+// kinds (file edits) carry content that may hold secrets.
+func (a *Logger) ActionRequested(ctx context.Context, id int64, action, resource string, needsApproval bool, p Peer) {
+	a.l.LogAttrs(ctx, slog.LevelInfo, "action_requested",
+		slog.Int64("id", id),
+		slog.String("action", action),
+		slog.String("resource", resource),
+		slog.Bool("needs_approval", needsApproval),
+		slog.Uint64("uid", uint64(p.UID)),
+		slog.Int("pid", int(p.PID)),
+	)
+}
+
+// Decision events for ActionDecided.
+const (
+	ActionApproved = "action_approved"
+	ActionDenied   = "action_denied"
+	ActionExpired  = "action_expired"
+)
+
+// ActionDecided records an approval, denial or expiry. uid is the approver;
+// it is 0 (and meaningless) for expiry.
+func (a *Logger) ActionDecided(ctx context.Context, event string, id int64, uid uint32) {
+	a.l.LogAttrs(ctx, slog.LevelInfo, event,
+		slog.Int64("id", id),
+		slog.Uint64("by_uid", uint64(uid)),
+	)
+}
+
+// ActionExecuted records the end of a change. outcome is a fixed word (done,
+// failed) and reason a fixed category; never integration error text.
+func (a *Logger) ActionExecuted(ctx context.Context, id int64, outcome, reason string, d time.Duration) {
+	a.l.LogAttrs(ctx, slog.LevelInfo, "action_executed",
+		slog.Int64("id", id),
+		slog.String("outcome", outcome),
+		slog.String("reason", reason),
+		slog.Duration("duration", d),
+	)
+}
+
+type peerKey struct{}
+
+// WithPeer returns ctx carrying the kernel-verified peer of a connection.
+func WithPeer(ctx context.Context, p Peer) context.Context {
+	return context.WithValue(ctx, peerKey{}, p)
+}
+
+// PeerFromContext returns the peer stored by WithPeer, if any.
+func PeerFromContext(ctx context.Context) (Peer, bool) {
+	p, ok := ctx.Value(peerKey{}).(Peer)
+	return p, ok
 }

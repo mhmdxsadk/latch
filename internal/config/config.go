@@ -40,6 +40,7 @@ const (
 	DefaultMaxLogBytes = 64 << 10
 
 	DefaultDockerSocket = "/var/run/docker.sock"
+	DefaultAdminSocket  = "/run/latch/admin.sock"
 	DefaultCheckTimeout = 5 * time.Second
 )
 
@@ -142,6 +143,10 @@ type Server struct {
 	// whose processes may connect, verified with kernel-supplied peer
 	// credentials. Required.
 	SocketGroup string `yaml:"socket_group"`
+	// AdminSocket is the owner's socket for approving changes (latch pending,
+	// latch approve, latch deny). It is mode 0600 and only root may connect.
+	// Default /run/latch/admin.sock.
+	AdminSocket string `yaml:"admin_socket"`
 }
 
 // Limits bounds what a single call may return.
@@ -157,16 +162,21 @@ type Audit struct {
 }
 
 // Docker configures container access. Every container may be inspected and its
-// logs read unless its name matches an Exclude pattern.
+// logs read unless its name matches an Exclude pattern. Containers matching an
+// Approve pattern stay readable, but every change to them, restarts included,
+// waits for the owner's approval.
 type Docker struct {
 	Socket  string   `yaml:"socket"`
 	Exclude []string `yaml:"exclude"`
+	Approve []string `yaml:"approve"`
 }
 
 // Systemd configures unit access. Every unit may be inspected unless its full
-// name matches an Exclude pattern.
+// name matches an Exclude pattern. Units matching an Approve pattern (or the
+// built-in list in package policy) need approval for every change.
 type Systemd struct {
 	Exclude []string `yaml:"exclude"`
+	Approve []string `yaml:"approve"`
 }
 
 // Host lists the filesystems whose usage may be reported.
@@ -288,6 +298,9 @@ func (c *Config) applyDefaults() {
 	if c.Docker.Socket == "" {
 		c.Docker.Socket = DefaultDockerSocket
 	}
+	if c.Server.AdminSocket == "" {
+		c.Server.AdminSocket = DefaultAdminSocket
+	}
 }
 
 // Validate checks every field. It returns all problems found, not just the
@@ -299,6 +312,11 @@ func (c *Config) Validate() error {
 	// server
 	if !filepath.IsAbs(c.Server.Socket) || filepath.Clean(c.Server.Socket) != c.Server.Socket {
 		add("server.socket must be a clean absolute path")
+	}
+	if !filepath.IsAbs(c.Server.AdminSocket) || filepath.Clean(c.Server.AdminSocket) != c.Server.AdminSocket {
+		add("server.admin_socket must be a clean absolute path")
+	} else if c.Server.AdminSocket == c.Server.Socket {
+		add("server.admin_socket must differ from server.socket")
 	}
 	if !groupName.MatchString(c.Server.SocketGroup) {
 		add("server.socket_group must be a valid group name")
@@ -322,9 +340,11 @@ func (c *Config) Validate() error {
 		add("docker.socket must be an absolute path")
 	}
 	checkPatterns(add, "docker.exclude", c.Docker.Exclude)
+	checkPatterns(add, "docker.approve", c.Docker.Approve)
 
 	// systemd
 	checkPatterns(add, "systemd.exclude", c.Systemd.Exclude)
+	checkPatterns(add, "systemd.approve", c.Systemd.Approve)
 
 	seen := map[string]bool{}
 	// host

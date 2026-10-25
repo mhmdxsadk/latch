@@ -14,6 +14,9 @@ server:
   # (checked by file permissions and again with kernel-verified peer
   # credentials). Add the agent's user to it. Root's group is refused.
   socket_group: latch-agents
+  # The owner's socket for latch pending, latch approve and latch deny. Mode
+  # 0600 and only root may connect; the agent socket never offers approval.
+  admin_socket: /run/latch/admin.sock
 
 limits:
   max_log_lines: 200      # hard ceiling 1000
@@ -33,11 +36,22 @@ docker:
   exclude:
     - secrets-broker
     - vault-*
+  # The agent may restart a container on its own, at most 5 times per hour per
+  # container; stop, start and docker compose up always wait for your approval.
+  # Containers listed here stay readable, but every change, restarts included,
+  # waits for your approval. Same pattern syntax as exclude.
+  approve:
+    - caddy
 
 systemd:
   # Every unit is visible to the agent EXCEPT the full unit names listed here.
   exclude:
     - vault.service
+  # Units whose every change, restarts included, waits for your approval.
+  # docker.service, ssh.service, sshd.service, systemd-networkd.service,
+  # networking.service and latch.service are always on this list.
+  approve:
+    - cron.service
 
 host:
   disks:

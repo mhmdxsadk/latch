@@ -23,7 +23,18 @@ Latch treats the agent as untrusted and enforces the policy itself.
 - Latch treats every tool argument as hostile input. Invalid or disallowed
   requests fail closed, and error messages never echo input or reveal
   integration details.
+- Reading is automatic. Changes need your approval, except restarts: the agent
+  may restart a container or unit on its own up to 5 times per hour. There are
+  no arbitrary commands, even with approval, only named actions.
 - Every call is written to a structured audit log.
+
+### Latch runs as root
+
+Latch reads files anywhere on the disk, talks to the Docker socket and starts
+and stops units, so it runs as root. A separate user with the same
+capabilities would be root in all but name. The protection is the narrow API
+above, not the account. The agent never runs as root: it is a normal user in
+`socket_group` and reaches the server only through Latch's socket.
 
 ### Do not give your agent the Docker socket
 
@@ -34,7 +45,7 @@ agent should reach only Latch's socket.
 
 ## Tools
 
-Latch is pre-release (v0.x) and read-only. These tools exist today:
+Latch is pre-release (v0.x). These read-only tools exist today:
 
 - `list_resources` lists the disks and DNS checks you have exposed.
 - `host_load`, `host_memory` and `host_disk` report host metrics.
@@ -64,9 +75,7 @@ excluding the container is the real one.
 - `systemd_failed` lists units of any type that are failed or waiting to
   restart.
 - `systemd_logs` returns recent journal lines of a unit, capped by `limits`
-  like `docker_logs`. Latch runs `journalctl` for this, with fixed options. The
-  user Latch runs as must be allowed to read the journal (for example by
-  being root or in the `systemd-journal` group).
+  like `docker_logs`. Latch runs `journalctl` for this, with fixed options.
 - `host_ports` lists listening TCP and UDP sockets with the program, unit and
   container that own each. Linux only.
 - `dns_check` resolves a configured hostname and returns its addresses.
@@ -112,6 +121,42 @@ when it connects, so a changing DNS answer or a redirect cannot get around
 this. Ping needs unprivileged ICMP (`net.ipv4.ping_group_range`, open on
 Debian by default).
 
+## Changes
+
+These tools change something:
+
+- `docker_restart` and `systemd_restart` restart a container or unit. They run
+  automatically, at most 5 times per container or unit per hour. A sixth
+  restart within the hour waits for your approval instead.
+- `docker_stop`, `docker_start`, `systemd_stop` and `systemd_start` always wait
+  for your approval.
+- `docker_compose_up` applies compose file edits or image updates to one
+  container's compose service (`docker compose up -d --no-deps`, optionally
+  pulling first). Latch builds the command from the container's compose labels
+  and runs nothing else. It always waits for your approval.
+- `action_status` and `actions_list` show what happened to a request.
+
+When a change needs approval, the agent gets a request id at once and tells
+you. On the server, as root:
+
+```sh
+sudo latch pending       # every waiting request, with what exactly will run
+sudo latch approve 42
+sudo latch deny 42
+```
+
+Latch then runs exactly that request, once. Requests expire after an hour.
+They are kept in memory only, so restarting Latch forgets them. The agent
+cannot approve its own requests: approval only works through a separate admin
+socket (`/run/latch/admin.sock`) that only root can use.
+
+To protect a container or unit, list it under `docker.approve` or
+`systemd.approve` (same patterns as `exclude`). It stays readable, but every
+change to it, restarts included, waits for your approval. `docker.service`,
+`ssh.service`, `sshd.service`, `systemd-networkd.service`,
+`networking.service` and `latch.service` are always on that list. Excluded
+resources cannot be changed at all.
+
 Run `latch doctor` to check that every configured resource is reachable.
 
 ## Quick start
@@ -124,7 +169,9 @@ curl -fsSL https://raw.githubusercontent.com/mhmdxsadk/latch/main/scripts/instal
 
 The script verifies the download, installs Latch under systemd and writes an
 example config. It does not start the service. Pass `--version X.Y.Z` to pin a
-release. Re-run the script to upgrade. It keeps your config.
+release. Re-run the script to upgrade. It keeps your config. Older versions
+ran Latch as a `latch` user; the script switches the service to root and
+leaves that user in place for you to remove.
 
 Next, edit `/etc/latch/config.yaml`. List the containers and units to hide, and
 the disks and DNS names to expose. [`config/example.yaml`](config/example.yaml)
@@ -132,8 +179,9 @@ shows every option. Then validate the config and start the service:
 
 ```sh
 sudo nano /etc/latch/config.yaml
-sudo -u latch latch validate --config /etc/latch/config.yaml
+sudo latch validate --config /etc/latch/config.yaml
 sudo systemctl enable --now latch
+sudo latch doctor
 ```
 
 ## Connecting an agent

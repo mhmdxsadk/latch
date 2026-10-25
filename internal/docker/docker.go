@@ -1,6 +1,7 @@
-// Package docker inspects containers through the Docker Engine API.
+// Package docker inspects and, through the separate Actions type, changes
+// containers through the Docker Engine API.
 //
-// It is strictly read-only: it speaks plain HTTP over the Docker Unix socket,
+// Engine is strictly read-only: it speaks plain HTTP over the Docker Unix socket,
 // issues only GET requests to fixed endpoints (/_ping, /containers/json,
 // /containers/{name}/json, .../logs, .../stats, /events), never follows redirects
 // or uses proxies, and caps every response read. Inspect output is decoded into

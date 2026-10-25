@@ -121,26 +121,35 @@ func resultText(r *sdk.CallToolResult) string {
 	return sb.String()
 }
 
-func TestToolSurfaceIsReadOnlyAndFixed(t *testing.T) {
+func TestToolSurfaceIsFixed(t *testing.T) {
 	h := newHarness(t, fakeHost{})
 	res, err := h.cs.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// true: read-only; false: a change that goes through the approval store.
 	want := map[string]bool{
 		"list_resources": true, "host_load": true, "host_memory": true, "host_disk": true,
 		"docker_list": true, "docker_status": true, "docker_logs": true, "docker_settings": true, "docker_usage": true, "docker_events": true, "host_ports": true,
 		"systemd_list": true, "systemd_unit_status": true, "systemd_logs": true, "systemd_failed": true, "dns_check": true,
 		"file_read": true, "file_list": true, "file_find": true, "file_grep": true,
 		"net_ping": true, "net_dns": true, "net_tcp": true, "net_traceroute": true, "net_http_get": true,
+		"action_status": true, "actions_list": true,
+		"docker_restart": false, "docker_stop": false, "docker_start": false, "docker_compose_up": false,
+		"systemd_restart": false, "systemd_stop": false, "systemd_start": false,
 	}
 	for _, tool := range res.Tools {
-		if !want[tool.Name] {
-			t.Errorf("unexpected tool %q: v0.1 tools are an explicit list", tool.Name)
+		readOnly, ok := want[tool.Name]
+		if !ok {
+			t.Errorf("unexpected tool %q: tools are an explicit list", tool.Name)
+			continue
 		}
 		delete(want, tool.Name)
-		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
-			t.Errorf("tool %q must be annotated read-only", tool.Name)
+		if tool.Annotations == nil || tool.Annotations.ReadOnlyHint != readOnly {
+			t.Errorf("tool %q: read-only annotation must be %v", tool.Name, readOnly)
+		}
+		if !readOnly && tool.Annotations != nil && tool.Annotations.DestructiveHint == nil {
+			t.Errorf("change tool %q must state whether it is destructive", tool.Name)
 		}
 		network := strings.HasPrefix(tool.Name, "net_")
 		if tool.Annotations != nil && (tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint != network) {

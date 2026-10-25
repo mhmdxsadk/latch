@@ -13,6 +13,11 @@
 # service is not started on a fresh install: edit /etc/latch/config.yaml first.
 # Re-running upgrades the binary and unit, keeps your config, and restarts a
 # running service.
+#
+# Latch runs as root. Installs from before that ran it as a "latch" user with
+# the config readable by group latch; upgrading makes the config root:root
+# 0600 and leaves the old latch user in place (remove it with
+# "userdel latch" once you no longer need it).
 
 set -eu
 
@@ -71,7 +76,7 @@ main() {
 	[ "$(uname -s)" = "Linux" ] || die "this installer supports Linux only"
 	[ "$(id -u)" -eq 0 ] || die "run as root, for example: curl -fsSL <url> | sudo sh"
 	[ -d /run/systemd/system ] || die "systemd is required"
-	for c in curl tar sed grep install useradd groupadd usermod getent systemctl; do need "$c"; done
+	for c in curl tar sed grep tr install groupadd usermod getent systemctl; do need "$c"; done
 
 	case "$(uname -m)" in
 	x86_64 | amd64) arch="amd64" ;;
@@ -87,6 +92,7 @@ main() {
 
 	if [ -n "$agent_user" ]; then
 		id "$agent_user" >/dev/null 2>&1 || die "agent user does not exist: $agent_user"
+		[ "$(id -u "$agent_user")" -ne 0 ] || die "the agent must not run as root"
 	fi
 
 	archive="latch_${version}_linux_${arch}.tar.gz"
@@ -117,33 +123,46 @@ main() {
 	tar -xzf "$tmp/$archive" -C "$tmp" latch config/example.yaml packaging/systemd/latch.service ||
 		die "unexpected archive layout"
 
-	# Users and groups. The latch user runs the service; members of the client
-	# group may connect to the socket.
-	# An existing config decides the group; never create a second one beside it.
+	# The service runs as root; members of the client group may connect to the
+	# agent socket. An existing config decides the group; never create a
+	# second one beside it.
 	if [ -r "$CONFIG_DIR/config.yaml" ]; then
 		existing=$(sed -n 's/^[[:space:]]*socket_group:[[:space:]]*\([A-Za-z0-9_-]*\).*/\1/p' "$CONFIG_DIR/config.yaml" | head -n 1)
 		[ -z "$existing" ] || CLIENT_GROUP="$existing"
 	fi
 	getent group "$CLIENT_GROUP" >/dev/null || groupadd --system "$CLIENT_GROUP"
-	if ! id latch >/dev/null 2>&1; then
-		nologin=$(command -v nologin || echo /usr/sbin/nologin)
-		useradd --system --user-group --no-create-home --shell "$nologin" latch
-	fi
-	usermod -aG "$CLIENT_GROUP" latch
 	if [ -n "$agent_user" ]; then
 		usermod -aG "$CLIENT_GROUP" "$agent_user"
 		say "Added $agent_user to $CLIENT_GROUP (log out and back in for it to apply)."
 	fi
-	getent group docker >/dev/null || warn "no docker group found; the service unit expects one"
+
+	# Older installs ran the service as user latch, a member of the client
+	# group. The service no longer uses it, so take it out of the group (it
+	# could otherwise talk to the agent socket) and leave the account itself.
+	if id latch >/dev/null 2>&1; then
+		if id -nG latch | tr ' ' '\n' | grep -qx "$CLIENT_GROUP"; then
+			if command -v gpasswd >/dev/null 2>&1; then
+				gpasswd -d latch "$CLIENT_GROUP" >/dev/null
+			else
+				warn "remove user latch from $CLIENT_GROUP by hand; the service no longer runs as it"
+			fi
+		fi
+		say "The old latch user is no longer used; remove it with 'userdel latch' when you like."
+	fi
 
 	install -m 0755 "$tmp/latch" "$PREFIX/latch"
 	install -m 0644 "$tmp/packaging/systemd/latch.service" /etc/systemd/system/latch.service
-	install -d -m 0750 -o root -g latch "$CONFIG_DIR"
+	install -d -m 0700 -o root -g root "$CONFIG_DIR"
+	chown root:root "$CONFIG_DIR"
+	chmod 0700 "$CONFIG_DIR"
 
 	fresh=0
 	if [ ! -e "$CONFIG_DIR/config.yaml" ]; then
 		fresh=1
-		install -m 0640 -o root -g latch "$tmp/config/example.yaml" "$CONFIG_DIR/config.yaml"
+		install -m 0600 -o root -g root "$tmp/config/example.yaml" "$CONFIG_DIR/config.yaml"
+	else
+		chown root:root "$CONFIG_DIR/config.yaml"
+		chmod 0600 "$CONFIG_DIR/config.yaml"
 	fi
 
 	systemctl daemon-reload
@@ -154,11 +173,13 @@ main() {
 
 Next steps:
   1. Edit $CONFIG_DIR/config.yaml and list the resources the agent may see.
-  2. sudo -u latch latch validate --config $CONFIG_DIR/config.yaml
+  2. sudo latch validate --config $CONFIG_DIR/config.yaml
   3. sudo systemctl enable --now latch
+  4. sudo latch doctor
 
 The agent connects to /run/latch/latch.sock. Never give the agent access to the
-Docker socket.
+Docker socket, and never run the agent as root. Approve its changes with
+sudo latch pending, sudo latch approve ID and sudo latch deny ID.
 EOF
 	else
 		if systemctl is-active --quiet latch; then
