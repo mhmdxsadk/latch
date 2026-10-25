@@ -6,28 +6,34 @@ Wants=docker.service
 
 [Service]
 Type=simple
-User=latch
-Group=latch
-# Grants access to /var/run/docker.sock. This is highly privileged: anyone who
-# can talk to the Docker daemon can become root. Latch's narrow API, strict
-# validation and allowlists are the protection; the hardening below only
-# reduces collateral damage and must not be mistaken for containment.
-SupplementaryGroups=docker
+# Latch runs as root. It reads files anywhere on the disk, restarts, stops and
+# starts containers and units, runs docker compose, and (later) edits files,
+# so it needs root's access anyway: the Docker socket alone is root-equivalent.
+# A dedicated user with capabilities would be root in all but name, so the
+# owner chose plain root. The protection is Latch's narrow API: named actions
+# only, no commands, strict validation, exclusions and approval for changes.
+# The agent never runs as root; it is a normal user in server.socket_group.
+User=root
+Group=root
 ExecStart=/usr/local/bin/latch serve --config /etc/latch/config.yaml
 Restart=on-failure
 RestartSec=2s
 
-# Socket directory /run/latch, owned by latch:latch. Other accounts need execute
-# (0751) to reach the socket inside; the socket itself is 0660 for the client
-# group and Latch checks every peer, so listing or traversing grants nothing.
+# Socket directory /run/latch, owned by root. Other accounts need execute
+# (0751) to reach the agent socket inside; that socket is 0660 for the socket
+# group and Latch checks every peer. The admin socket next to it is 0600 and
+# only accepts root.
 RuntimeDirectory=latch
 RuntimeDirectoryMode=0751
 
-# Hardening (defence in depth).
+# Hardening that does not get in the way of Latch's work. ProtectSystem,
+# ProtectHome and PrivateTmp are deliberately absent: they would hide or
+# freeze the files Latch must read (and later edit). The capability bounding
+# set is left full: reading any file needs CAP_DAC_READ_SEARCH and
+# CAP_DAC_OVERRIDE, ping and traceroute need CAP_NET_RAW, edits will need
+# CAP_CHOWN, CAP_FOWNER and CAP_FSETID, and a hand-made list is easy to get
+# wrong in ways that only show up when the owner needs a change to work.
 NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
@@ -38,8 +44,6 @@ RestrictRealtime=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
-CapabilityBoundingSet=
-AmbientCapabilities=
 # AF_NETLINK lets the network tools read this host's own addresses (to keep
 # excluded containers' published ports out of reach). Without it they refuse
 # those ports on every address.
