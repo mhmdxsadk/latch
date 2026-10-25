@@ -1,0 +1,50 @@
+[Unit]
+Description=Latch Telegram bridge - approvals and agent chat in Telegram
+Documentation=https://github.com/mhmdxsadk/latch
+After=network-online.target latch.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Root, because Latch's admin socket only accepts root. The bridge itself
+# only talks to Telegram and to that socket; each agent turn runs as the
+# agent's own account (agent.user in telegram.yaml), never as root.
+User=root
+Group=root
+ExecStart=/usr/local/bin/latch-telegram serve --config /etc/latch/telegram.yaml
+Restart=on-failure
+RestartSec=10s
+
+# The bot token, from a root-only file. The service reads it from
+# $CREDENTIALS_DIRECTORY; it never reaches the agent.
+LoadCredential=telegram-token:/etc/latch/telegram-token
+
+# Which requests were shown and the conversation list.
+StateDirectory=latch-telegram
+StateDirectoryMode=0700
+
+# Only what starting and stopping the agent needs: switching to its account
+# (SETUID, SETGID) and stopping its processes (KILL).
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL
+NoNewPrivileges=yes
+# /usr, /boot and /etc read-only. Home folders stay writable: the agent
+# keeps its sessions and settings there.
+ProtectSystem=full
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

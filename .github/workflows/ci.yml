@@ -64,7 +64,9 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -trimpath -o /dev/null ./cmd/latch
+        run: |
+          go build -trimpath -o /dev/null ./cmd/latch
+          go build -trimpath -o /dev/null ./cmd/latch-telegram
 
   lint:
     runs-on: ubuntu-latest

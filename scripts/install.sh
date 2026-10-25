@@ -12,7 +12,8 @@
 # is installed, and against its cosign signature when cosign is available. The
 # service is not started on a fresh install: edit /etc/latch/config.yaml first.
 # Re-running upgrades the binary and unit, keeps your config, and restarts a
-# running service.
+# running service. The Telegram bridge (latch-telegram) is installed too but
+# never enabled by this script.
 #
 # Latch runs as root. Installs from before that ran it as a "latch" user with
 # the config readable by group latch; upgrading makes the config root:root
@@ -123,6 +124,12 @@ main() {
 
 	tar -xzf "$tmp/$archive" -C "$tmp" latch config/example.yaml packaging/systemd/latch.service ||
 		die "unexpected archive layout"
+	# The Telegram bridge ships from 0.11.0 on; older archives lack it.
+	telegram=0
+	if tar -xzf "$tmp/$archive" -C "$tmp" latch-telegram config/telegram.example.yaml \
+		packaging/systemd/latch-telegram.service 2>/dev/null; then
+		telegram=1
+	fi
 
 	# The service runs as root; members of the client group may connect to the
 	# agent socket. An existing config decides the group; never create a
@@ -153,6 +160,12 @@ main() {
 
 	install -m 0755 "$tmp/latch" "$PREFIX/latch"
 	install -m 0644 "$tmp/packaging/systemd/latch.service" /etc/systemd/system/latch.service
+	if [ "$telegram" -eq 1 ]; then
+		# Installed but never enabled here: it needs telegram.yaml and a
+		# bot token first. The example sits next to the config for reference.
+		install -m 0755 "$tmp/latch-telegram" "$PREFIX/latch-telegram"
+		install -m 0644 "$tmp/packaging/systemd/latch-telegram.service" /etc/systemd/system/latch-telegram.service
+	fi
 	install -d -m 0700 -o root -g root "$CONFIG_DIR"
 	chown root:root "$CONFIG_DIR"
 	chmod 0700 "$CONFIG_DIR"
@@ -174,6 +187,10 @@ main() {
 		chmod 0600 "$CONFIG_DIR/config.yaml"
 	fi
 
+	if [ "$telegram" -eq 1 ]; then
+		install -m 0600 -o root -g root "$tmp/config/telegram.example.yaml" "$CONFIG_DIR/telegram.example.yaml"
+	fi
+
 	systemctl daemon-reload
 	say "Installed Latch v$version to $PREFIX/latch."
 
@@ -189,6 +206,9 @@ Next steps:
 The agent connects to /run/latch/latch.sock. Never give the agent access to the
 Docker socket, and never run the agent as root. Approve its changes with
 sudo latch pending, sudo latch approve ID and sudo latch deny ID.
+
+To approve from Telegram (and chat with the agent there), see "Telegram" in
+the README: latch-telegram is installed but not enabled.
 EOF
 	else
 		if systemctl is-active --quiet latch; then
@@ -196,6 +216,10 @@ EOF
 			say "Existing config kept; restarted the latch service."
 		else
 			say "Existing config kept. Start it with: sudo systemctl enable --now latch"
+		fi
+		if [ "$telegram" -eq 1 ] && systemctl is-active --quiet latch-telegram; then
+			systemctl restart latch-telegram
+			say "Restarted the latch-telegram service."
 		fi
 	fi
 }

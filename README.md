@@ -256,6 +256,57 @@ toolsets:
       transport_type: "streamable"
 ```
 
+## Telegram
+
+`latch-telegram` is a separate program, installed next to Latch, that brings
+approvals to a private Telegram chat with your own bot. Each request that
+waits for you shows up with Approve and Deny buttons, and the message updates
+when the request ends, however it was decided. Undo requests show the time
+they run by itself. Automatic restarts get a short notice.
+
+If you configure an agent, the same chat also talks to it. Each message runs
+one agent turn as the agent's own account, and its answer comes back in the
+chat. `/new` starts a fresh conversation, `/sessions` switches between them,
+`/rename` names the current one and `/stop` stops a running answer. After you
+approve or deny a request, the agent is told how it ended so it can check the
+fix.
+
+How it stays safe:
+
+- Only your Telegram account is answered, and only in a private chat.
+  Everyone else gets no reply. Turn on two-step verification in Telegram:
+  your account can now approve changes.
+- Request messages are written by Latch from the request itself, never by the
+  agent. Agent answers are plain text and always start with the agent's name.
+- A button names one request and what the message showed. Latch checks the
+  request again before acting, so an old button can never approve something
+  else. A change too long for one message has no Approve button; approve it
+  with `sudo latch approve <id>` after reading it in full.
+- The bridge runs as root because the admin socket only accepts root, with
+  only the capabilities it needs to start and stop the agent. The bot token
+  stays in a root-only file and never reaches the agent or the latch daemon.
+- Telegram bot chats are not end-to-end encrypted. What the agent shows you
+  (logs, config files) passes through Telegram's servers. Hidden values stay
+  hidden, but excluding a resource is the real protection.
+
+To set it up:
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and save its token:
+   `sudo install -m 600 /dev/null /etc/latch/telegram-token`, then put the
+   token in that file.
+2. Find your user id (for example with @userinfobot) and copy the example:
+   `sudo cp /etc/latch/telegram.example.yaml /etc/latch/telegram.yaml`.
+   Set `owner_id`, and either fill in the `agent` section or remove it for
+   approvals only. [`config/telegram.example.yaml`](config/telegram.example.yaml)
+   explains every option.
+3. Check and start it, then send your bot a message:
+
+```sh
+sudo latch-telegram validate
+sudo latch-telegram doctor
+sudo systemctl enable --now latch-telegram
+```
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
