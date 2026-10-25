@@ -195,7 +195,13 @@ func cmdServe(args []string, stderr io.Writer) int {
 	defer stop()
 
 	// Changes in progress are cancelled when Latch stops.
-	store := approval.New(approval.Options{Audit: al, Explain: mcp.ExplainActionError, Base: ctx})
+	lastID, err := approval.LoadLastID(approval.DefaultIDFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "latch: %v\n", err)
+		return 1
+	}
+	store := approval.New(approval.Options{Audit: al, Explain: mcp.ExplainActionError, Base: ctx,
+		LastID: lastID, SaveID: approval.IDSaver(approval.DefaultIDFile)})
 	go sweep(ctx, store)
 
 	deps := &mcp.Deps{

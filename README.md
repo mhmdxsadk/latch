@@ -175,7 +175,8 @@ sudo latch requests      # recent changes and how they ended
 ```
 
 Latch then runs exactly that request, once. Requests expire after an hour.
-They are kept in memory only, so restarting Latch forgets them. The agent
+They are kept in memory only, so restarting Latch forgets them. Request ids
+keep counting across restarts, so an old id never names a new request. The agent
 cannot approve its own requests: approval only works through a separate admin
 socket (`/run/latch/admin.sock`) that only root can use.
 

@@ -183,6 +183,8 @@ func (d *Deps) submit(ctx context.Context, a approval.Action) (actionOut, error)
 		return actionOut{}, errResourceBusy
 	case errors.Is(err, approval.ErrTooMany):
 		return actionOut{}, errTooMany
+	case errors.Is(err, approval.ErrIDNotSaved):
+		return actionOut{}, userError{"Latch could not record the request, so nothing was changed; tell the owner to run latch doctor"}
 	case errors.Is(err, docker.ErrNotCompose), errors.Is(err, docker.ErrBadCompose):
 		return actionOut{}, userError{err.Error()}
 	case err != nil:

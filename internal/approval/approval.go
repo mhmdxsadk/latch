@@ -129,6 +129,7 @@ var (
 	ErrNotPending = errors.New("not pending")
 	ErrBusy       = errors.New("another change to this resource is in progress")
 	ErrTooMany    = errors.New("too many requests are waiting for approval")
+	ErrIDNotSaved = errors.New("could not record the request id")
 )
 
 // Defaults for Options.
@@ -160,6 +161,13 @@ type Options struct {
 	MaxPending   int           // pending requests allowed at once
 	Keep         int           // finished requests kept for status queries
 	MaxExecution time.Duration // hard bound on one execution
+
+	// LastID is the highest id handed out before, so ids continue after a
+	// restart instead of starting at 1 again: an old id must never name a
+	// new request. SaveID records each new id before it is used; if it
+	// fails, the request is refused.
+	LastID int64
+	SaveID func(id int64) error
 }
 
 type entry struct {
@@ -214,7 +222,7 @@ func New(o Options) *Store {
 	defInt(&o.Keep, DefaultKeep)
 	return &Store{
 		o:       o,
-		nextID:  1,
+		nextID:  max(o.LastID, 0) + 1,
 		entries: map[int64]*entry{},
 		busy:    map[string]bool{},
 		history: map[string][]time.Time{},
@@ -246,6 +254,12 @@ func (s *Store) Submit(ctx context.Context, who Requester, a Action) (Request, e
 	if !needs && s.busy[key] {
 		s.mu.Unlock()
 		return Request{}, ErrBusy
+	}
+	if s.o.SaveID != nil {
+		if err := s.o.SaveID(s.nextID); err != nil {
+			s.mu.Unlock()
+			return Request{}, ErrIDNotSaved
+		}
 	}
 	e := &entry{
 		action: a,

@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -524,3 +526,49 @@ func (panicking) Describe() []string                      { return nil }
 func (panicking) Mode() Mode                              { return RateLimited }
 func (panicking) Check(context.Context) error             { return nil }
 func (panicking) Execute(context.Context) (Result, error) { panic("boom") }
+
+func TestIDsContinueAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "last-request-id")
+	open := func() *Store {
+		last, err := LoadLastID(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return New(Options{LastID: last, SaveID: IDSaver(path)})
+	}
+	s := open()
+	for range 3 {
+		if _, err := s.Submit(context.Background(), Requester{}, idAction()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := open().Submit(context.Background(), Requester{}, idAction())
+	if err != nil || r.ID != 4 {
+		t.Fatalf("after restart got id %d, %v; want 4", r.ID, err)
+	}
+}
+
+func TestUnsavedIDRefusesTheRequest(t *testing.T) {
+	s := New(Options{SaveID: func(int64) error { return errors.New("disk full") }})
+	if _, err := s.Submit(context.Background(), Requester{}, idAction()); !errors.Is(err, ErrIDNotSaved) {
+		t.Fatalf("got %v", err)
+	}
+	if len(s.List(false, 0)) != 0 {
+		t.Error("a request was stored without a saved id")
+	}
+}
+
+func TestLoadLastIDRejectsGarbage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "id")
+	if err := os.WriteFile(path, []byte("abc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadLastID(path); err == nil {
+		t.Error("garbage accepted")
+	}
+}
+
+// idAction is a change that waits for approval, so it never runs.
+func idAction() *fakeAction {
+	return &fakeAction{kind: "docker_stop", res: Resource{Type: "container", Name: "web"}, mode: Always}
+}
