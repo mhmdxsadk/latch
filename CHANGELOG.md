@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.9.0](https://github.com/mhmdxsadk/latch/compare/v0.8.0...v0.9.0) (2026-10-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **systemd:** latch.service runs as User=root and the config is root:root 0600; reinstall with scripts/install.sh to migrate. The old latch user is no longer used.
+
+### Features
+
+* **approval:** add approval queue and root-only admin socket ([d67c3ff](https://github.com/mhmdxsadk/latch/commit/d67c3ff39e1768faa2011b168555041d1c1a976e))
+* **cli:** add latch backups and a backup folder check ([d12a681](https://github.com/mhmdxsadk/latch/commit/d12a681e6cb6eb64d12a660c9cc0216de5c1e763))
+* **cli:** add latch requests to show how changes ended ([8cc7b9b](https://github.com/mhmdxsadk/latch/commit/8cc7b9bbddabd177d154721ecd33cde656498c0a))
+* **cli:** serve the admin socket and add pending, approve and deny ([1225825](https://github.com/mhmdxsadk/latch/commit/1225825aab5b995992c19c3dc87297c3b227162f))
+* **config:** add files.exclude for the file tools ([576363a](https://github.com/mhmdxsadk/latch/commit/576363a9a2afefc5c2d1f5242788bad9c6b3dc6f))
+* **config:** add network.exclude for network tools ([5b0dc3b](https://github.com/mhmdxsadk/latch/commit/5b0dc3b8631cc9e0ccc424b8f67b23bed3cebd7f))
+* **docker:** add docker_usage and docker_events tools ([f48f2b6](https://github.com/mhmdxsadk/latch/commit/f48f2b683c1102536c43650b61c7d937b8fa0a88))
+* **docker:** add restart, stop, start and compose up actions ([a7108fc](https://github.com/mhmdxsadk/latch/commit/a7108fc21173c3d52e9aa589782be364fd856773))
+* **docker:** track excluded containers for other tools ([86a95dd](https://github.com/mhmdxsadk/latch/commit/86a95dd298f95f3467c378ada64631caa7ea1654))
+* **files:** add edit planner, safe writer and backups ([a34cb54](https://github.com/mhmdxsadk/latch/commit/a34cb54a436f12bfca6a10efc03ef64a860b5d27))
+* **files:** add file_edit, file_create, file_backups and file_restore ([7f9280b](https://github.com/mhmdxsadk/latch/commit/7f9280be6f8bde272c9733e0b810a376d8159eb4))
+* **files:** add path guard and read-only file reader ([5dabcc9](https://github.com/mhmdxsadk/latch/commit/5dabcc92f880e2d24c543ff3f6b874d4262c3141))
+* **host:** add host_ports tool ([b0a89e4](https://github.com/mhmdxsadk/latch/commit/b0a89e4dc68b2519eb9c30779381b20554a33fd3))
+* **mcp:** add change tools and action_status ([bf731fa](https://github.com/mhmdxsadk/latch/commit/bf731fa96b0d98b320fd17812480cf871c56f72c))
+* **mcp:** add file_read, file_list, file_find and file_grep tools ([cb664e5](https://github.com/mhmdxsadk/latch/commit/cb664e5f1677ce1b3ddb5025d122f9d77afe02ef))
+* **network:** add approved HTTP writes to netcheck ([d411f39](https://github.com/mhmdxsadk/latch/commit/d411f39d5753802131fab95b997956e9bcf2420c))
+* **network:** add net_ping, net_dns, net_tcp, net_traceroute and net_http_get tools ([ce05cd2](https://github.com/mhmdxsadk/latch/commit/ce05cd29e25fe706fb193cf3d4ab5ebab0965d31))
+* **network:** add netcheck package for network diagnostics ([5b194c2](https://github.com/mhmdxsadk/latch/commit/5b194c243642ca80d7a201a22725a2c586d03272))
+* **systemd:** add restart, stop and start actions ([19fd602](https://github.com/mhmdxsadk/latch/commit/19fd6023220740a411324fc599801467b94b78ac))
+* **systemd:** add systemd_logs and systemd_failed tools ([ceedce7](https://github.com/mhmdxsadk/latch/commit/ceedce7663df2d53ce6d4ca2052d4c2372bf5c79))
+* **systemd:** run latch as root ([0a185b9](https://github.com/mhmdxsadk/latch/commit/0a185b935e7c4f89e57e200cfa9a195ac1b74a7b))
+
+
+### Bug Fixes
+
+* **docker:** block every port and folder of excluded containers ([5c5b1ba](https://github.com/mhmdxsadk/latch/commit/5c5b1ba1c734ae6400db110c4f2d395f57f93a4a))
+* **files:** block container runtime state and credential files ([7444bea](https://github.com/mhmdxsadk/latch/commit/7444beae46fa57fc236c52ef28ddd2525b61fc91))
+* **network:** block the addresses of excluded hostnames ([dfed870](https://github.com/mhmdxsadk/latch/commit/dfed870a67bbc9b90368cdeb3b1c6a14feee7a8d))
+* **redact:** hide DB_PASS, auth, key-data and .netrc passwords ([ad5c530](https://github.com/mhmdxsadk/latch/commit/ad5c53049808e05c02f78c69af1c3dde23cb8e7a))
+* **systemd:** leave container output out of systemd_logs ([9e1c8a1](https://github.com/mhmdxsadk/latch/commit/9e1c8a195748bac2c2206d5a9c4d886e831f6497))
+* **systemd:** only restart services without approval ([81627b6](https://github.com/mhmdxsadk/latch/commit/81627b65cb5e8d3ea8c01d150d1ff5c4301239bd))
+
 ## [0.8.0](https://github.com/mhmdxsadk/latch/compare/v0.7.0...v0.8.0) (2026-10-24)
 
 
