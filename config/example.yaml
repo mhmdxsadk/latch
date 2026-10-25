@@ -88,5 +88,6 @@ network:
   # address, including this host and the LAN. Excluded containers are blocked
   # automatically: their addresses, and their published ports on this host.
   # List other hostnames or IP addresses to block here. Names are exact (no
-  # wildcards) and case does not matter.
+  # wildcards) and case does not matter; the addresses a name resolves to are
+  # blocked too.
   exclude: []

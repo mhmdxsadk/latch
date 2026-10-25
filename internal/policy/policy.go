@@ -221,6 +221,17 @@ func (p *Policy) networkName(s string, valid func(string) bool) (string, error) 
 	return n, nil
 }
 
+// NetworkExcludedNames returns the hostnames listed in network.exclude,
+// normalized and sorted, so their addresses can be blocked too.
+func (p *Policy) NetworkExcludedNames() []string {
+	names := make([]string, 0, len(p.netNames))
+	for n := range p.netNames {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	return names
+}
+
 // NetworkAddrExcluded reports whether a is an IP address listed in
 // network.exclude. IPv4-mapped IPv6 addresses are compared as IPv4.
 func (p *Policy) NetworkAddrExcluded(a netip.Addr) bool {
