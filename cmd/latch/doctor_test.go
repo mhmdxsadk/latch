@@ -36,6 +36,10 @@ func (s stubDocker) Logs(context.Context, string, int, int) (docker.Logs, error)
 	return docker.Logs{}, nil
 }
 
+func (s stubDocker) Exposure(context.Context, string) (docker.Exposure, error) {
+	return docker.Exposure{}, nil
+}
+
 func (s stubDocker) Settings(context.Context, string) (docker.Settings, error) {
 	return docker.Settings{}, nil
 }

@@ -82,7 +82,7 @@ func journalArgs(unit string, lines int) []string {
 		"--output=json",
 		"--no-pager",
 		"--quiet",
-		"--output-fields=MESSAGE,PRIORITY,_PID,__REALTIME_TIMESTAMP",
+		"--output-fields=MESSAGE,PRIORITY,_PID,__REALTIME_TIMESTAMP,CONTAINER_ID",
 	}
 }
 
@@ -188,6 +188,9 @@ type journalDoc struct {
 	Priority json.RawMessage `json:"PRIORITY"`
 	PID      json.RawMessage `json:"_PID"`
 	Realtime json.RawMessage `json:"__REALTIME_TIMESTAMP"`
+	// ContainerID is set on lines a container wrote through Docker's
+	// journald log driver; they are logged under docker.service.
+	ContainerID json.RawMessage `json:"CONTAINER_ID"`
 }
 
 type journalCollector struct {
@@ -205,6 +208,11 @@ func (c *journalCollector) add(line []byte, tooLong bool) {
 	var d journalDoc
 	if err := json.Unmarshal(line, &d); err != nil {
 		return // not an entry; nothing from it is passed on
+	}
+	if id := bytes.TrimSpace(d.ContainerID); len(id) > 0 && string(id) != "null" {
+		// Container output belongs to docker_logs, where exclusion applies;
+		// here it would show excluded containers' logs.
+		return
 	}
 	e := LogEntry{Priority: -1, PriorityName: "unknown"}
 	if p, ok := fieldInt(d.Priority); ok && p >= 0 && p < len(priorityNames) {

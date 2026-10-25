@@ -60,6 +60,7 @@ Commands:
   pending    List changes waiting for approval
   approve    Approve a pending change: latch approve ID
   deny       Deny a pending change: latch deny ID
+  requests   List recent changes and how they ended
   version    Print version information
 
 Run "latch <command> -h" for command flags.
@@ -87,6 +88,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdDecide("approve", args[1:], stdout, stderr)
 	case "deny":
 		return cmdDecide("deny", args[1:], stdout, stderr)
+	case "requests":
+		return cmdRequests(args[1:], stdout, stderr)
 	case "version", "--version", "-v":
 		fmt.Fprint(stdout, versionText(version, commit, runtime.GOOS, runtime.GOARCH))
 		return 0
@@ -175,7 +178,7 @@ func cmdServe(args []string, stderr io.Writer) int {
 
 	pol := policy.New(cfg)
 	dk := docker.NewEngine(cfg.Docker.Socket)
-	tracker := &excluded.Tracker{Docker: dk, Policy: pol}
+	tracker := &excluded.Tracker{Docker: dk, Policy: pol, Ports: ports.Proc{}}
 	fileGuard, err := newFileGuard(cfg, *path, tracker, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "latch: %v\n", err)

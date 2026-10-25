@@ -68,6 +68,13 @@ type DirPattern struct {
 	Pattern string
 }
 
+// NamedDirPattern blocks the entries directly inside any directory named Dir
+// whose name matches Pattern, and everything below them.
+type NamedDirPattern struct {
+	Dir     string
+	Pattern string
+}
+
 // Rules is a static block list.
 //
 // Every rule is closed under descent: if a path is blocked, so is everything
@@ -80,6 +87,8 @@ type Rules struct {
 	Names []string
 	// DirEntries block matching entries of specific directories.
 	DirEntries []DirPattern
+	// NamedDirEntries block matching entries of directories with a name.
+	NamedDirEntries []NamedDirPattern
 	// SSH blocks everything inside a directory named .ssh except files named
 	// *.pub, authorized_keys, known_hosts and config.
 	SSH bool
@@ -94,12 +103,25 @@ var (
 	BuiltinTrees = []string{
 		"/proc", "/sys", "/dev",
 		"/etc/shadow", "/etc/gshadow", "/etc/shadow-", "/etc/gshadow-",
-		"/var/lib/docker",
+		"/var/lib/docker", "/var/lib/containerd",
+		// Container runtime state: per-container config with env and command.
+		"/run/containerd", "/run/docker", "/run/runc",
 		"/etc/latch", "/var/lib/latch",
 	}
-	BuiltinNames      = []string{"*.key", "*.pem", ".env", ".env.*"}
+	BuiltinNames = []string{
+		"*.key", "*.pem", ".env", ".env.*",
+		// Credential files that hold plain passwords or tokens.
+		".netrc", ".pgpass", ".git-credentials", ".my.cnf",
+	}
 	BuiltinDirEntries = []DirPattern{{Dir: "/etc/ssh", Pattern: "*_key"}}
-	builtinHardLinks  = []string{"/etc/shadow", "/etc/gshadow", "/etc/shadow-", "/etc/gshadow-"}
+	// BuiltinNamedDirEntries block files by name inside a directory of a
+	// given name, wherever it is (registry, cloud and cluster credentials).
+	BuiltinNamedDirEntries = []NamedDirPattern{
+		{Dir: ".docker", Pattern: "config.json"},
+		{Dir: ".aws", Pattern: "credentials"},
+		{Dir: ".kube", Pattern: "config"},
+	}
+	builtinHardLinks = []string{"/etc/shadow", "/etc/gshadow", "/etc/shadow-", "/etc/gshadow-"}
 )
 
 // DefaultRules returns the built-in block list plus Latch's own config file,
@@ -107,11 +129,12 @@ var (
 // entries (already validated by config). configPath must be absolute.
 func DefaultRules(configPath string, agentHomes, exclude []string) Rules {
 	r := Rules{
-		Trees:      slices.Clone(BuiltinTrees),
-		Names:      slices.Clone(BuiltinNames),
-		DirEntries: slices.Clone(BuiltinDirEntries),
-		SSH:        true,
-		HardLinks:  slices.Clone(builtinHardLinks),
+		Trees:           slices.Clone(BuiltinTrees),
+		Names:           slices.Clone(BuiltinNames),
+		DirEntries:      slices.Clone(BuiltinDirEntries),
+		NamedDirEntries: slices.Clone(BuiltinNamedDirEntries),
+		SSH:             true,
+		HardLinks:       slices.Clone(builtinHardLinks),
 	}
 	if configPath != "" {
 		r.Trees = append(r.Trees, filepath.Clean(configPath))
@@ -139,9 +162,11 @@ type Guard struct {
 	trees      []string
 	names      []string
 	dirEntries []DirPattern
-	ssh        bool
-	hardLinks  []string
-	folders    Folders
+	// namedDirEntries are matched on path components, like names.
+	namedDirEntries []NamedDirPattern
+	ssh             bool
+	hardLinks       []string
+	folders         Folders
 }
 
 // NewGuard builds a Guard. Tree and directory paths that are symlinks (or lie
@@ -149,11 +174,12 @@ type Guard struct {
 // when there is no Docker, in which case no container folders are blocked.
 func NewGuard(r Rules, folders Folders) *Guard {
 	g := &Guard{
-		trees:     withResolved(r.Trees),
-		names:     slices.Clone(r.Names),
-		ssh:       r.SSH,
-		hardLinks: slices.Clone(r.HardLinks),
-		folders:   folders,
+		trees:           withResolved(r.Trees),
+		names:           slices.Clone(r.Names),
+		namedDirEntries: slices.Clone(r.NamedDirEntries),
+		ssh:             r.SSH,
+		hardLinks:       slices.Clone(r.HardLinks),
+		folders:         folders,
 	}
 	for _, d := range r.DirEntries {
 		for _, dir := range withResolved([]string{d.Dir}) {
@@ -275,6 +301,15 @@ func (c *check) blocked(p string) bool {
 	for i, name := range comps {
 		if matchAny(c.g.names, name) {
 			return true
+		}
+		if i+1 < len(comps) {
+			for _, d := range c.g.namedDirEntries {
+				if name == d.Dir {
+					if ok, _ := path.Match(d.Pattern, comps[i+1]); ok {
+						return true
+					}
+				}
+			}
 		}
 		if c.g.ssh && name == ".ssh" && i+1 < len(comps) {
 			if i+2 < len(comps) || !sshAllowed(comps[i+1]) {

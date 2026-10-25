@@ -323,6 +323,7 @@ func TestApproveListsForceApproval(t *testing.T) {
 		}
 	}
 	for _, u := range policy.BuiltinApproveUnits {
+		u = strings.ReplaceAll(u, "*", "journald.service")
 		if out := a.act(t, "systemd_restart", map[string]any{"unit": u}); out.Status != "pending" {
 			t.Errorf("built-in %s: %+v", u, out)
 		}

@@ -12,14 +12,13 @@ import (
 	"context"
 	"errors"
 	"net/netip"
-	"path/filepath"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/policy"
+	"github.com/mhmdxsadk/latch/internal/ports"
 )
 
 // TTL is how long a snapshot is reused before Docker is asked again.
@@ -32,10 +31,12 @@ var ErrUnknown = errors.New("excluded containers unknown")
 type Snapshot struct {
 	// Addrs are the containers' network addresses (IPv4 and IPv6).
 	Addrs []netip.Addr
-	// Ports are host ports published by excluded containers.
+	// Ports are host ports published by excluded containers, plus the ports
+	// that excluded containers on the host network listen on.
 	Ports []uint16
 	// Folders are the clean absolute host paths bind-mounted into excluded
-	// containers. Docker volumes live under /var/lib/docker and are not listed.
+	// containers, including local volumes that bind a host folder. Other
+	// volumes live under /var/lib/docker, which is always blocked.
 	Folders []string
 }
 
@@ -52,6 +53,9 @@ func (s Snapshot) HasPort(port uint16) bool { return slices.Contains(s.Ports, po
 type Tracker struct {
 	Docker docker.Client
 	Policy *policy.Policy
+	// Ports finds the listeners of excluded containers on the host network.
+	// Required when such a container exists (otherwise Get fails closed).
+	Ports ports.Scanner
 	// Now is the clock; nil means time.Now. Tests set it.
 	Now func() time.Time
 
@@ -93,11 +97,12 @@ func (t *Tracker) build(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	var s Snapshot
+	hostNet := map[string]bool{} // IDs of excluded containers on the host network
 	for _, name := range names {
 		if t.Policy.ContainerVisible(name) {
 			continue
 		}
-		st, err := t.Docker.Settings(ctx, name)
+		x, err := t.Docker.Exposure(ctx, name)
 		if errors.Is(err, docker.ErrNotFound) {
 			continue // removed since List
 		}
@@ -105,21 +110,30 @@ func (t *Tracker) build(ctx context.Context) (Snapshot, error) {
 			// A container we cannot inspect could be hiding anything.
 			return Snapshot{}, err
 		}
-		for _, n := range st.Networks {
-			for _, ip := range []string{n.IPAddress, n.IPv6Address} {
-				if a, err := netip.ParseAddr(ip); err == nil {
-					s.Addrs = append(s.Addrs, a.Unmap())
-				}
+		for _, ip := range x.Addrs {
+			if a, err := netip.ParseAddr(ip); err == nil {
+				s.Addrs = append(s.Addrs, a.Unmap())
 			}
 		}
-		for _, p := range st.Ports {
-			if n, err := strconv.ParseUint(p.HostPort, 10, 16); err == nil && n > 0 {
-				s.Ports = append(s.Ports, uint16(n))
-			}
+		s.Ports = append(s.Ports, x.HostPorts...)
+		s.Folders = append(s.Folders, x.Folders...)
+		if x.NetworkMode == "host" {
+			hostNet[x.ID] = true
 		}
-		for _, m := range st.Mounts {
-			if m.Type == "bind" && filepath.IsAbs(m.Source) {
-				s.Folders = append(s.Folders, filepath.Clean(m.Source))
+	}
+	if len(hostNet) > 0 {
+		// A container on the host network listens on the host's own ports
+		// without publishing them, so take its ports from the socket table.
+		if t.Ports == nil {
+			return Snapshot{}, errors.New("excluded: host-network container but no port scanner")
+		}
+		ls, err := t.Ports.Listening(ctx)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		for _, l := range ls {
+			if hostNet[l.ContainerID] {
+				s.Ports = append(s.Ports, l.Port)
 			}
 		}
 	}

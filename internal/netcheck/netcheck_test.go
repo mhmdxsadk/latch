@@ -545,3 +545,24 @@ func TestDNSResolverErrorsAreCategories(t *testing.T) {
 		t.Errorf("%+v", r)
 	}
 }
+
+// An excluded hostname blocks its addresses too, so another name for the
+// same server or the bare IP cannot reach it. The answer survives a failed
+// lookup.
+func TestExcludedNameAddressesBlocked(t *testing.T) {
+	e := newEnv(t)
+	e.name("blocked.example", addrs("198.51.100.7"))
+	e.name("alias.test", addrs("198.51.100.7"))
+	for _, host := range []string{"alias.test", "198.51.100.7", "::ffff:198.51.100.7"} {
+		if _, err := e.p.TCP(context.Background(), host, 80); !errors.Is(err, ErrNotAllowed) {
+			t.Errorf("TCP(%s) = %v, want ErrNotAllowed", host, err)
+		}
+	}
+	e.res.mu.Lock()
+	delete(e.res.ip, "blocked.example")
+	e.res.mu.Unlock()
+	e.p.nameAt = time.Now().Add(-2 * excludedNameTTL)
+	if _, err := e.p.TCP(context.Background(), "198.51.100.7", 80); !errors.Is(err, ErrNotAllowed) {
+		t.Errorf("after a failed lookup: %v", err)
+	}
+}

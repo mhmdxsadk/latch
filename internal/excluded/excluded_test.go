@@ -11,36 +11,49 @@ import (
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/policy"
+	"github.com/mhmdxsadk/latch/internal/ports"
 )
 
 type fakeDocker struct {
 	docker.Client
 	err   error
 	calls int
+	extra []string
+}
+
+type fakePorts struct {
+	err error
+}
+
+func (f fakePorts) Listening(context.Context) ([]ports.Listener, error) {
+	return []ports.Listener{{Port: 9000, ContainerID: "hostnetid"}, {Port: 22}, {Port: 9001, ContainerID: "otherid"}}, f.err
 }
 
 func (f *fakeDocker) List(context.Context) ([]string, error) {
 	f.calls++
-	return []string{"vault", "web", "gone"}, f.err
+	return append([]string{"vault", "web", "gone"}, f.extra...), f.err
 }
 
-func (f *fakeDocker) Settings(_ context.Context, name string) (docker.Settings, error) {
+func (f *fakeDocker) Exposure(_ context.Context, name string) (docker.Exposure, error) {
 	switch name {
 	case "vault":
-		return docker.Settings{
-			Ports:    []docker.Port{{Container: "8200/tcp", HostIP: "0.0.0.0", HostPort: "8200"}, {HostPort: "8200"}},
-			Networks: []docker.Network{{Name: "n", IPAddress: "172.18.0.9", IPv6Address: "fd00::9"}},
-			Mounts:   []docker.Mount{{Type: "bind", Source: "/srv/vault/data/"}, {Type: "volume", Source: "v"}},
+		return docker.Exposure{
+			ID:        "vaultid",
+			HostPorts: []uint16{8200, 8200},
+			Addrs:     []string{"172.18.0.9", "fd00::9"},
+			Folders:   []string{"/srv/vault/data"},
 		}, nil
 	case "gone":
-		return docker.Settings{}, docker.ErrNotFound
+		return docker.Exposure{}, docker.ErrNotFound
+	case "hostnet":
+		return docker.Exposure{ID: "hostnetid", NetworkMode: "host"}, nil
 	}
 	panic("visible container inspected: " + name)
 }
 
 func newTracker(t *testing.T, fd *fakeDocker, now *time.Time) *Tracker {
 	t.Helper()
-	cfg, err := config.Parse([]byte("server: {socket: /run/l.sock, socket_group: latch}\ndocker: {exclude: [vault, gone]}\n"))
+	cfg, err := config.Parse([]byte("server: {socket: /run/l.sock, socket_group: latch}\ndocker: {exclude: [vault, gone, hostnet]}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,5 +104,25 @@ func TestFailsClosedWithoutSnapshot(t *testing.T) {
 	now = now.Add(time.Hour)
 	if s, err := tr.Get(context.Background()); err != nil || len(s.Folders) != 1 {
 		t.Errorf("got %+v %v", s, err)
+	}
+}
+
+// An excluded container on the host network publishes nothing, so its
+// listening ports come from the socket table; without one, fail closed.
+func TestHostNetworkContainer(t *testing.T) {
+	now := time.Unix(1000, 0)
+	fd := &fakeDocker{extra: []string{"hostnet"}}
+	tr := newTracker(t, fd, &now)
+	if _, err := tr.Get(context.Background()); !errors.Is(err, ErrUnknown) {
+		t.Fatalf("without a scanner: %v", err)
+	}
+	tr.Ports = fakePorts{err: errors.New("no proc")}
+	if _, err := tr.Get(context.Background()); !errors.Is(err, ErrUnknown) {
+		t.Fatalf("scanner failing: %v", err)
+	}
+	tr.Ports = fakePorts{}
+	s, err := tr.Get(context.Background())
+	if err != nil || !slices.Equal(s.Ports, []uint16{8200, 9000}) {
+		t.Errorf("ports %v %v", s.Ports, err)
 	}
 }

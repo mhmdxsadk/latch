@@ -59,6 +59,9 @@ type Checker interface {
 type Rules interface {
 	NetworkHost(host string) (string, error)
 	NetworkAddrExcluded(a netip.Addr) bool
+	// NetworkExcludedNames are the excluded hostnames; their addresses are
+	// blocked too, so another name or the bare IP cannot reach them.
+	NetworkExcludedNames() []string
 }
 
 // Excluded supplies the excluded containers; *excluded.Tracker implements it.
@@ -94,8 +97,14 @@ const (
 	FailureProtocol    Failure = "protocol_error"
 )
 
-// hostAddrTTL is how long this host's interface addresses are cached.
-const hostAddrTTL = 5 * time.Second
+const (
+	// hostAddrTTL is how long this host's interface addresses are cached.
+	hostAddrTTL = 5 * time.Second
+	// excludedNameTTL is how long the addresses of excluded hostnames are
+	// reused; on a failed lookup the last good answer is kept.
+	excludedNameTTL     = time.Minute
+	excludedNameTimeout = 2 * time.Second
+)
 
 // Prober is the real Checker.
 type Prober struct {
@@ -114,6 +123,10 @@ type Prober struct {
 	mu      sync.Mutex
 	cached  []netip.Addr
 	cacheAt time.Time
+
+	nameMu    sync.Mutex
+	nameAddrs map[string][]netip.Addr // last good answer per excluded name
+	nameAt    time.Time
 }
 
 var _ Checker = (*Prober)(nil)
@@ -178,10 +191,11 @@ func (p *Prober) localAddrs() ([]netip.Addr, error) {
 // reached. It is built once per call so every hop and dial sees the same
 // snapshot.
 type guard struct {
-	p       *Prober
-	snap    excluded.Snapshot
-	local   []netip.Addr
-	localOK bool
+	p         *Prober
+	snap      excluded.Snapshot
+	local     []netip.Addr
+	localOK   bool
+	nameAddrs []netip.Addr // addresses of excluded hostnames
 }
 
 func (p *Prober) guard(ctx context.Context) (*guard, error) {
@@ -189,7 +203,7 @@ func (p *Prober) guard(ctx context.Context) (*guard, error) {
 	if err != nil {
 		return nil, ErrUnknown
 	}
-	g := &guard{p: p, snap: snap}
+	g := &guard{p: p, snap: snap, nameAddrs: p.excludedNameAddrs(ctx)}
 	// Interface addresses only matter for excluded published ports.
 	if len(snap.Ports) > 0 {
 		if local, err := p.localAddrs(); err == nil {
@@ -197,6 +211,40 @@ func (p *Prober) guard(ctx context.Context) (*guard, error) {
 		}
 	}
 	return g, nil
+}
+
+// excludedNameAddrs resolves the excluded hostnames, at most once per
+// excludedNameTTL. A name that fails to resolve keeps its last good answer.
+func (p *Prober) excludedNameAddrs(ctx context.Context) []netip.Addr {
+	names := p.rules.NetworkExcludedNames()
+	if len(names) == 0 {
+		return nil
+	}
+	p.nameMu.Lock()
+	defer p.nameMu.Unlock()
+	if p.nameAddrs == nil {
+		p.nameAddrs = map[string][]netip.Addr{}
+	}
+	if p.nameAt.IsZero() || time.Since(p.nameAt) >= excludedNameTTL {
+		for _, n := range names {
+			lctx, cancel := context.WithTimeout(ctx, excludedNameTimeout)
+			as, err := p.resolver.LookupNetIP(lctx, "ip", n)
+			cancel()
+			if err != nil {
+				continue
+			}
+			for i, a := range as {
+				as[i] = a.Unmap().WithZone("")
+			}
+			p.nameAddrs[n] = as
+		}
+		p.nameAt = time.Now()
+	}
+	var out []netip.Addr
+	for _, as := range p.nameAddrs {
+		out = append(out, as...)
+	}
+	return out
 }
 
 // thisNetwork is 0.0.0.0/8; connecting to it reaches this host on Linux.
@@ -249,7 +297,7 @@ func (g *guard) allowed(a netip.Addr, port uint16) bool {
 }
 
 func (g *guard) allowedOne(a netip.Addr, port uint16) bool {
-	if !a.IsValid() || g.snap.HasAddr(a) || g.p.rules.NetworkAddrExcluded(a) {
+	if !a.IsValid() || g.snap.HasAddr(a) || g.p.rules.NetworkAddrExcluded(a) || slices.Contains(g.nameAddrs, a) {
 		return false
 	}
 	if port == 0 || !g.snap.HasPort(port) {

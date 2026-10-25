@@ -76,6 +76,8 @@ excluding the container is the real one.
   restart.
 - `systemd_logs` returns recent journal lines of a unit, capped by `limits`
   like `docker_logs`. Latch runs `journalctl` for this, with fixed options.
+  Lines that containers write through Docker's journald log driver are left
+  out; read them with `docker_logs`, where `docker.exclude` applies.
 - `host_ports` lists listening TCP and UDP sockets with the program, unit and
   container that own each. Linux only.
 - `dns_check` resolves a configured hostname and returns its addresses.
@@ -93,8 +95,11 @@ The file tools can read the whole disk except what is blocked. Some paths are
 always blocked: `/proc`, `/sys`, `/dev`, `/etc/shadow` and `/etc/gshadow`
 (with their backups), SSH host keys, everything in a `.ssh` folder except
 `*.pub`, `authorized_keys`, `known_hosts` and `config`, files named `*.key`,
-`*.pem`, `.env` and `.env.*`, `/var/lib/docker`, `/etc/latch`,
-`/var/lib/latch`, Latch's config file, the home folders of the users in
+`*.pem`, `.env` and `.env.*`, credential files (`.netrc`, `.pgpass`,
+`.git-credentials`, `.my.cnf`, `.docker/config.json`, `.aws/credentials`,
+`.kube/config`), Docker and containerd data and runtime state
+(`/var/lib/docker`, `/var/lib/containerd`, `/run/docker`, `/run/containerd`,
+`/run/runc`), `/etc/latch`, `/var/lib/latch`, Latch's config file, the home folders of the users in
 `socket_group` (the agent's own keys and history), and folders mounted into
 excluded containers. Add your own paths or file names under `files.exclude`.
 A blocked file behaves as if it does not exist. Latch never follows a symlink
@@ -116,9 +121,10 @@ into a blocked folder, and secret-looking values in file text are shown as
 The network tools run without approval and may reach any address, including
 this server and the LAN. They cannot reach excluded containers, ports that
 excluded containers publish on this server, or the hostnames and addresses in
-`network.exclude`. Latch resolves names itself and checks the address again
-when it connects, so a changing DNS answer or a redirect cannot get around
-this. Ping needs unprivileged ICMP (`net.ipv4.ping_group_range`, open on
+`network.exclude`. A listed hostname blocks the addresses it resolves to as
+well, so another name for the same server cannot reach it. Latch resolves
+names itself and checks the address again when it connects, so a changing DNS
+answer or a redirect cannot get around this. Ping needs unprivileged ICMP (`net.ipv4.ping_group_range`, open on
 Debian by default).
 
 ## Changes
@@ -143,6 +149,7 @@ you. On the server, as root:
 sudo latch pending       # every waiting request, with what exactly will run
 sudo latch approve 42
 sudo latch deny 42
+sudo latch requests      # recent changes and how they ended
 ```
 
 Latch then runs exactly that request, once. Requests expire after an hour.
@@ -152,10 +159,13 @@ socket (`/run/latch/admin.sock`) that only root can use.
 
 To protect a container or unit, list it under `docker.approve` or
 `systemd.approve` (same patterns as `exclude`). It stays readable, but every
-change to it, restarts included, waits for your approval. `docker.service`,
-`ssh.service`, `sshd.service`, `systemd-networkd.service`,
-`networking.service` and `latch.service` are always on that list. Excluded
-resources cannot be changed at all.
+change to it, restarts included, waits for your approval. Some units are
+always on that list, because losing them can lock you out or stop every
+container: Docker and containerd (with `docker.socket`), SSH (with
+`ssh.socket`), D-Bus, every `systemd-*` unit, networking and firewall
+services, and `latch.service`. Only services restart automatically; restarting
+a timer, socket, target or mount always waits for approval. Excluded resources
+cannot be changed at all.
 
 Run `latch doctor` to check that every configured resource is reachable.
 

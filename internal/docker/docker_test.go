@@ -91,7 +91,8 @@ func newFake(t *testing.T, h http.HandlerFunc) (*Engine, *recorder) {
 				r.URL.Path == "/containers/"+testID+"/json" ||
 				r.URL.Path == "/containers/"+testID+"/logs" ||
 				r.URL.Path == "/containers/"+testID+"/stats" ||
-				r.URL.Path == "/events")
+				r.URL.Path == "/events" ||
+				strings.HasPrefix(r.URL.Path, "/volumes/"))
 		if !ok {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL)
 		}
@@ -902,5 +903,47 @@ func TestSettingsNotFound(t *testing.T) {
 	e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
 	if _, err := e.Settings(context.Background(), "web"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("got %v", err)
+	}
+}
+
+func TestExposureIsComplete(t *testing.T) {
+	var ports []string
+	for p := 8000; p < 8100; p++ {
+		ports = append(ports, fmt.Sprintf(`"%d/tcp": [{"HostIp": "0.0.0.0", "HostPort": "%d"}, {"HostIp": "::", "HostPort": "%d"}]`, p, p, p))
+	}
+	doc := `{"Id": "` + testID + `", "Name": "/web",
+	  "HostConfig": {"NetworkMode": "bridge"},
+	  "NetworkSettings": {"Ports": {` + strings.Join(ports, ",") + `}, "Networks": {"a": {"IPAddress": "172.18.0.9", "GlobalIPv6Address": "fd00::9"}}},
+	  "Mounts": [
+	    {"Type": "bind", "Source": "/srv/vault/"},
+	    {"Type": "volume", "Name": "bound", "Driver": "local", "Source": "/var/lib/docker/volumes/bound/_data"},
+	    {"Type": "volume", "Name": "plain", "Driver": "local", "Source": "/var/lib/docker/volumes/plain/_data"},
+	    {"Type": "volume", "Name": "missing", "Driver": "local"}
+	  ]}`
+	e, _ := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/volumes/bound":
+			_, _ = w.Write([]byte(`{"Driver": "local", "Options": {"type": "none", "o": "bind", "device": "/srv/vault-data/"}}`))
+		case "/volumes/plain":
+			_, _ = w.Write([]byte(`{"Driver": "local", "Options": null}`))
+		case "/volumes/missing":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			_, _ = w.Write([]byte(doc))
+		}
+	})
+	x, err := e.Exposure(context.Background(), "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[uint16]bool{}
+	for _, p := range x.HostPorts {
+		seen[p] = true
+	}
+	if len(seen) != 100 || !seen[8000] || !seen[8099] {
+		t.Errorf("got %d distinct ports", len(seen))
+	}
+	if !slices.Equal(x.Folders, []string{"/srv/vault", "/srv/vault-data"}) || len(x.Addrs) != 2 || x.ID != testID {
+		t.Errorf("got %+v", x)
 	}
 }
