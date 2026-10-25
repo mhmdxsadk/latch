@@ -20,6 +20,8 @@ coverage.*
 # Internal documentation: never tracked, never published.
 # Only README and LICENSE are public docs.
 /HANDOFF.md
+/GLOSSARY.md
+/docs/adr/
 /docs/internal/
 /internal-docs/
 /notes/
