@@ -124,10 +124,10 @@ excluded containers publish on this server, the hostnames and addresses in
 `network.exclude`, or the cloud metadata addresses (such as `169.254.169.254`)
 where cloud servers hand out their own credentials. A listed hostname blocks
 the addresses it resolves to as well, so another name for the same server
-cannot reach it. Latch resolves
-names itself and checks the address again when it connects, so a changing DNS
-answer or a redirect cannot get around this. Ping needs unprivileged ICMP (`net.ipv4.ping_group_range`, open on
-Debian by default).
+cannot reach it. Latch resolves names itself and checks the address again when
+it connects, so a changing DNS answer or a redirect cannot get around this.
+Ping needs unprivileged ICMP (`net.ipv4.ping_group_range`, open on Debian by
+default).
 
 ## Changes
 
