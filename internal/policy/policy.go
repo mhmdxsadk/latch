@@ -3,7 +3,7 @@
 //
 // Everything an agent sends is untrusted. Integrations (docker, systemd, ...)
 // never receive a raw agent string: they receive a value returned by Policy,
-// which can only come from the operator's configuration.
+// which can only come from the owner's configuration.
 package policy
 
 import (

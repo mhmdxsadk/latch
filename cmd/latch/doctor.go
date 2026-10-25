@@ -36,7 +36,7 @@ type integrations struct {
 }
 
 // cmdDoctor checks that every configured integration is reachable. It never
-// starts the server. Output is for the operator, so it names configured
+// starts the server. Output is for the owner, so it names configured
 // resources, but it never prints secrets (config cannot contain any).
 func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)

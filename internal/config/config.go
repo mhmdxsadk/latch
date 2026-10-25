@@ -1,12 +1,11 @@
 // Package config loads and validates Latch's configuration.
 //
-// The configuration only declares WHICH resources Latch may expose or hide. It
-// has no way to express commands or arguments: every field is either a
-// resource name, a name pattern, a fixed identifier (mount point), a path or
-// file name to hide, or a bound. Files are readable by default and the config
-// can only take paths away. Docker containers and systemd units are exposed by default and the
-// operator lists the ones to exclude. Unknown keys are rejected so a typo can
-// never silently widen or drop policy.
+// The configuration only declares WHICH resources Latch hides and which
+// changes always wait for approval. It has no way to express commands or
+// arguments: every field is a name pattern, a path or file name to hide, a
+// host to block, or a bound. Everything is visible by default and the config
+// can only take things away. Unknown keys are rejected so a typo can never
+// silently widen or drop policy.
 package config
 
 import (
@@ -184,7 +183,7 @@ type Files struct {
 
 // Load reads, parses and validates the file at path.
 func Load(path string) (*Config, error) {
-	f, err := os.Open(path) //nolint:gosec // path is the operator-supplied config location
+	f, err := os.Open(path) //nolint:gosec // path is the owner-supplied config location
 	if err != nil {
 		return nil, fmt.Errorf("open config: %w", err)
 	}
@@ -275,7 +274,7 @@ func (c *Config) applyDefaults() {
 }
 
 // Validate checks every field. It returns all problems found, not just the
-// first, so operators can fix a config in one pass.
+// first, so the owner can fix a config in one pass.
 func (c *Config) Validate() error {
 	var errs []error
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
