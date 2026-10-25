@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/mhmdxsadk/latch/compare/v0.11.1...v0.12.0) (2026-10-25)
+
+
+### Features
+
+* **telegram:** read the bot token from a secrets manager's env file ([0c1e25c](https://github.com/mhmdxsadk/latch/commit/0c1e25c3423184c06e26241b1839190b825490fa))
+
 ## [0.11.1](https://github.com/mhmdxsadk/latch/compare/v0.11.0...v0.11.1) (2026-10-25)
 
 
