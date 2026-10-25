@@ -84,6 +84,10 @@ func (f *fakeDocker) IDs(context.Context) (map[string]string, error) {
 	return f.ids, f.err
 }
 
+func (f *fakeDocker) Exposure(context.Context, string) (docker.Exposure, error) {
+	return docker.Exposure{}, f.err
+}
+
 func (f *fakeDocker) Settings(_ context.Context, c string) (docker.Settings, error) {
 	f.containers = append(f.containers, c)
 	return docker.Settings{
@@ -626,11 +630,11 @@ type portsDocker struct {
 	settingsErr error
 }
 
-func (p *portsDocker) Settings(_ context.Context, c string) (docker.Settings, error) {
+func (p *portsDocker) Exposure(context.Context, string) (docker.Exposure, error) {
 	if p.settingsErr != nil {
-		return docker.Settings{}, p.settingsErr
+		return docker.Exposure{}, p.settingsErr
 	}
-	return docker.Settings{Ports: []docker.Port{{HostPort: "8200"}}}, nil
+	return docker.Exposure{HostPorts: []uint16{8200}}, nil
 }
 
 const idWeb = "4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a4f3c2b1a"

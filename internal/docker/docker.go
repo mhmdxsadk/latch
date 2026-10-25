@@ -3,14 +3,14 @@
 //
 // Engine is strictly read-only: it speaks plain HTTP over the Docker Unix socket,
 // issues only GET requests to fixed endpoints (/_ping, /containers/json,
-// /containers/{name}/json, .../logs, .../stats, /events), never follows redirects
-// or uses proxies, and caps every response read. Inspect output is decoded into
-// a private struct and projected onto Status and Settings, so environment
-// variables and command lines are never decoded and never returned. The newest
-// health-check output is returned, bounded and
-// sanitized and redacted like logs, because it is the container's own explanation of why it
-// is unhealthy. Container names come from policy but
-// are re-validated here as defence in depth.
+// /containers/{name}/json, .../logs, .../stats, /events, /volumes/{name}),
+// never follows redirects or uses proxies, and caps every response read.
+// Inspect output is decoded into a private struct and projected onto Status,
+// Settings and Exposure, so environment variables and command lines are never
+// decoded and never returned. The newest health-check output is returned,
+// bounded, sanitized and redacted like logs, because it is the container's own
+// explanation of why it is unhealthy. Container names come from policy but are
+// re-validated here as defence in depth.
 package docker
 
 import (
@@ -106,6 +106,9 @@ type Client interface {
 	// IDs maps full container IDs to primary names. The caller must filter
 	// the result through policy.
 	IDs(ctx context.Context) (map[string]string, error)
+	// Exposure is what a container exposes on the host, complete (no display
+	// caps), for keeping other tools away from excluded containers.
+	Exposure(ctx context.Context, container string) (Exposure, error)
 }
 
 // Engine talks to the Docker Engine API over a Unix socket.
@@ -280,6 +283,7 @@ type inspect struct {
 	Mounts []struct {
 		Type        string
 		Name        string
+		Driver      string
 		Source      string
 		Destination string
 		Mode        string

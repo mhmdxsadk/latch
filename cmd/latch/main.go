@@ -175,7 +175,7 @@ func cmdServe(args []string, stderr io.Writer) int {
 
 	pol := policy.New(cfg)
 	dk := docker.NewEngine(cfg.Docker.Socket)
-	tracker := &excluded.Tracker{Docker: dk, Policy: pol}
+	tracker := &excluded.Tracker{Docker: dk, Policy: pol, Ports: ports.Proc{}}
 	fileGuard, err := newFileGuard(cfg, *path, tracker, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "latch: %v\n", err)
