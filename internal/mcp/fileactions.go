@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/mhmdxsadk/latch/internal/approval"
+	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/files"
 	"github.com/mhmdxsadk/latch/internal/policy"
 	"github.com/mhmdxsadk/latch/internal/redact"
@@ -75,7 +77,7 @@ type fileEditIn struct {
 	Path    string     `json:"path" jsonschema:"absolute, clean path of an existing text file, e.g. /etc/nginx/nginx.conf"`
 	Old     string     `json:"old" jsonschema:"text to replace, exactly as file_read shows it (including [hidden]); it must occur exactly once; 1 byte to 64 KiB"`
 	New     string     `json:"new" jsonschema:"replacement text, up to 64 KiB; may be empty to delete"`
-	Restart *restartIn `json:"restart,omitempty" jsonschema:"optional container or unit to restart after the edit; Latch then reports whether it is up, with its new log lines"`
+	Restart *restartIn `json:"restart,omitempty" jsonschema:"optional container or unit to restart after the edit (for the container's own compose file Latch runs docker compose up instead, which applies it); Latch then reports whether it is up, with its new log lines"`
 }
 
 type fileCreateIn struct {
@@ -91,7 +93,7 @@ type fileBackupsIn struct {
 type fileRestoreIn struct {
 	Path    string     `json:"path" jsonschema:"absolute, clean path of the file to restore"`
 	Backup  string     `json:"backup" jsonschema:"backup id from file_backups, such as 20261025T143000Z"`
-	Restart *restartIn `json:"restart,omitempty" jsonschema:"optional container or unit to restart after the restore; Latch then reports whether it is up, with its new log lines"`
+	Restart *restartIn `json:"restart,omitempty" jsonschema:"optional container or unit to restart after the restore (docker compose up for the container's own compose file); Latch then reports whether it is up, with its new log lines"`
 }
 
 type backupOut struct {
@@ -109,9 +111,65 @@ type fileBackupsOut struct {
 type restartTarget struct {
 	kind string // "container" or "unit"
 	name string
+	// compose is set when the changed file is the container's compose file:
+	// a restart would not apply it, so Latch runs docker compose up instead.
+	compose *docker.ComposeTarget
 }
 
 func (t restartTarget) label() string { return t.kind + " " + t.name }
+
+// done says what was done to the target, for a result summary.
+func (t restartTarget) done() string {
+	if t.compose != nil {
+		return "ran docker compose up for " + t.label()
+	}
+	return "restarted " + t.label()
+}
+
+// verb says how the target is brought back after the change.
+func (t restartTarget) verb() string {
+	if t.compose != nil {
+		return "apply it with docker compose up for " + t.label()
+	}
+	return "restart " + t.label()
+}
+
+// withCompose switches a container restart to docker compose up when path is
+// one of the container's compose files.
+func (d *Deps) withCompose(ctx context.Context, t *restartTarget, path string) (*restartTarget, error) {
+	if t == nil || t.kind != "container" {
+		return t, nil
+	}
+	ct, err := d.DockerActions.ComposeTarget(ctx, t.name)
+	if errors.Is(err, docker.ErrNotCompose) || errors.Is(err, docker.ErrBadCompose) {
+		return t, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !composeFile(ct, path) {
+		return t, nil
+	}
+	if err := checkSiblings(d.Policy, ct); err != nil {
+		return nil, err
+	}
+	c := *t
+	c.compose = &ct
+	return &c, nil
+}
+
+// composeFile reports whether path, a resolved path, is one of t's files.
+func composeFile(t docker.ComposeTarget, path string) bool {
+	for _, f := range t.ConfigFiles {
+		if f == path {
+			return true
+		}
+		if real, err := filepath.EvalSymlinks(f); err == nil && real == path {
+			return true
+		}
+	}
+	return false
+}
 
 // restartTarget resolves the optional restart input through policy.
 func (d *Deps) restartTarget(ctx context.Context, in *restartIn) (*restartTarget, error) {
@@ -125,7 +183,7 @@ func (d *Deps) restartTarget(ctx context.Context, in *restartIn) (*restartTarget
 		if err != nil {
 			return nil, err
 		}
-		t = restartTarget{"container", name}
+		t = restartTarget{kind: "container", name: name}
 	case in.Unit != "" && in.Container == "":
 		unit, err := d.Policy.SystemdUnit(in.Unit)
 		if err != nil {
@@ -134,7 +192,7 @@ func (d *Deps) restartTarget(ctx context.Context, in *restartIn) (*restartTarget
 		if unit == "latch.service" {
 			return nil, errRestartSelf
 		}
-		t = restartTarget{"unit", unit}
+		t = restartTarget{kind: "unit", name: unit}
 	default:
 		return nil, errRestartTarget
 	}
@@ -150,6 +208,18 @@ func (d *Deps) checkRestartTarget(ctx context.Context, t restartTarget) error {
 	if t.kind == "container" {
 		if !d.Policy.ContainerVisible(t.name) {
 			return policy.ErrNotAllowed
+		}
+		if t.compose != nil {
+			ct, err := d.DockerActions.ComposeTarget(ctx, t.name)
+			if err != nil {
+				return err
+			}
+			if !ct.Same(*t.compose) {
+				return errComposeChanged
+			}
+			if err := checkSiblings(d.Policy, ct); err != nil {
+				return err
+			}
 		}
 		_, err := d.Docker.Status(ctx, t.name)
 		return err
@@ -197,9 +267,19 @@ type restartCheck struct {
 func (d *Deps) restartAndCheck(ctx context.Context, t restartTarget) restartCheck {
 	start := time.Now()
 	var err error
-	if t.kind == "container" {
+	switch {
+	case t.compose != nil:
+		res, err := d.DockerActions.ComposeUp(ctx, *t.compose, false)
+		if err != nil {
+			why := fmt.Sprintf("docker compose up for %s failed (exit status %d)", t.label(), res.ExitCode)
+			if res.TimedOut {
+				why = "docker compose up for " + t.label() + " did not finish in time"
+			}
+			return restartCheck{why: why, logs: append([]string{"docker compose output:"}, res.Output...)}
+		}
+	case t.kind == "container":
 		err = d.DockerActions.Restart(ctx, t.name)
-	} else {
+	default:
 		_, err = d.SystemdActions.Restart(ctx, t.name)
 	}
 	if err != nil {
@@ -322,7 +402,7 @@ func restartPlan(t *restartTarget, undoWait time.Duration) []string {
 	if t == nil {
 		return nil
 	}
-	return []string{"then restart " + t.label() + " and check it; if it is not up, keep the change and file a request " +
+	return []string{"then " + t.verb() + " and check it; if it is not up, keep the change and file a request " +
 		"to undo it, which runs by itself after " + undoWait.String() + " unless denied"}
 }
 
@@ -404,7 +484,7 @@ func (a *fileChange) Execute(ctx context.Context) (approval.Result, error) {
 	}
 	c := a.d.restartAndCheck(ctx, *a.restart)
 	if c.up {
-		sum += "; restarted " + a.restart.label() + ", up"
+		sum += "; " + a.restart.done() + ", up"
 		if c.note != "" {
 			sum += ", but " + c.note
 		}
@@ -437,7 +517,7 @@ func (a *fileChange) undo(res files.ReplaceResult) undoChange {
 	if files.IsUnitPath(a.file.Path) {
 		details = append(details, "then run systemd daemon-reload")
 	}
-	details = append(details, "then restart "+a.restart.label()+" and check it",
+	details = append(details, "then "+a.restart.verb()+" and check it",
 		"Latch filed this because "+a.restart.label()+" was not up after the change; it runs by itself unless denied")
 	return undoChange{
 		fileChange: &fileChange{d: a.d, kind: "file_restore", path: a.path, file: written, content: res.Old,
@@ -533,6 +613,9 @@ func registerFileActions(s *sdk.Server, d *Deps) {
 		}
 		file, err := d.Editor.Load(ctx, in.Path)
 		if err != nil {
+			return actionOut{}, in.Path, err
+		}
+		if t, err = d.withCompose(ctx, t, file.Path); err != nil {
 			return actionOut{}, in.Path, err
 		}
 		plan, err := files.PlanEdit(file.Content, in.Old, in.New)
@@ -640,6 +723,9 @@ func registerFileActions(s *sdk.Server, d *Deps) {
 		}
 		file, err := d.Editor.Load(ctx, in.Path)
 		if err != nil {
+			return actionOut{}, in.Path, err
+		}
+		if t, err = d.withCompose(ctx, t, file.Path); err != nil {
 			return actionOut{}, in.Path, err
 		}
 		content, err := d.Editor.Backups().Read(file.Path, in.Backup)

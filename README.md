@@ -146,8 +146,9 @@ These tools change something:
   hidden value spans several lines, like a private key, cannot be edited.
   Owner, permissions and line endings stay as they were. After editing a
   systemd unit file, Latch runs `systemctl daemon-reload`. With `restart`, it
-  restarts that container or unit afterwards. See "When a change breaks
-  something" below.
+  restarts that container or unit afterwards. If the file is that container's
+  compose file, a restart would not apply it, so Latch runs `docker compose up`
+  for it instead. See "When a change breaks something" below.
 - `file_create` creates a new text file (never over an existing one).
 - `file_backups` lists the backups of a file, and `file_restore` puts one
   back. Restoring backs up the current content first.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -451,4 +452,60 @@ func TestHTTPRequestNeedsApproval(t *testing.T) {
 	if done := f.act(t, "request_status", map[string]any{"id": out.ID}); done.Status != "failed" || len(f.http.sent) != 1 {
 		t.Errorf("re-check: %+v", done)
 	}
+}
+
+// composeEdit points the fake container my-web at web's compose file.
+func composeEdit(t *testing.T, f *editHarness, siblings ...string) string {
+	t.Helper()
+	p := f.write(t, "compose.yaml", "ports: [80]\n")
+	f.da.target = docker.ComposeTarget{Project: "web", Service: "web", WorkingDir: f.dir, ConfigFiles: []string{p},
+		Siblings: append([]string{"my-web"}, siblings...)}
+	return p
+}
+
+func TestComposeFileEditRunsComposeUp(t *testing.T) {
+	f := newEditHarness(t)
+	p := composeEdit(t, f)
+	out := f.act(t, "file_edit", map[string]any{"path": p, "old": "ports: [80]", "new": "ports: [81]", "restart": map[string]any{"container": "my-web"}})
+	r, _ := f.store.Get(out.ID)
+	if !strings.Contains(strings.Join(r.Details, "\n"), "then apply it with docker compose up for container my-web") {
+		t.Errorf("pending view: %q", r.Details)
+	}
+	f.approve(t, out.ID)
+	done := f.act(t, "request_status", map[string]any{"id": out.ID})
+	if done.Status != "done" || !strings.Contains(done.Result.Summary, "ran docker compose up for container my-web, up") {
+		t.Fatalf("got %+v", done.Result)
+	}
+	if len(f.da.composed) != 1 || f.da.pulls[0] || slices.Contains(f.da.Calls(), "restart my-web") {
+		t.Errorf("composed %v, calls %v", f.da.composed, f.da.Calls())
+	}
+}
+
+func TestFailedComposeEditUndoRunsComposeUpAgain(t *testing.T) {
+	f := newEditHarness(t)
+	p := composeEdit(t, f)
+	f.da.composeErr = docker.ErrComposeFailed
+	f.da.composeRes = docker.ComposeResult{ExitCode: 1, Output: []string{"port is already allocated"}}
+	out := f.act(t, "file_edit", map[string]any{"path": p, "old": "ports: [80]", "new": "ports: [81]", "restart": map[string]any{"container": "my-web"}})
+	f.approve(t, out.ID)
+	done := f.act(t, "request_status", map[string]any{"id": out.ID})
+	if done.Status != "failed" || !strings.Contains(done.Result.Summary, "docker compose up for container my-web failed (exit status 1)") ||
+		!slices.Contains(done.Result.Details, "port is already allocated") {
+		t.Fatalf("got %+v", done.Result)
+	}
+	pending := f.store.List(true, 0)
+	if len(pending) != 1 {
+		t.Fatalf("no undo request: %+v", pending)
+	}
+	f.da.composeErr = nil
+	f.approve(t, pending[0].ID)
+	if read(t, p) != "ports: [80]\n" || len(f.da.composed) != 2 {
+		t.Errorf("undo: file %q, composed %d times", read(t, p), len(f.da.composed))
+	}
+}
+
+func TestComposeEditRefusedWithExcludedSibling(t *testing.T) {
+	f := newEditHarness(t)
+	p := composeEdit(t, f, "secret-db")
+	f.refusal(t, "file_edit", map[string]any{"path": p, "old": "ports: [80]", "new": "ports: [81]", "restart": map[string]any{"container": "my-web"}})
 }
