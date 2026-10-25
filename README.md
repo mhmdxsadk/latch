@@ -140,7 +140,29 @@ These tools change something:
   container's compose service (`docker compose up -d --no-deps`, optionally
   pulling first). Latch builds the command from the container's compose labels
   and runs nothing else. It always waits for your approval.
+- `file_edit` replaces text in a text file. The agent edits what `file_read`
+  shows, and Latch applies only the lines it changed, so a line that shows
+  `[hidden]` keeps its real value when the agent leaves it alone. A file whose
+  hidden value spans several lines, like a private key, cannot be edited.
+  Owner, permissions and line endings stay as they were. After editing a
+  systemd unit file, Latch runs `systemctl daemon-reload`. With `restart`, it
+  restarts that container or unit afterwards and puts the old content back if
+  it is not up 30 seconds later.
+- `file_create` creates a new text file (never over an existing one).
+- `file_backups` lists the backups of a file, and `file_restore` puts one
+  back. Restoring backs up the current content first.
+- `http_request` sends a POST, PUT, PATCH or DELETE with a text body. The
+  targets are checked like `net_http_get`, and redirects are not followed.
 - `action_status` and `actions_list` show what happened to a request.
+
+File changes and HTTP requests always wait for your approval. `latch pending`
+shows the diff of the change as the agent sees the file (with `[hidden]`
+values), or the request and its body. Blocked files cannot be changed at all.
+
+Before every change to a file, Latch copies it to
+`/var/lib/latch/backups/<path>.<time>` and keeps the 3 newest copies of each
+file. List them with `sudo latch backups /etc/nginx/nginx.conf`. The agent can
+list them too, but never read them.
 
 When a change needs approval, the agent gets a request id at once and tells
 you. On the server, as root:
