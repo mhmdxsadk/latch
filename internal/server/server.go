@@ -236,8 +236,9 @@ func limitBody(next http.Handler) http.Handler {
 }
 
 // Handler adapts an MCP server to a stateless Streamable HTTP handler.
-// Stateless mode keeps no per-client session state, which suits a read-only
-// request/response API and removes session-hijack surface.
+// Stateless mode keeps no per-client session state, which suits a
+// request/response API (change requests live in the approval store, not in
+// a session) and removes session-hijack surface.
 func Handler(s *sdk.Server) http.Handler {
 	return sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return s },
 		&sdk.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
