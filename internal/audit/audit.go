@@ -77,6 +77,8 @@ const (
 	ActionApproved = "action_approved"
 	ActionDenied   = "action_denied"
 	ActionExpired  = "action_expired"
+	// ActionTimedOut is a request that runs because nobody decided in time.
+	ActionTimedOut = "action_timed_out"
 )
 
 // ActionDecided records an approval, denial or expiry. uid is the approver;

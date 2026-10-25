@@ -137,8 +137,13 @@ func printPending(w io.Writer, reqs []approval.Request, now time.Time) {
 			fmt.Fprintln(w)
 		}
 		fmt.Fprintf(w, "request %d  %s  %s\n", r.ID, clean(r.Action), clean(r.Resource.Name))
-		fmt.Fprintf(w, "  asked by uid %d (pid %d) %s, expires %s\n",
-			r.RequestedBy.UID, r.RequestedBy.PID, ago(now.Sub(r.CreatedAt)), in(r.ExpiresAt.Sub(now)))
+		if r.RunsOnTimeout {
+			fmt.Fprintf(w, "  filed by Latch %s, RUNS BY ITSELF %s unless denied\n",
+				ago(now.Sub(r.CreatedAt)), in(r.ExpiresAt.Sub(now)))
+		} else {
+			fmt.Fprintf(w, "  asked by uid %d (pid %d) %s, expires %s\n",
+				r.RequestedBy.UID, r.RequestedBy.PID, ago(now.Sub(r.CreatedAt)), in(r.ExpiresAt.Sub(now)))
+		}
 		for _, d := range r.Details {
 			fmt.Fprintf(w, "  %s\n", clean(d))
 		}

@@ -146,8 +146,8 @@ These tools change something:
   hidden value spans several lines, like a private key, cannot be edited.
   Owner, permissions and line endings stay as they were. After editing a
   systemd unit file, Latch runs `systemctl daemon-reload`. With `restart`, it
-  restarts that container or unit afterwards and puts the old content back if
-  it is not up 30 seconds later.
+  restarts that container or unit afterwards. See "When a change breaks
+  something" below.
 - `file_create` creates a new text file (never over an existing one).
 - `file_backups` lists the backups of a file, and `file_restore` puts one
   back. Restoring backs up the current content first.
@@ -158,6 +158,26 @@ These tools change something:
 File changes and HTTP requests always wait for your approval. `latch pending`
 shows the diff of the change as the agent sees the file (with `[hidden]`
 values), or the request and its body. Blocked files cannot be changed at all.
+
+### When a change breaks something
+
+After a file change with a restart, Latch checks the container or unit: it
+waits for the container's health check to pass or fail (up to 2 minutes), or
+30 seconds when there is none. The agent gets the result and the log lines
+written since the restart.
+
+If the container or unit is not up, Latch keeps the change and files an undo
+request at once. `latch pending` shows it as running by itself:
+
+- `sudo latch approve <id>` puts the old content back now and restarts it.
+- `sudo latch deny <id>` keeps the change, for example to approve a fix from
+  the agent instead.
+- If you do nothing, the undo runs by itself after 10 minutes. This also
+  covers a change that locks you out, such as a broken SSH config.
+
+The undo only writes over exactly what the change wrote: if the file was
+changed again since, it does nothing. An undo that does not help files no
+further undo. Like every request, it is lost if Latch restarts before then.
 
 Before every change to a file, Latch copies it to
 `/var/lib/latch/backups/<path>.<time>` and keeps the 3 newest copies of each

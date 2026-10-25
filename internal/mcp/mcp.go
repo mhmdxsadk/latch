@@ -53,9 +53,13 @@ type Deps struct {
 	// sends approved HTTP writes.
 	Editor *files.Editor
 	HTTP   netcheck.Sender
-	// RestartSettle is how long Latch waits after the restart that follows
-	// a file change before checking the target; 0 means 30 seconds.
+	// RestartSettle, HealthWait, HealthPoll and UndoWait time the check
+	// after the restart that follows a file change; 0 means the Default*
+	// values in fileactions.go.
 	RestartSettle time.Duration
+	HealthWait    time.Duration
+	HealthPoll    time.Duration
+	UndoWait      time.Duration
 
 	// sem bounds concurrent tool calls across all connections, so parallel
 	// requests cannot multiply memory use, outbound probes or bus connections.

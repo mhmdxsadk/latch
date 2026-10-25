@@ -572,3 +572,36 @@ func TestLoadLastIDRejectsGarbage(t *testing.T) {
 func idAction() *fakeAction {
 	return &fakeAction{kind: "docker_stop", res: Resource{Type: "container", Name: "web"}, mode: Always}
 }
+
+type undoAction struct{ *fakeAction }
+
+func (undoAction) Timeout() time.Duration { return 10 * time.Minute }
+
+func TestRunsOnTimeoutWaitsForABusyResource(t *testing.T) {
+	clk := &clock{t: time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)}
+	s := New(Options{Now: clk.now})
+	var ran atomic.Int32
+	block := make(chan struct{})
+	busy := &fakeAction{kind: "docker_restart", res: Resource{Type: "file", Name: "/x"}, mode: Always, block: block, started: make(chan struct{}, 1)}
+	b, _ := s.Submit(context.Background(), Requester{}, busy)
+	if _, err := s.Approve(context.Background(), b.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	<-busy.started
+	u, err := s.Submit(context.Background(), Requester{}, undoAction{&fakeAction{kind: "file_restore", res: Resource{Type: "file", Name: "/x"}, mode: Always, executed: &ran}})
+	if err != nil || !u.RunsOnTimeout || !u.ExpiresAt.Equal(clk.now().Add(10*time.Minute)) {
+		t.Fatalf("%+v %v", u, err)
+	}
+	clk.add(10 * time.Minute)
+	s.Sweep(context.Background())
+	if r, _ := s.Get(u.ID); r.Status != StatusPending {
+		t.Fatalf("ran over a busy resource: %s", r.Status)
+	}
+	close(block)
+	s.Wait()
+	s.Sweep(context.Background())
+	s.Wait()
+	if r, _ := s.Get(u.ID); r.Status != StatusDone || ran.Load() != 1 || r.DecidedBy != nil {
+		t.Errorf("got %+v, ran %d", r, ran.Load())
+	}
+}

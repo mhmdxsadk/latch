@@ -84,6 +84,14 @@ type Action interface {
 	Execute(ctx context.Context) (Result, error)
 }
 
+// RunsOnTimeout is implemented by actions that run, instead of lapsing,
+// when the owner does not decide in time. Latch files these itself (a
+// restore after a failed change), never on the agent's behalf.
+type RunsOnTimeout interface {
+	// Timeout is how long the request waits for the owner before it runs.
+	Timeout() time.Duration
+}
+
 // Status is the state of a request.
 type Status string
 
@@ -106,12 +114,14 @@ type Requester struct {
 // Request is a snapshot of one request. It is a copy; changing it changes
 // nothing in the store.
 type Request struct {
-	ID            int64     `json:"id"`
-	Action        string    `json:"action"`
-	Resource      Resource  `json:"resource"`
-	Params        []Param   `json:"params"`
-	Details       []string  `json:"details"`
-	NeedsApproval bool      `json:"needs_approval"`
+	ID            int64    `json:"id"`
+	Action        string   `json:"action"`
+	Resource      Resource `json:"resource"`
+	Params        []Param  `json:"params"`
+	Details       []string `json:"details"`
+	NeedsApproval bool     `json:"needs_approval"`
+	// RunsOnTimeout means the request runs at ExpiresAt unless denied.
+	RunsOnTimeout bool      `json:"runs_on_timeout,omitempty"`
 	Status        Status    `json:"status"`
 	RequestedBy   Requester `json:"requested_by"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -288,6 +298,10 @@ func (s *Store) Submit(ctx context.Context, who Requester, a Action) (Request, e
 	s.o.Audit.ActionRequested(ctx, e.req.ID, e.req.Action, res.key(), needs, audit.Peer{UID: who.UID, PID: who.PID})
 	if needs {
 		e.req.ExpiresAt = now.Add(s.o.Expiry)
+		if r, ok := a.(RunsOnTimeout); ok {
+			e.req.RunsOnTimeout = true
+			e.req.ExpiresAt = now.Add(r.Timeout())
+		}
 		snap := s.snapshotLocked(e)
 		s.pruneLocked()
 		s.mu.Unlock()
@@ -485,12 +499,25 @@ func (s *Store) countPendingLocked() int {
 func (s *Store) sweepLocked(ctx context.Context, now time.Time) {
 	for _, id := range s.order {
 		e := s.entries[id]
-		if e.req.Status == StatusPending && !now.Before(e.req.ExpiresAt) {
-			e.req.Status = StatusExpired
-			e.req.FinishedAt = now
-			close(e.done)
-			s.o.Audit.ActionDecided(ctx, audit.ActionExpired, id, 0)
+		if e.req.Status != StatusPending || now.Before(e.req.ExpiresAt) {
+			continue
 		}
+		if e.req.RunsOnTimeout {
+			// Runs as if approved; a busy resource is tried again on the
+			// next sweep.
+			key := e.req.Resource.key()
+			if !s.busy[key] {
+				e.req.Status = StatusApproved
+				e.req.DecidedAt = now
+				s.o.Audit.ActionDecided(ctx, audit.ActionTimedOut, id, 0)
+				s.startLocked(e, key, now)
+			}
+			continue
+		}
+		e.req.Status = StatusExpired
+		e.req.FinishedAt = now
+		close(e.done)
+		s.o.Audit.ActionDecided(ctx, audit.ActionExpired, id, 0)
 	}
 }
 

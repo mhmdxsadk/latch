@@ -275,7 +275,8 @@ func cmdServe(args []string, stderr io.Writer) int {
 
 // sweep expires overdue requests every minute so expiry is audited on time.
 func sweep(ctx context.Context, store *approval.Store) {
-	t := time.NewTicker(time.Minute)
+	// Often enough that an undo request runs within seconds of its time.
+	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
 	for {
 		select {

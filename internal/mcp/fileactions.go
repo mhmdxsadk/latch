@@ -20,9 +20,29 @@ import (
 	"github.com/mhmdxsadk/latch/internal/textsafe"
 )
 
-// DefaultRestartSettle is how long Latch waits after the restart that
-// follows a file change before it checks that the target is up.
-const DefaultRestartSettle = 30 * time.Second
+// After a file change with a restart, Latch waits DefaultRestartSettle and
+// checks the target. A container whose health check still says "starting"
+// is checked every DefaultHealthPoll until DefaultHealthWait after the
+// restart. If the target is not up, the change stays and Latch files an undo
+// request that runs by itself after DefaultUndoWait unless the owner denies it.
+const (
+	DefaultRestartSettle = 30 * time.Second
+	DefaultHealthWait    = 2 * time.Minute
+	DefaultHealthPoll    = 5 * time.Second
+	DefaultUndoWait      = 10 * time.Minute
+)
+
+// afterRestartNote tells the agent what happens after the restart.
+const afterRestartNote = ". Latch then checks it (waiting for its health check, up to 2 minutes) and returns its log lines " +
+	"since the restart. If it is not up, the change stays and Latch files a request to undo it, which runs by itself " +
+	"after 10 minutes unless the owner denies it: tell the owner what the logs show so they can choose between the " +
+	"undo and a fix."
+
+// Log lines returned after a restart.
+const (
+	restartLogLines = 50
+	restartLogBytes = 8 << 10
+)
 
 // Describe bounds: what "latch pending" shows of one change.
 const (
@@ -38,12 +58,12 @@ var (
 	errBadMode       = userError{"mode must be an octal string such as 0644 or 0600: no setuid, setgid or sticky bits, and not writable by everyone"}
 	errNoBackupID    = userError{"backup must be a backup id from file_backups, such as 20261025T143000Z"}
 
-	// errRolledBack, errRollbackFailed and errReloadFailed end an execution
+	// errTargetDown, errStillDown and errReloadFailed end an execution
 	// whose summary already says what happened.
-	errRolledBack     = errors.New("change rolled back")
-	errRollbackFailed = errors.New("rollback failed")
-	errReloadFailed   = errors.New("daemon-reload failed")
-	errHTTPFailed     = errors.New("http request failed")
+	errTargetDown   = errors.New("target not up after the change")
+	errStillDown    = errors.New("target still not up after the undo")
+	errReloadFailed = errors.New("daemon-reload failed")
+	errHTTPFailed   = errors.New("http request failed")
 )
 
 type restartIn struct {
@@ -55,7 +75,7 @@ type fileEditIn struct {
 	Path    string     `json:"path" jsonschema:"absolute, clean path of an existing text file, e.g. /etc/nginx/nginx.conf"`
 	Old     string     `json:"old" jsonschema:"text to replace, exactly as file_read shows it (including [hidden]); it must occur exactly once; 1 byte to 64 KiB"`
 	New     string     `json:"new" jsonschema:"replacement text, up to 64 KiB; may be empty to delete"`
-	Restart *restartIn `json:"restart,omitempty" jsonschema:"optional container or unit to restart after the edit; the edit is rolled back if it is not up 30 seconds later"`
+	Restart *restartIn `json:"restart,omitempty" jsonschema:"optional container or unit to restart after the edit; Latch then reports whether it is up, with its new log lines"`
 }
 
 type fileCreateIn struct {
@@ -71,7 +91,7 @@ type fileBackupsIn struct {
 type fileRestoreIn struct {
 	Path    string     `json:"path" jsonschema:"absolute, clean path of the file to restore"`
 	Backup  string     `json:"backup" jsonschema:"backup id from file_backups, such as 20261025T143000Z"`
-	Restart *restartIn `json:"restart,omitempty" jsonschema:"optional container or unit to restart after the restore; it is rolled back if the target is not up 30 seconds later"`
+	Restart *restartIn `json:"restart,omitempty" jsonschema:"optional container or unit to restart after the restore; Latch then reports whether it is up, with its new log lines"`
 }
 
 type backupOut struct {
@@ -141,16 +161,41 @@ func (d *Deps) checkRestartTarget(ctx context.Context, t restartTarget) error {
 	return err
 }
 
-func (d *Deps) settle() time.Duration {
-	if d.RestartSettle > 0 {
-		return d.RestartSettle
+func orDefault(v, def time.Duration) time.Duration {
+	if v > 0 {
+		return v
 	}
-	return DefaultRestartSettle
+	return def
 }
 
-// restartAndCheck restarts t, waits, and reports whether it is up. why says
-// what was wrong, in fixed words and validated names.
-func (d *Deps) restartAndCheck(ctx context.Context, t restartTarget) (up bool, why string) {
+func (d *Deps) settle() time.Duration     { return orDefault(d.RestartSettle, DefaultRestartSettle) }
+func (d *Deps) healthWait() time.Duration { return orDefault(d.HealthWait, DefaultHealthWait) }
+func (d *Deps) healthPoll() time.Duration { return orDefault(d.HealthPoll, DefaultHealthPoll) }
+func (d *Deps) undoWait() time.Duration   { return orDefault(d.UndoWait, DefaultUndoWait) }
+
+// sleep waits for wait or the end of ctx, and reports whether it waited.
+func sleep(ctx context.Context, wait time.Duration) bool {
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// restartCheck is what Latch saw after the restart that follows a change.
+type restartCheck struct {
+	up   bool
+	why  string   // when not up: what was wrong, in fixed words and validated names
+	note string   // when up: anything worth saying, such as a health check still starting
+	logs []string // log lines written since the restart, already redacted
+}
+
+// restartAndCheck restarts t, waits, and reports whether it is up.
+func (d *Deps) restartAndCheck(ctx context.Context, t restartTarget) restartCheck {
+	start := time.Now()
 	var err error
 	if t.kind == "container" {
 		err = d.DockerActions.Restart(ctx, t.name)
@@ -158,39 +203,86 @@ func (d *Deps) restartAndCheck(ctx context.Context, t restartTarget) (up bool, w
 		_, err = d.SystemdActions.Restart(ctx, t.name)
 	}
 	if err != nil {
-		return false, "the restart of " + t.label() + " failed"
+		return restartCheck{why: "the restart of " + t.label() + " failed"}
 	}
-	wait := d.settle()
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false, t.label() + " was not checked: the change ran out of time"
-	case <-timer.C:
+	if !sleep(ctx, d.settle()) {
+		return restartCheck{why: t.label() + " was not checked: the change ran out of time"}
 	}
-	after := " " + wait.String() + " after the restart"
-	if t.kind == "container" {
+	c := d.checkUp(ctx, t, start)
+	c.logs = d.logsSince(ctx, t, start)
+	return c
+}
+
+func (d *Deps) checkUp(ctx context.Context, t restartTarget, start time.Time) restartCheck {
+	down := func(what string) restartCheck {
+		return restartCheck{why: t.label() + " " + what + " " + time.Since(start).Round(time.Second).String() + " after the restart"}
+	}
+	if t.kind == "unit" {
+		st, err := d.Systemd.UnitStatus(ctx, t.name)
+		switch {
+		case err != nil:
+			return down("could not be checked")
+		case st.ActiveState != "active":
+			return down("was " + textsafe.Line(st.ActiveState))
+		}
+		return restartCheck{up: true}
+	}
+	for {
 		st, err := d.Docker.Status(ctx, t.name)
 		switch {
 		case err != nil:
-			return false, "container " + t.name + " could not be checked" + after
+			return down("could not be checked")
 		case st.Restarting:
-			return false, "container " + t.name + " was restarting" + after
+			return down("was restarting")
 		case !st.Running || st.State != "running":
-			return false, "container " + t.name + " was not running (" + textsafe.Line(st.State) + ")" + after
+			return down("was not running (" + textsafe.Line(st.State) + ")")
 		case st.Health.Status == "unhealthy":
-			return false, "container " + t.name + " was unhealthy" + after
+			return down("was unhealthy")
+		case st.Health.Status != "starting":
+			return restartCheck{up: true}
 		}
-		return true, ""
+		if time.Since(start)+d.healthPoll() > d.healthWait() {
+			return restartCheck{up: true, note: "its health check was still starting " + d.healthWait().String() + " after the restart"}
+		}
+		if !sleep(ctx, d.healthPoll()) {
+			return down("was not checked to the end: the change ran out of time;")
+		}
 	}
-	st, err := d.Systemd.UnitStatus(ctx, t.name)
-	switch {
-	case err != nil:
-		return false, "unit " + t.name + " could not be checked" + after
-	case st.ActiveState != "active":
-		return false, "unit " + t.name + " was " + textsafe.Line(st.ActiveState) + after
+}
+
+// logsSince returns the target's log lines written since start.
+func (d *Deps) logsSince(ctx context.Context, t restartTarget, start time.Time) []string {
+	type line struct{ at, text string }
+	var lines []line
+	if t.kind == "container" {
+		l, err := d.Docker.Logs(ctx, t.name, restartLogLines, restartLogBytes)
+		if err != nil {
+			return []string{"its logs could not be read"}
+		}
+		for _, e := range l.Entries {
+			lines = append(lines, line{e.Time, e.Text})
+		}
+	} else {
+		l, err := d.Systemd.Logs(ctx, t.name, restartLogLines, restartLogBytes)
+		if err != nil {
+			return []string{"its logs could not be read"}
+		}
+		for _, e := range l.Entries {
+			lines = append(lines, line{e.Time, e.Text})
+		}
 	}
-	return true, ""
+	out := []string{}
+	for _, l := range lines {
+		at, err := time.Parse(time.RFC3339Nano, l.at)
+		if err != nil || at.Before(start.Add(-time.Second)) {
+			continue
+		}
+		out = append(out, "  "+at.UTC().Format("15:04:05")+" "+clip(textsafe.Line(l.text)))
+	}
+	if len(out) == 0 {
+		return []string{"no log lines since the restart"}
+	}
+	return append([]string{"log lines since the restart:"}, out...)
 }
 
 // reload runs a daemon-reload when path is a unit file.
@@ -226,12 +318,12 @@ func diffLines(path string, before, after []string) []string {
 	return out
 }
 
-func restartPlan(t *restartTarget, settle time.Duration) []string {
+func restartPlan(t *restartTarget, undoWait time.Duration) []string {
 	if t == nil {
 		return nil
 	}
-	return []string{"then restart " + t.label() + "; if it is not up " + settle.String() +
-		" later, put the old content back and restart it again"}
+	return []string{"then restart " + t.label() + " and check it; if it is not up, keep the change and file a request " +
+		"to undo it, which runs by itself after " + undoWait.String() + " unless denied"}
 }
 
 // fileChange replaces the content of an existing file: file_edit and
@@ -246,7 +338,19 @@ type fileChange struct {
 	restart  *restartTarget
 	backupID string // file_restore: the backup restored
 	details  []string
+	// isUndo marks Latch's own undo request. An undo whose target is still
+	// not up files no further undo.
+	isUndo bool
 }
+
+// undoChange is the undo request Latch files when the target of a change is
+// not up afterwards. It runs by itself unless the owner denies it.
+type undoChange struct {
+	*fileChange
+	wait time.Duration
+}
+
+func (u undoChange) Timeout() time.Duration { return u.wait }
 
 func (a *fileChange) Kind() string { return a.kind }
 func (a *fileChange) Resource() approval.Resource {
@@ -286,7 +390,10 @@ func (a *fileChange) Execute(ctx context.Context) (approval.Result, error) {
 		return approval.Result{}, err
 	}
 	verb := "edited "
-	if a.kind == "file_restore" {
+	switch {
+	case a.isUndo:
+		verb = "undid the change to "
+	case a.kind == "file_restore":
 		verb = "restored " + a.backupID + " to "
 	}
 	sum := verb + a.file.Path + ", backup " + res.BackupID
@@ -295,27 +402,48 @@ func (a *fileChange) Execute(ctx context.Context) (approval.Result, error) {
 	if err != nil || a.restart == nil {
 		return approval.Result{Summary: sum}, err
 	}
-	up, why := a.d.restartAndCheck(ctx, *a.restart)
-	if up {
-		return approval.Result{Summary: sum + "; restarted " + a.restart.label() + ", up"}, nil
+	c := a.d.restartAndCheck(ctx, *a.restart)
+	if c.up {
+		sum += "; restarted " + a.restart.label() + ", up"
+		if c.note != "" {
+			sum += ", but " + c.note
+		}
+		return approval.Result{Summary: sum, Details: c.logs}, nil
+	}
+	sum += "; " + c.why
+	if a.isUndo {
+		return approval.Result{Summary: sum + "; nothing more is undone automatically", Details: c.logs}, errStillDown
 	}
 
-	// Roll back: put the old content back, but only over exactly what was
-	// written.
+	// Keep the change and let the owner choose: approve the undo, deny it
+	// and fix forward, or let it run by itself.
+	undo := a.undo(res)
+	r, err := a.d.Actions.Submit(ctx, approval.Requester{}, undo)
+	if err != nil {
+		return approval.Result{Summary: sum + "; the change stays and no undo request could be filed (backup " + res.BackupID +
+			" has the old content)", Details: c.logs}, errTargetDown
+	}
+	sum += fmt.Sprintf("; the change stays for now: request %d undoes it by itself at %s unless the owner denies it",
+		r.ID, r.ExpiresAt.UTC().Format("15:04 UTC"))
+	return approval.Result{Summary: sum, Details: c.logs}, errTargetDown
+}
+
+// undo builds the request that puts back what Execute replaced, but only
+// over exactly what Execute wrote.
+func (a *fileChange) undo(res files.ReplaceResult) undoChange {
 	written := files.File{Path: a.file.Path, Hash: sha256.Sum256(a.content)}
-	if _, err := a.d.Editor.Replace(ctx, a.path, written, res.Old, false); err != nil {
-		return approval.Result{Summary: sum + "; " + why + "; rollback failed (the file changed or could not be written), so the new content stays; backup " + res.BackupID + " has the old content"}, errRollbackFailed
+	details := []string{"undo the change to " + a.file.Path + " (put back the content from backup " + res.BackupID + ")"}
+	details = append(details, diffLines(a.file.Path, files.ViewLines(a.content), files.ViewLines(res.Old))...)
+	if files.IsUnitPath(a.file.Path) {
+		details = append(details, "then run systemd daemon-reload")
 	}
-	sum += "; rolled back: " + why + "; the old content is back"
-	if note, err := a.d.reloadFor(ctx, a.file.Path); err != nil {
-		return approval.Result{Summary: sum + note}, errRolledBack
+	details = append(details, "then restart "+a.restart.label()+" and check it",
+		"Latch filed this because "+a.restart.label()+" was not up after the change; it runs by itself unless denied")
+	return undoChange{
+		fileChange: &fileChange{d: a.d, kind: "file_restore", path: a.path, file: written, content: res.Old,
+			restart: a.restart, backupID: res.BackupID, details: details, isUndo: true},
+		wait: a.d.undoWait(),
 	}
-	if up, _ := a.d.restartAndCheck(ctx, *a.restart); up {
-		sum += "; restarted " + a.restart.label() + " again, up"
-	} else {
-		sum += "; restarted " + a.restart.label() + " again, still not up"
-	}
-	return approval.Result{Summary: sum}, errRolledBack
 }
 
 // fileCreate creates a new file.
@@ -393,7 +521,7 @@ func registerFileActions(s *sdk.Server, d *Deps) {
 			"(write the full value instead). Files whose hidden values span several lines (private keys) cannot be edited. " +
 			"Latch keeps the file's owner, permissions and line endings, makes a backup first (see file_backups), " +
 			"runs a systemd daemon-reload after editing a unit file, and with 'restart' restarts that container or unit " +
-			"afterwards and puts the old content back if it is not up 30 seconds later." + alwaysNote + approvalNote,
+			"afterwards" + afterRestartNote + alwaysNote + approvalNote,
 		Annotations: changeAnnotations(true, false),
 	}, wrap(d, "file_edit", func(ctx context.Context, in fileEditIn) (actionOut, string, error) {
 		if err := files.ValidatePath(in.Path); err != nil {
@@ -419,7 +547,7 @@ func registerFileActions(s *sdk.Server, d *Deps) {
 		if files.IsUnitPath(file.Path) {
 			details = append(details, "then run systemd daemon-reload")
 		}
-		details = append(details, restartPlan(t, d.settle())...)
+		details = append(details, restartPlan(t, d.undoWait())...)
 		out, err := d.submit(ctx, &fileChange{d: d, kind: "file_edit", path: in.Path, file: file, content: plan.Content, restart: t, details: details})
 		return out, in.Path, err
 	}))
@@ -497,8 +625,7 @@ func registerFileActions(s *sdk.Server, d *Deps) {
 		Name: "file_restore",
 		Description: "Put a backup from file_backups back in place of the file's current content. Latch backs up the current " +
 			"content first, keeps the file's owner and permissions, runs a systemd daemon-reload for a unit file, and with " +
-			"'restart' restarts that container or unit and undoes the restore if it is not up 30 seconds later." +
-			alwaysNote + approvalNote,
+			"'restart' restarts that container or unit afterwards" + afterRestartNote + alwaysNote + approvalNote,
 		Annotations: changeAnnotations(true, false),
 	}, wrap(d, "file_restore", func(ctx context.Context, in fileRestoreIn) (actionOut, string, error) {
 		if err := files.ValidatePath(in.Path); err != nil {
@@ -529,7 +656,7 @@ func registerFileActions(s *sdk.Server, d *Deps) {
 		if files.IsUnitPath(file.Path) {
 			details = append(details, "then run systemd daemon-reload")
 		}
-		details = append(details, restartPlan(t, d.settle())...)
+		details = append(details, restartPlan(t, d.undoWait())...)
 		out, err := d.submit(ctx, &fileChange{d: d, kind: "file_restore", path: in.Path, file: file, content: content, restart: t, backupID: in.Backup, details: details})
 		return out, in.Path, err
 	}))

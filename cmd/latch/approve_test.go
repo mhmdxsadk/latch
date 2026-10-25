@@ -176,6 +176,18 @@ func TestSpan(t *testing.T) {
 	}
 }
 
+func TestPendingShowsUndoRunsByItself(t *testing.T) {
+	var out bytes.Buffer
+	now := time.Now()
+	printPending(&out, []approval.Request{{
+		ID: 4, Action: "file_restore", Resource: approval.Resource{Name: "/etc/ssh/sshd_config"}, RunsOnTimeout: true,
+		CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(9*time.Minute + 30*time.Second),
+	}}, now)
+	if !strings.Contains(out.String(), "  filed by Latch 1 minute ago, RUNS BY ITSELF in 9 minutes unless denied\n") {
+		t.Errorf("got %q", out.String())
+	}
+}
+
 func TestPendingOutputIsSanitized(t *testing.T) {
 	var out bytes.Buffer
 	now := time.Now()

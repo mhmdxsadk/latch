@@ -144,10 +144,10 @@ func ExplainActionError(err error) (summary, reason string) {
 		return "docker compose failed", "compose_failed"
 	case errors.Is(err, systemd.ErrJobFailed):
 		return "the systemd job did not succeed", "job_failed"
-	case errors.Is(err, errRolledBack):
-		return "the change was rolled back", "rolled_back"
-	case errors.Is(err, errRollbackFailed):
-		return "the target was not up and the rollback failed", "rollback_failed"
+	case errors.Is(err, errTargetDown):
+		return "the change was made but its target is not up", "target_down"
+	case errors.Is(err, errStillDown):
+		return "the change was undone but its target is still not up", "still_down"
 	case errors.Is(err, errHTTPFailed):
 		return "the request could not be completed", "http_failed"
 	case errors.Is(err, errReloadFailed):

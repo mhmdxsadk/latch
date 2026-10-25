@@ -23,7 +23,21 @@ type actDocker struct {
 	fakeDocker
 	mu      sync.Mutex
 	missing map[string]bool
+	health  string // health status reported for every container; "" = healthy
+	logs    []docker.LogEntry
 	calls   []string
+}
+
+func (f *actDocker) Logs(context.Context, string, int, int) (docker.Logs, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return docker.Logs{Entries: slices.Clone(f.logs)}, nil
+}
+
+func (f *actDocker) setHealth(h string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.health = h
 }
 
 func (f *actDocker) Status(_ context.Context, c string) (docker.Status, error) {
@@ -33,7 +47,11 @@ func (f *actDocker) Status(_ context.Context, c string) (docker.Status, error) {
 	if f.missing[c] {
 		return docker.Status{}, docker.ErrNotFound
 	}
-	return docker.Status{State: "running", Running: true, Health: docker.Health{Status: "healthy"}}, nil
+	h := f.health
+	if h == "" {
+		h = "healthy"
+	}
+	return docker.Status{State: "running", Running: true, Health: docker.Health{Status: h}}, nil
 }
 func (f *actDocker) setMissing(name string) {
 	f.mu.Lock()

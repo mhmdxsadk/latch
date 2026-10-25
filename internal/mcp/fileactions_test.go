@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mhmdxsadk/latch/internal/approval"
+	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/files"
 	"github.com/mhmdxsadk/latch/internal/netcheck"
 )
@@ -39,6 +42,8 @@ func newEditHarness(t *testing.T) *editHarness {
 		d.Editor = files.NewEditor(g, files.NewBackups(backups))
 		d.HTTP = fh.http
 		d.RestartSettle = time.Millisecond
+		d.HealthPoll = time.Millisecond
+		d.HealthWait = 20 * time.Millisecond
 	})
 	return fh
 }
@@ -195,27 +200,130 @@ func TestFileEditRefusesSymlinkSwap(t *testing.T) {
 	}
 }
 
-func TestFileEditRestartUpAndRollback(t *testing.T) {
+func TestFileEditRestartUp(t *testing.T) {
 	f := newEditHarness(t)
 	p := f.write(t, "web.conf", "listen 80\n")
-
-	// The container comes back up: the edit stays.
+	now := time.Now().UTC()
+	f.dk.logs = []docker.LogEntry{
+		{Stream: "stdout", Time: now.Add(-time.Hour).Format(time.RFC3339Nano), Text: "old line"},
+		{Stream: "stdout", Time: now.Add(time.Second).Format(time.RFC3339Nano), Text: "listening on 81"},
+	}
 	out := f.act(t, "file_edit", map[string]any{"path": p, "old": "listen 80", "new": "listen 81", "restart": map[string]any{"container": "my-web"}})
 	f.approve(t, out.ID)
 	done := f.act(t, "action_status", map[string]any{"id": out.ID})
 	if done.Status != "done" || !strings.Contains(done.Result.Summary, "restarted container my-web, up") || read(t, p) != "listen 81\n" {
 		t.Fatalf("up: %+v %q", done, read(t, p))
 	}
+	logs := strings.Join(done.Result.Details, "\n")
+	if !strings.Contains(logs, "listening on 81") || strings.Contains(logs, "old line") {
+		t.Errorf("logs since the restart: %q", logs)
+	}
+	if len(f.store.List(true, 0)) != 0 {
+		t.Error("an undo request was filed for a change that worked")
+	}
+}
 
-	// The unit is not active after the restart: the old content comes back.
-	out = f.act(t, "file_edit", map[string]any{"path": p, "old": "listen 81", "new": "listen 82", "restart": map[string]any{"unit": "nginx.service"}})
+// failEdit edits web.conf with a unit restart; the fake unit is never active.
+func failEdit(t *testing.T, f *editHarness) (p string, edit, undo int64) {
+	t.Helper()
+	p = f.write(t, "web.conf", "listen 80\n")
+	out := f.act(t, "file_edit", map[string]any{"path": p, "old": "listen 80", "new": "listen 81", "restart": map[string]any{"unit": "nginx.service"}})
+	f.approve(t, out.ID)
+	done := f.act(t, "action_status", map[string]any{"id": out.ID})
+	if done.Status != "failed" || !strings.Contains(done.Result.Summary, "the change stays for now") || read(t, p) != "listen 81\n" {
+		t.Fatalf("failed edit: %+v %q", done, read(t, p))
+	}
+	pending := f.store.List(true, 0)
+	if len(pending) != 1 || !pending[0].RunsOnTimeout || pending[0].Action != "file_restore" ||
+		!pending[0].ExpiresAt.Equal(f.clk.now().Add(DefaultUndoWait)) {
+		t.Fatalf("undo request: %+v", pending)
+	}
+	if !strings.Contains(done.Result.Summary, fmt.Sprintf("request %d undoes it by itself", pending[0].ID)) {
+		t.Errorf("summary does not name the undo request: %q", done.Result.Summary)
+	}
+	return p, out.ID, pending[0].ID
+}
+
+func TestFailedEditUndoApproved(t *testing.T) {
+	f := newEditHarness(t)
+	p, _, undo := failEdit(t, f)
+	f.approve(t, undo)
+	r, _ := f.store.Get(undo)
+	if read(t, p) != "listen 80\n" || !strings.Contains(r.Result.Summary, "undid the change") ||
+		!strings.Contains(r.Result.Summary, "nothing more is undone automatically") {
+		t.Errorf("undo: %+v %q", r.Result, read(t, p))
+	}
+	if len(f.store.List(true, 0)) != 0 {
+		t.Error("an undo filed another undo")
+	}
+}
+
+func TestFailedEditUndoDeniedKeepsTheChange(t *testing.T) {
+	f := newEditHarness(t)
+	p, _, undo := failEdit(t, f)
+	if _, err := f.store.Deny(context.Background(), undo, 0); err != nil {
+		t.Fatal(err)
+	}
+	f.clk.add(DefaultUndoWait + time.Minute)
+	f.store.Sweep(context.Background())
+	f.store.Wait()
+	if read(t, p) != "listen 81\n" {
+		t.Errorf("denied undo ran: %q", read(t, p))
+	}
+}
+
+func TestFailedEditUndoRunsOnTimeout(t *testing.T) {
+	f := newEditHarness(t)
+	p, _, undo := failEdit(t, f)
+	f.clk.add(DefaultUndoWait - time.Second)
+	f.store.Sweep(context.Background())
+	if read(t, p) != "listen 81\n" {
+		t.Fatal("undo ran early")
+	}
+	f.clk.add(time.Second)
+	f.store.Sweep(context.Background())
+	f.store.Wait()
+	r, _ := f.store.Get(undo)
+	if read(t, p) != "listen 80\n" || r.DecidedBy != nil || r.Status != approval.StatusFailed {
+		t.Errorf("timeout undo: %+v %q", r, read(t, p))
+	}
+	if !strings.Contains(f.audit.String(), `"msg":"action_timed_out"`) {
+		t.Error("the timed-out undo is not audited")
+	}
+}
+
+// A fix approved before the undo runs wins: the undo only writes over
+// exactly what the failed edit wrote.
+func TestUndoNeverOverwritesALaterFix(t *testing.T) {
+	f := newEditHarness(t)
+	p, _, undo := failEdit(t, f)
+	f.write(t, "web.conf", "listen 82\n")
+	f.clk.add(DefaultUndoWait)
+	f.store.Sweep(context.Background())
+	f.store.Wait()
+	r, _ := f.store.Get(undo)
+	if read(t, p) != "listen 82\n" || r.Status != approval.StatusFailed || !strings.Contains(r.Result.Summary, "changed") {
+		t.Errorf("got %+v %q", r.Result, read(t, p))
+	}
+}
+
+func TestRestartWaitsForHealthCheck(t *testing.T) {
+	f := newEditHarness(t)
+	f.dk.setHealth("starting")
+	p := f.write(t, "web.conf", "listen 80\n")
+	out := f.act(t, "file_edit", map[string]any{"path": p, "old": "listen 80", "new": "listen 81", "restart": map[string]any{"container": "my-web"}})
+	f.approve(t, out.ID)
+	done := f.act(t, "action_status", map[string]any{"id": out.ID})
+	if done.Status != "done" || !strings.Contains(done.Result.Summary, "health check was still starting") {
+		t.Errorf("still starting: %+v", done.Result)
+	}
+
+	f.dk.setHealth("unhealthy")
+	out = f.act(t, "file_edit", map[string]any{"path": p, "old": "listen 81", "new": "listen 82", "restart": map[string]any{"container": "my-web"}})
 	f.approve(t, out.ID)
 	done = f.act(t, "action_status", map[string]any{"id": out.ID})
-	if done.Status != "failed" || !strings.Contains(done.Result.Summary, "rolled back") || read(t, p) != "listen 81\n" {
-		t.Errorf("rollback: %+v %q", done, read(t, p))
-	}
-	if calls := f.sa.Calls(); len(calls) != 2 || calls[0] != "restart nginx.service" || calls[1] != "restart nginx.service" {
-		t.Errorf("systemd calls %v", calls)
+	if done.Status != "failed" || !strings.Contains(done.Result.Summary, "container my-web was unhealthy") {
+		t.Errorf("unhealthy: %+v", done.Result)
 	}
 }
 
