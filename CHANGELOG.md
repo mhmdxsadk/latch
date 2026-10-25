@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/mhmdxsadk/latch/compare/v0.10.0...v0.11.0) (2026-10-25)
+
+
+### Features
+
+* **admin:** record whether a decision came from the cli or telegram ([6a3dc3a](https://github.com/mhmdxsadk/latch/commit/6a3dc3a85549a4249f7ac7380f4eda82e5b76e3f))
+* **packaging:** ship latch-telegram with its unit, installer step and docs ([3be1150](https://github.com/mhmdxsadk/latch/commit/3be115073f759c0de96e7973d38a7f9fabe616bf))
+* **telegram:** add the latch-telegram bridge for approvals and agent chat ([c7bc713](https://github.com/mhmdxsadk/latch/commit/c7bc71385d954a063bd2eb6c7b407aa6e282e9a1))
+* **tgapi:** add a plain-text Telegram Bot API client and a fake server ([6b85e0a](https://github.com/mhmdxsadk/latch/commit/6b85e0a2654c3c4ca874c77c69f05130c6d408d6))
+* **tgapprove:** announce change requests in Telegram with approve and deny buttons ([43b027e](https://github.com/mhmdxsadk/latch/commit/43b027e26ac8ba0871ffe9fec7832ce5c557cddd))
+* **tgchat:** run agent turns from Telegram as the agent's own user ([7bf3b14](https://github.com/mhmdxsadk/latch/commit/7bf3b1458dc094c9f4668f4f7a2aca8d5bc46097))
+
 ## [0.10.0](https://github.com/mhmdxsadk/latch/compare/v0.9.1...v0.10.0) (2026-10-25)
 
 
