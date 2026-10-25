@@ -247,7 +247,7 @@ func (a *actHarness) refusal(t *testing.T, tool string, args any) string {
 
 func (a *actHarness) approve(t *testing.T, id int64) {
 	t.Helper()
-	if _, err := a.store.Approve(context.Background(), id, 0); err != nil {
+	if _, err := a.store.Approve(context.Background(), id, approval.Decider{}); err != nil {
 		t.Fatal(err)
 	}
 	a.store.Wait()

@@ -8,6 +8,9 @@
 //	POST /v1/requests/{id}/approve    approve and start a pending request
 //	POST /v1/requests/{id}/deny       deny a pending request
 //
+// The decide calls take an optional ?via=cli|telegram (default cli) that is
+// recorded with the decision and in the audit log.
+//
 // Lists answer {"requests": [Request...]}; the others answer a Request (see
 // approval.Request). Errors answer {"error": "..."} with 400 (bad id), 404
 // (not found or expired), 409 (not pending, or the resource is busy) or 403
@@ -22,6 +25,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -64,7 +68,7 @@ func Handler(store *approval.Store) http.Handler {
 		req, err := store.Get(id)
 		respond(w, req, err)
 	})
-	decide := func(do func(context.Context, int64, uint32) (approval.Request, error)) http.HandlerFunc {
+	decide := func(do func(context.Context, int64, approval.Decider) (approval.Request, error)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			peer, ok := audit.PeerFromContext(r.Context())
 			if !ok {
@@ -75,7 +79,16 @@ func Handler(store *approval.Store) http.Handler {
 			if !ok {
 				return
 			}
-			req, err := do(r.Context(), id, peer.UID)
+			via := r.URL.Query().Get("via")
+			switch via {
+			case "":
+				via = approval.ViaCLI
+			case approval.ViaCLI, approval.ViaTelegram:
+			default:
+				reply(w, http.StatusBadRequest, Error{"via must be cli or telegram"})
+				return
+			}
+			req, err := do(r.Context(), id, approval.Decider{UID: peer.UID, Via: via})
 			respond(w, req, err)
 		}
 	}
@@ -117,6 +130,8 @@ func reply(w http.ResponseWriter, code int, v any) {
 // Client talks to the admin socket.
 type Client struct {
 	http *http.Client
+	// Via is sent with approvals and denials (approval.ViaCLI when empty).
+	Via string
 }
 
 // NewClient returns a Client for the admin socket at path.
@@ -171,15 +186,21 @@ func (c *Client) Get(ctx context.Context, id int64) (approval.Request, error) {
 
 // Approve approves a pending request.
 func (c *Client) Approve(ctx context.Context, id int64) (approval.Request, error) {
-	var r approval.Request
-	err := c.do(ctx, http.MethodPost, "/v1/requests/"+strconv.FormatInt(id, 10)+"/approve", &r)
-	return r, err
+	return c.decide(ctx, id, "approve")
 }
 
 // Deny denies a pending request.
 func (c *Client) Deny(ctx context.Context, id int64) (approval.Request, error) {
+	return c.decide(ctx, id, "deny")
+}
+
+func (c *Client) decide(ctx context.Context, id int64, verb string) (approval.Request, error) {
+	path := "/v1/requests/" + strconv.FormatInt(id, 10) + "/" + verb
+	if c.Via != "" {
+		path += "?via=" + url.QueryEscape(c.Via)
+	}
 	var r approval.Request
-	err := c.do(ctx, http.MethodPost, "/v1/requests/"+strconv.FormatInt(id, 10)+"/deny", &r)
+	err := c.do(ctx, http.MethodPost, path, &r)
 	return r, err
 }
 

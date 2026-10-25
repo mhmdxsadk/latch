@@ -262,7 +262,7 @@ func TestFailedEditUndoApproved(t *testing.T) {
 func TestFailedEditUndoDeniedKeepsTheChange(t *testing.T) {
 	f := newEditHarness(t)
 	p, _, undo := failEdit(t, f)
-	if _, err := f.store.Deny(context.Background(), undo, 0); err != nil {
+	if _, err := f.store.Deny(context.Background(), undo, approval.Decider{}); err != nil {
 		t.Fatal(err)
 	}
 	f.clk.add(DefaultUndoWait + time.Minute)

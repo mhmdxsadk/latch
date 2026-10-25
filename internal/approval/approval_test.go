@@ -170,7 +170,7 @@ func TestRateLimitThenPendingAndWindowSlides(t *testing.T) {
 		t.Fatalf("other resource: %+v", r)
 	}
 	// Approving the 6th counts as an executed restart too.
-	if _, err := h.s.Approve(context.Background(), r.ID, 0); err != nil {
+	if _, err := h.s.Approve(context.Background(), r.ID, Decider{}); err != nil {
 		t.Fatal(err)
 	}
 	h.s.Wait()
@@ -233,7 +233,7 @@ func TestApproveExecutesExactlyTheStoredActionOnce(t *testing.T) {
 	r.Params[0].Value = "0s"
 	r.Resource.Name = "other"
 
-	got, err := h.s.Approve(context.Background(), r.ID, 0)
+	got, err := h.s.Approve(context.Background(), r.ID, Decider{})
 	if err != nil || got.Status != StatusRunning || got.DecidedBy == nil || *got.DecidedBy != 0 {
 		t.Fatalf("%v %+v", err, got)
 	}
@@ -243,10 +243,10 @@ func TestApproveExecutesExactlyTheStoredActionOnce(t *testing.T) {
 		t.Fatalf("got %+v executed=%d", final, n.Load())
 	}
 	// Single use.
-	if _, err := h.s.Approve(context.Background(), r.ID, 0); !errors.Is(err, ErrNotPending) {
+	if _, err := h.s.Approve(context.Background(), r.ID, Decider{}); !errors.Is(err, ErrNotPending) {
 		t.Errorf("second approve: %v", err)
 	}
-	if _, err := h.s.Deny(context.Background(), r.ID, 0); !errors.Is(err, ErrNotPending) {
+	if _, err := h.s.Deny(context.Background(), r.ID, Decider{}); !errors.Is(err, ErrNotPending) {
 		t.Errorf("deny after approve: %v", err)
 	}
 	h.s.Wait()
@@ -266,7 +266,7 @@ func TestConcurrentApprovalsRunOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 20 {
 		wg.Go(func() {
-			if _, err := h.s.Approve(context.Background(), r.ID, 0); err == nil {
+			if _, err := h.s.Approve(context.Background(), r.ID, Decider{}); err == nil {
 				ok.Add(1)
 			}
 		})
@@ -282,11 +282,11 @@ func TestDeny(t *testing.T) {
 	h := newStore(t, Options{})
 	var n atomic.Int32
 	r, _ := h.s.Submit(context.Background(), agent, stop("web", &n))
-	d, err := h.s.Deny(context.Background(), r.ID, 0)
+	d, err := h.s.Deny(context.Background(), r.ID, Decider{})
 	if err != nil || d.Status != StatusDenied {
 		t.Fatalf("%v %+v", err, d)
 	}
-	if _, err := h.s.Approve(context.Background(), r.ID, 0); !errors.Is(err, ErrNotPending) {
+	if _, err := h.s.Approve(context.Background(), r.ID, Decider{}); !errors.Is(err, ErrNotPending) {
 		t.Errorf("approve after deny: %v", err)
 	}
 	h.s.Wait()
@@ -304,10 +304,10 @@ func TestDeny(t *testing.T) {
 func TestUnknownID(t *testing.T) {
 	h := newStore(t, Options{})
 	for _, id := range []int64{0, -1, 1, 99} {
-		if _, err := h.s.Approve(context.Background(), id, 0); !errors.Is(err, ErrNotFound) {
+		if _, err := h.s.Approve(context.Background(), id, Decider{}); !errors.Is(err, ErrNotFound) {
 			t.Errorf("approve %d: %v", id, err)
 		}
-		if _, err := h.s.Deny(context.Background(), id, 0); !errors.Is(err, ErrNotFound) {
+		if _, err := h.s.Deny(context.Background(), id, Decider{}); !errors.Is(err, ErrNotFound) {
 			t.Errorf("deny %d: %v", id, err)
 		}
 		if _, err := h.s.Get(id); !errors.Is(err, ErrNotFound) {
@@ -328,10 +328,10 @@ func TestExpiryAfterOneHour(t *testing.T) {
 	if got, _ := h.s.Get(r.ID); got.Status != StatusExpired {
 		t.Fatalf("not expired: %+v", got)
 	}
-	if _, err := h.s.Approve(context.Background(), r.ID, 0); !errors.Is(err, ErrNotFound) {
+	if _, err := h.s.Approve(context.Background(), r.ID, Decider{}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("approve expired: %v", err)
 	}
-	if _, err := h.s.Deny(context.Background(), r.ID, 0); !errors.Is(err, ErrNotFound) {
+	if _, err := h.s.Deny(context.Background(), r.ID, Decider{}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("deny expired: %v", err)
 	}
 	h.s.Wait()
@@ -375,7 +375,7 @@ func TestResourceVanishedBeforeExecution(t *testing.T) {
 	a := stop("web", &n)
 	a.checkAt = 2 // passes at request time, fails at execution time
 	r, _ := h.s.Submit(context.Background(), agent, a)
-	h.s.Approve(context.Background(), r.ID, 0)
+	h.s.Approve(context.Background(), r.ID, Decider{})
 	h.s.Wait()
 	got, _ := h.s.Get(r.ID)
 	if got.Status != StatusFailed || got.Result.Summary != "the resource no longer exists" || n.Load() != 0 {
@@ -416,7 +416,7 @@ func TestOneChangePerResource(t *testing.T) {
 	if err != nil || p.Status != StatusPending {
 		t.Fatalf("%v %+v", err, p)
 	}
-	if _, err := h.s.Approve(context.Background(), p.ID, 0); !errors.Is(err, ErrBusy) {
+	if _, err := h.s.Approve(context.Background(), p.ID, Decider{}); !errors.Is(err, ErrBusy) {
 		t.Errorf("approve while busy: %v", err)
 	}
 	if got, _ := h.s.Get(p.ID); got.Status != StatusPending {
@@ -424,7 +424,7 @@ func TestOneChangePerResource(t *testing.T) {
 	}
 	close(block)
 	h.s.Wait()
-	if _, err := h.s.Approve(context.Background(), p.ID, 0); err != nil {
+	if _, err := h.s.Approve(context.Background(), p.ID, Decider{}); err != nil {
 		t.Errorf("approve once free: %v", err)
 	}
 }
@@ -584,7 +584,7 @@ func TestRunsOnTimeoutWaitsForABusyResource(t *testing.T) {
 	block := make(chan struct{})
 	busy := &fakeAction{kind: "docker_restart", res: Resource{Type: "file", Name: "/x"}, mode: Always, block: block, started: make(chan struct{}, 1)}
 	b, _ := s.Submit(context.Background(), Requester{}, busy)
-	if _, err := s.Approve(context.Background(), b.ID, 0); err != nil {
+	if _, err := s.Approve(context.Background(), b.ID, Decider{}); err != nil {
 		t.Fatal(err)
 	}
 	<-busy.started

@@ -103,8 +103,30 @@ func TestApproveDenyAndList(t *testing.T) {
 		t.Errorf("recent: %v %+v", err, r)
 	}
 	one, err := c.Get(ctx, a.ID)
-	if err != nil || one.Status != approval.StatusDone || one.DecidedBy == nil || *one.DecidedBy != 0 {
+	if err != nil || one.Status != approval.StatusDone || one.DecidedBy == nil || *one.DecidedBy != 0 || one.DecidedVia != approval.ViaCLI {
 		t.Errorf("get: %v %+v", err, one)
+	}
+}
+
+func TestDecisionsRecordVia(t *testing.T) {
+	store := approval.New(approval.Options{})
+	t.Cleanup(store.Wait)
+	var runs atomic.Int32
+	ctx := context.Background()
+	a, _ := store.Submit(ctx, approval.Requester{}, action{name: "web", runs: &runs})
+	b, _ := store.Submit(ctx, approval.Requester{}, action{name: "db", runs: &runs})
+	c := serve(t, store, &audit.Peer{UID: 0})
+	c.Via = approval.ViaTelegram
+	if got, err := c.Deny(ctx, a.ID); err != nil || got.DecidedVia != approval.ViaTelegram {
+		t.Fatalf("%v %+v", err, got)
+	}
+	c.Via = "email"
+	var ae *APIError
+	if _, err := c.Approve(ctx, b.ID); !errors.As(err, &ae) || ae.Status != http.StatusBadRequest {
+		t.Fatalf("bad via: %v", err)
+	}
+	if p, _ := c.Pending(ctx); len(p) != 1 {
+		t.Errorf("a bad via decided the request: %+v", p)
 	}
 }
 

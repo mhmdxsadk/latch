@@ -81,13 +81,14 @@ const (
 	ActionTimedOut = "action_timed_out"
 )
 
-// ActionDecided records an approval, denial or expiry. uid is the approver;
-// it is 0 (and meaningless) for expiry.
-func (a *Logger) ActionDecided(ctx context.Context, event string, id int64, uid uint32) {
-	a.l.LogAttrs(ctx, slog.LevelInfo, event,
-		slog.Int64("id", id),
-		slog.Uint64("by_uid", uint64(uid)),
-	)
+// ActionDecided records an approval, denial or expiry. uid is the approver
+// and via the channel it used (a fixed word); both are empty for expiry.
+func (a *Logger) ActionDecided(ctx context.Context, event string, id int64, uid uint32, via string) {
+	attrs := []slog.Attr{slog.Int64("id", id), slog.Uint64("by_uid", uint64(uid))}
+	if via != "" {
+		attrs = append(attrs, slog.String("via", via))
+	}
+	a.l.LogAttrs(ctx, slog.LevelInfo, event, attrs...)
 }
 
 // ActionExecuted records the end of a change. outcome is a fixed word (done,

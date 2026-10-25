@@ -128,9 +128,24 @@ type Request struct {
 	ExpiresAt     time.Time `json:"expires_at,omitzero"`
 	DecidedAt     time.Time `json:"decided_at,omitzero"`
 	DecidedBy     *uint32   `json:"decided_by,omitempty"`
-	StartedAt     time.Time `json:"started_at,omitzero"`
-	FinishedAt    time.Time `json:"finished_at,omitzero"`
-	Result        *Result   `json:"result,omitempty"`
+	// DecidedVia is where the owner decided: ViaCLI or ViaTelegram.
+	DecidedVia string    `json:"decided_via,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitzero"`
+	FinishedAt time.Time `json:"finished_at,omitzero"`
+	Result     *Result   `json:"result,omitempty"`
+}
+
+// Where an owner's decision came from.
+const (
+	ViaCLI      = "cli"
+	ViaTelegram = "telegram"
+)
+
+// Decider is who decided a request: the kernel-verified uid of the admin
+// socket peer and the channel it used.
+type Decider struct {
+	UID uint32
+	Via string
 }
 
 // Errors returned by the store. Their text is safe to show.
@@ -321,10 +336,10 @@ func (s *Store) Submit(ctx context.Context, who Requester, a Action) (Request, e
 	return s.Get(e.req.ID)
 }
 
-// Approve runs a pending request on behalf of uid. It fails with ErrNotFound
+// Approve runs a pending request on behalf of by. It fails with ErrNotFound
 // for unknown or expired requests, ErrNotPending once decided, and ErrBusy
 // (the request stays pending) while another change to the resource runs.
-func (s *Store) Approve(ctx context.Context, id int64, uid uint32) (Request, error) {
+func (s *Store) Approve(ctx context.Context, id int64, by Decider) (Request, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.o.Now()
@@ -339,14 +354,15 @@ func (s *Store) Approve(ctx context.Context, id int64, uid uint32) (Request, err
 	}
 	e.req.Status = StatusApproved
 	e.req.DecidedAt = now
-	e.req.DecidedBy = &uid
-	s.o.Audit.ActionDecided(ctx, audit.ActionApproved, id, uid)
+	e.req.DecidedBy = &by.UID
+	e.req.DecidedVia = by.Via
+	s.o.Audit.ActionDecided(ctx, audit.ActionApproved, id, by.UID, by.Via)
 	s.startLocked(e, key, now)
 	return s.snapshotLocked(e), nil
 }
 
-// Deny refuses a pending request on behalf of uid.
-func (s *Store) Deny(ctx context.Context, id int64, uid uint32) (Request, error) {
+// Deny refuses a pending request on behalf of by.
+func (s *Store) Deny(ctx context.Context, id int64, by Decider) (Request, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.o.Now()
@@ -357,10 +373,11 @@ func (s *Store) Deny(ctx context.Context, id int64, uid uint32) (Request, error)
 	}
 	e.req.Status = StatusDenied
 	e.req.DecidedAt = now
-	e.req.DecidedBy = &uid
+	e.req.DecidedBy = &by.UID
+	e.req.DecidedVia = by.Via
 	e.req.FinishedAt = now
 	close(e.done)
-	s.o.Audit.ActionDecided(ctx, audit.ActionDenied, id, uid)
+	s.o.Audit.ActionDecided(ctx, audit.ActionDenied, id, by.UID, by.Via)
 	return s.snapshotLocked(e), nil
 }
 
@@ -509,7 +526,7 @@ func (s *Store) sweepLocked(ctx context.Context, now time.Time) {
 			if !s.busy[key] {
 				e.req.Status = StatusApproved
 				e.req.DecidedAt = now
-				s.o.Audit.ActionDecided(ctx, audit.ActionTimedOut, id, 0)
+				s.o.Audit.ActionDecided(ctx, audit.ActionTimedOut, id, 0, "")
 				s.startLocked(e, key, now)
 			}
 			continue
@@ -517,7 +534,7 @@ func (s *Store) sweepLocked(ctx context.Context, now time.Time) {
 		e.req.Status = StatusExpired
 		e.req.FinishedAt = now
 		close(e.done)
-		s.o.Audit.ActionDecided(ctx, audit.ActionExpired, id, 0)
+		s.o.Audit.ActionDecided(ctx, audit.ActionExpired, id, 0, "")
 	}
 }
 
