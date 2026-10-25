@@ -71,8 +71,9 @@ func (s stubHealth) DNS(context.Context, config.DNSTarget) (health.DNSResult, er
 
 func doctorConfig(t *testing.T) *config.Config {
 	t.Helper()
+	dir := t.TempDir()
 	cfg, err := config.Parse([]byte(`
-server: {socket: ` + t.TempDir() + `/l.sock, socket_group: latch-agents}
+server: {socket: ` + dir + `/l.sock, admin_socket: ` + dir + `/admin.sock, socket_group: latch-agents}
 docker:
   exclude: [secrets-*]
 systemd:
@@ -93,6 +94,52 @@ func healthy() integrations {
 		systemd: stubSystemd{},
 		health:  stubHealth{dns: health.DNSResult{OK: true}},
 		groupID: func(string) (uint32, error) { return 1500, nil },
+		euid:    func() int { return 0 },
+		compose: func(context.Context) (string, error) { return "/usr/bin/docker", nil },
+	}
+}
+
+func TestDoctorRootAndCompose(t *testing.T) {
+	in := healthy()
+	in.euid = func() int { return 1000 }
+	var out bytes.Buffer
+	if doctor(context.Background(), doctorConfig(t), in, &out, false) {
+		t.Fatal("non-root must fail")
+	}
+	if !strings.Contains(out.String(), "FAIL  running as root\n      running as uid 1000, not root\n      fix: run doctor with sudo") {
+		t.Errorf("got:\n%s", out.String())
+	}
+
+	in = healthy()
+	in.compose = func(context.Context) (string, error) { return "", errors.New("the docker CLI was not found") }
+	out.Reset()
+	if !doctor(context.Background(), doctorConfig(t), in, &out, false) {
+		t.Fatalf("a missing compose plugin is only a warning:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "WARN  docker compose\n      the docker CLI was not found; docker_compose_up will fail") ||
+		!strings.Contains(out.String(), "All checks passed.") {
+		t.Errorf("got:\n%s", out.String())
+	}
+	out.Reset()
+	doctor(context.Background(), doctorConfig(t), healthy(), &out, false)
+	for _, want := range []string{"OK    running as root", "OK    docker compose (/usr/bin/docker)"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestDoctorAdminSocketDirectory(t *testing.T) {
+	cfg := doctorConfig(t)
+	open := t.TempDir()
+	os.Chmod(open, 0o777)
+	cfg.Server.AdminSocket = filepath.Join(open, "admin.sock")
+	var out bytes.Buffer
+	if doctor(context.Background(), cfg, healthy(), &out, false) {
+		t.Fatal("world-writable admin directory must fail")
+	}
+	if !strings.Contains(out.String(), "FAIL  admin socket directory "+open+"\n      anyone can write to it") {
+		t.Errorf("got:\n%s", out.String())
 	}
 }
 

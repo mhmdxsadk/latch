@@ -13,7 +13,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 
+	"github.com/mhmdxsadk/latch/internal/admin"
+	"github.com/mhmdxsadk/latch/internal/approval"
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
@@ -54,6 +57,9 @@ Commands:
   serve      Start the Latch server
   validate   Validate configuration without starting the server
   doctor     Check that configured integrations are accessible
+  pending    List changes waiting for approval
+  approve    Approve a pending change: latch approve ID
+  deny       Deny a pending change: latch deny ID
   version    Print version information
 
 Run "latch <command> -h" for command flags.
@@ -75,6 +81,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdValidate(args[1:], stdout, stderr)
 	case "doctor":
 		return cmdDoctor(args[1:], stdout, stderr)
+	case "pending":
+		return cmdPending(args[1:], stdout, stderr)
+	case "approve":
+		return cmdDecide("approve", args[1:], stdout, stderr)
+	case "deny":
+		return cmdDecide("deny", args[1:], stdout, stderr)
 	case "version", "--version", "-v":
 		fmt.Fprint(stdout, versionText(version, commit, runtime.GOOS, runtime.GOARCH))
 		return 0
@@ -169,23 +181,34 @@ func cmdServe(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "latch: %v\n", err)
 		return 1
 	}
-	deps := &mcp.Deps{
-		Policy:   pol,
-		Host:     host.System{},
-		Docker:   dk,
-		Systemd:  systemd.NewBus(),
-		Health:   health.Prober{},
-		Ports:    ports.Proc{},
-		Files:    files.NewReader(fileGuard, files.DefaultLimits()),
-		Net:      netcheck.New(pol, tracker, version),
-		Excluded: tracker,
-		Audit:    al,
-		Version:  version,
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(stderr, "latch: warning: not running as root; changes and reads of protected files will fail")
 	}
-	srv := mcp.NewServer(deps)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Changes in progress are cancelled when Latch stops.
+	store := approval.New(approval.Options{Audit: al, Explain: mcp.ExplainActionError, Base: ctx})
+	go sweep(ctx, store)
+
+	deps := &mcp.Deps{
+		Policy:         pol,
+		Host:           host.System{},
+		Docker:         dk,
+		Systemd:        systemd.NewBus(),
+		Health:         health.Prober{},
+		Ports:          ports.Proc{},
+		Files:          files.NewReader(fileGuard, files.DefaultLimits()),
+		Net:            netcheck.New(pol, tracker, version),
+		Excluded:       tracker,
+		Audit:          al,
+		Version:        version,
+		Actions:        store,
+		DockerActions:  docker.NewActions(cfg.Docker.Socket),
+		SystemdActions: systemd.NewActions(),
+	}
+	srv := mcp.NewServer(deps)
 
 	if *stdio {
 		fmt.Fprintln(stderr, "latch: WARNING: stdio mode has no privilege separation; use the Unix socket in production")
@@ -206,12 +229,47 @@ func cmdServe(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "latch: listen: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stderr, "latch: listening on unix://%s\n", cfg.Server.Socket)
+	defer os.Remove(cfg.Server.Socket)
+	adminLn, err := server.Listen(server.Options{Path: cfg.Server.AdminSocket, Admin: true})
+	if err != nil {
+		ln.Close()
+		fmt.Fprintf(stderr, "latch: listen: %v\n", err)
+		return 1
+	}
+	defer os.Remove(cfg.Server.AdminSocket)
+
+	// Either server failing stops both.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	adminDone := make(chan error, 1)
+	go func() {
+		err := server.ServeAdmin(ctx, adminLn, admin.Handler(store), al)
+		cancel()
+		adminDone <- err
+	}()
+	fmt.Fprintf(stderr, "latch: listening on unix://%s (admin unix://%s)\n", cfg.Server.Socket, cfg.Server.AdminSocket)
 	err = server.ServeUnix(ctx, ln, server.Handler(srv), gid, al)
-	os.Remove(cfg.Server.Socket)
+	cancel()
+	if aerr := <-adminDone; err == nil {
+		err = aerr
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "latch: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// sweep expires overdue requests every minute so expiry is audited on time.
+func sweep(ctx context.Context, store *approval.Store) {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			store.Sweep(ctx)
+		}
+	}
 }

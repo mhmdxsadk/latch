@@ -29,6 +29,9 @@ type integrations struct {
 	systemd systemd.Client
 	health  health.Checker
 	groupID func(name string) (uint32, error)
+	euid    func() int
+	// compose reports which docker CLI runs "docker compose".
+	compose func(ctx context.Context) (string, error)
 }
 
 // cmdDoctor checks that every configured integration is reachable. It never
@@ -54,6 +57,8 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 		systemd: systemd.NewBus(),
 		health:  health.Prober{},
 		groupID: server.GroupID,
+		euid:    os.Geteuid,
+		compose: func(ctx context.Context) (string, error) { return docker.CheckComposeCLI(ctx, cfg.Docker.Socket) },
 	}, stdout, useColor(stdout))
 	if !ok {
 		return 1
@@ -100,6 +105,35 @@ func (r *report) check(name string, err error, hint string) {
 	}
 }
 
+// warn records something worth knowing that is not a problem: it is not
+// counted in the summary.
+func (r *report) warn(name, detail, hint string) {
+	fmt.Fprintf(r.out, "%s  %s\n", r.paint("33", "WARN"), name)
+	fmt.Fprintf(r.out, "      %s\n", detail)
+	if hint != "" {
+		fmt.Fprintf(r.out, "      fix: %s\n", strings.ToLower(hint[:1])+hint[1:])
+	}
+}
+
+// checkDir checks that a socket directory exists and is not writable by
+// everyone.
+func (r *report) checkDir(name, dir string) {
+	const dirHint = "Use a dedicated directory that other accounts cannot write to."
+	name += " " + dir
+	switch fi, err := os.Stat(dir); {
+	case errors.Is(err, os.ErrNotExist):
+		r.check(name, err, "The service creates it when it starts, so this is expected before the first start.")
+	case err != nil:
+		r.check(name, err, dirHint)
+	case !fi.IsDir():
+		r.check(name, errors.New("not a directory"), dirHint)
+	case fi.Mode().Perm()&0o002 != 0:
+		r.check(name, errors.New("anyone can write to it"), dirHint)
+	default:
+		r.check(name, nil, "")
+	}
+}
+
 func (r *report) summary() {
 	fmt.Fprintln(r.out)
 	switch r.failed {
@@ -118,20 +152,15 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 
 	fmt.Fprintln(out)
 	r.check("config valid", nil, "")
-	dir := filepath.Dir(cfg.Server.Socket)
-	const dirHint = "Use a dedicated directory that other accounts cannot write to."
-	if fi, err := os.Stat(dir); err != nil {
-		hint := dirHint
-		if errors.Is(err, os.ErrNotExist) {
-			hint = "The service creates it when it starts, so this is expected before the first start."
-		}
-		r.check("socket directory "+dir, err, hint)
-	} else if !fi.IsDir() {
-		r.check("socket directory "+dir, errors.New("not a directory"), dirHint)
-	} else if fi.Mode().Perm()&0o002 != 0 {
-		r.check("socket directory "+dir, errors.New("anyone can write to it"), dirHint)
-	} else {
-		r.check("socket directory "+dir, nil, "")
+	var rootErr error
+	if uid := in.euid(); uid != 0 {
+		rootErr = fmt.Errorf("running as uid %d, not root", uid)
+	}
+	r.check("running as root", rootErr,
+		"Run doctor with sudo. The latch service must run as root (User=root in latch.service) to make changes and read protected files.")
+	r.checkDir("socket directory", filepath.Dir(cfg.Server.Socket))
+	if adminDir := filepath.Dir(cfg.Server.AdminSocket); adminDir != filepath.Dir(cfg.Server.Socket) {
+		r.checkDir("admin socket directory", adminDir)
 	}
 	_, err := in.groupID(cfg.Server.SocketGroup)
 	r.check("socket group "+cfg.Server.SocketGroup, err,
@@ -161,6 +190,14 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 		r.check("docker daemon", nil, "")
 		names, err := in.docker.List(ctx)
 		r.check("docker containers"+visible(names, err, pol.ContainerVisible), err, "Can the latch service read the Docker socket?")
+	}
+	// docker_compose_up needs the CLI with the compose plugin; nothing else
+	// does, so a missing one is a warning, not a problem.
+	if bin, err := in.compose(ctx); err != nil {
+		r.warn("docker compose", err.Error()+"; docker_compose_up will fail",
+			"Install the docker CLI and the docker-compose-plugin package if you want docker_compose_up.")
+	} else {
+		r.check("docker compose ("+bin+")", nil, "")
 	}
 
 	if err := in.systemd.Ping(ctx); err != nil {
