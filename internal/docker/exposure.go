@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // volumeName matches Docker's volume name rule.
@@ -26,8 +27,9 @@ type Exposure struct {
 	NetworkMode string
 	Addrs       []string // IPv4 and IPv6 addresses on Docker networks
 	HostPorts   []uint16 // ports published on the host
-	// Folders are host folders mounted into the container: bind mounts and
-	// local volumes that bind a host folder (driver_opts o=bind, device=...).
+	// Folders are host folders mounted into the container (bind mounts and
+	// local volumes that bind a host folder: driver_opts o=bind, device=...)
+	// and the compose folder and files that define it.
 	Folders []string
 }
 
@@ -67,7 +69,26 @@ func (e *Engine) Exposure(ctx context.Context, container string) (Exposure, erro
 			}
 		}
 	}
+	x.Folders = append(x.Folders, composePaths(in.Config.Labels)...)
 	return x, nil
+}
+
+// composePaths returns the compose folder and files named in a container's
+// labels, which often hold the container's secrets. Labels are written by
+// whoever created the container, so each path is taken on its own and bad
+// ones are skipped rather than failing the whole list. A compose folder of
+// "/" is not returned: it would hide the whole disk, so only the files are.
+func composePaths(labels map[string]string) []string {
+	var out []string
+	if wd := labels[labelWorkingDir]; cleanPath(wd) && wd != "/" {
+		out = append(out, wd)
+	}
+	for f := range strings.SplitSeq(labels[labelConfigFiles], ",") {
+		if cleanPath(f) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // volumeDevice returns the host folder a local volume binds, or "".

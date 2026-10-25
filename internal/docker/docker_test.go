@@ -899,6 +899,19 @@ func TestSettingsBounded(t *testing.T) {
 	}
 }
 
+func TestComposePathsNeverHideTheWholeDisk(t *testing.T) {
+	got := composePaths(map[string]string{
+		"com.docker.compose.project.working_dir":  "/",
+		"com.docker.compose.project.config_files": "/compose.yaml",
+	})
+	if !slices.Equal(got, []string{"/compose.yaml"}) {
+		t.Errorf("got %v", got)
+	}
+	if got := composePaths(map[string]string{"com.docker.compose.project.working_dir": "/srv/../etc"}); len(got) != 0 {
+		t.Errorf("unclean path kept: %v", got)
+	}
+}
+
 func TestSettingsNotFound(t *testing.T) {
 	e, _ := newFake(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
 	if _, err := e.Settings(context.Background(), "web"); !errors.Is(err, ErrNotFound) {
@@ -912,6 +925,8 @@ func TestExposureIsComplete(t *testing.T) {
 		ports = append(ports, fmt.Sprintf(`"%d/tcp": [{"HostIp": "0.0.0.0", "HostPort": "%d"}, {"HostIp": "::", "HostPort": "%d"}]`, p, p, p))
 	}
 	doc := `{"Id": "` + testID + `", "Name": "/web",
+	  "Config": {"Labels": {"com.docker.compose.project.working_dir": "/opt/vault",
+	    "com.docker.compose.project.config_files": "/opt/vault/compose.yaml,/etc/vault-compose.yaml,relative.yaml"}},
 	  "HostConfig": {"NetworkMode": "bridge"},
 	  "NetworkSettings": {"Ports": {` + strings.Join(ports, ",") + `}, "Networks": {"a": {"IPAddress": "172.18.0.9", "GlobalIPv6Address": "fd00::9"}}},
 	  "Mounts": [
@@ -943,7 +958,8 @@ func TestExposureIsComplete(t *testing.T) {
 	if len(seen) != 100 || !seen[8000] || !seen[8099] {
 		t.Errorf("got %d distinct ports", len(seen))
 	}
-	if !slices.Equal(x.Folders, []string{"/srv/vault", "/srv/vault-data"}) || len(x.Addrs) != 2 || x.ID != testID {
+	want := []string{"/srv/vault", "/srv/vault-data", "/opt/vault", "/opt/vault/compose.yaml", "/etc/vault-compose.yaml"}
+	if !slices.Equal(x.Folders, want) || len(x.Addrs) != 2 || x.ID != testID {
 		t.Errorf("got %+v", x)
 	}
 }

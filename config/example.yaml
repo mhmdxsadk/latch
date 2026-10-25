@@ -65,8 +65,8 @@ files:
   # .aws/credentials, .kube/config), /var/lib/docker, /var/lib/containerd,
   # /run/docker, /run/containerd, /run/runc, /etc/latch, /var/lib/latch,
   # this config file, the home folders of the users in server.socket_group,
-  # and folders mounted into excluded containers. Blocked files behave as if
-  # they do not exist.
+  # and for each excluded container the folders mounted into it and its
+  # compose folder and files. Blocked files behave as if they do not exist.
   # Each entry is an absolute path (blocks that file or the whole folder) or a
   # file name with optional * and ? wildcards and no slash (blocks every file
   # or folder with that name, anywhere).

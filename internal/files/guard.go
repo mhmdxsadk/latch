@@ -2,9 +2,9 @@
 // that keep them away from secrets.
 //
 // The whole disk is readable except a block list: built-in rules (see
-// DefaultRules), the operator's files.exclude entries, and the folders
-// bind-mounted into excluded containers. A blocked path behaves exactly like
-// a missing one.
+// DefaultRules), the owner's files.exclude entries, and the folders
+// bind-mounted into excluded containers with their compose folders and files.
+// A blocked path behaves exactly like a missing one.
 //
 // Every path is untrusted. Guard resolves a requested path one component at a
 // time, checking each step against the block list before touching it, so a
@@ -125,7 +125,7 @@ var (
 )
 
 // DefaultRules returns the built-in block list plus Latch's own config file,
-// the agent accounts' home directories and the operator's files.exclude
+// the agent accounts' home directories and the owner's files.exclude
 // entries (already validated by config). configPath must be absolute.
 func DefaultRules(configPath string, agentHomes, exclude []string) Rules {
 	r := Rules{
@@ -151,7 +151,7 @@ func DefaultRules(configPath string, agentHomes, exclude []string) Rules {
 	return r
 }
 
-// Folders supplies the host folders mounted into excluded containers.
+// Folders supplies the host folders mounted into excluded containers and their compose folders and files.
 // *excluded.Tracker implements it.
 type Folders interface {
 	Get(ctx context.Context) (excluded.Snapshot, error)
