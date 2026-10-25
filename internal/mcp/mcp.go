@@ -1,8 +1,11 @@
-// Package mcp exposes Latch's read-only operations as MCP tools.
+// Package mcp exposes Latch's operations as MCP tools.
 //
 // Every tool follows the same pipeline: the typed input is schema-validated by
 // the SDK (unknown fields are rejected), names are resolved through policy,
-// the integration runs, and the outcome is audited. Errors returned to the
+// the integration runs, and the outcome is audited. Change tools (actions.go)
+// do not change anything themselves: they build an approval.Action and hand
+// it to the approval store, which runs it or waits for the owner. There is no
+// tool that approves or denies; that only exists on the admin socket. Errors returned to the
 // agent are limited to a fixed vocabulary; integration errors, which may carry
 // secrets or host details, are logged as a category only.
 package mcp
@@ -14,6 +17,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/mhmdxsadk/latch/internal/approval"
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/health"
@@ -32,6 +36,11 @@ type Deps struct {
 	Health  health.Checker
 	Audit   *audit.Logger
 	Version string
+
+	// Changes. Actions is the approval store; NewServer creates one if nil.
+	Actions        *approval.Store
+	DockerActions  docker.Mutator
+	SystemdActions systemd.Mutator
 
 	// sem bounds concurrent tool calls across all connections, so parallel
 	// requests cannot multiply memory use, outbound probes or bus connections.
@@ -120,19 +129,27 @@ var readOnly = &sdk.ToolAnnotations{
 
 func ptr[T any](v T) *T { return &v }
 
-// NewServer builds the MCP server with all v0.1 tools registered. Every
+// NewServer builds the MCP server with all tools registered. Every
 // integration in d must be non-nil.
 func NewServer(d *Deps) *sdk.Server {
 	d.sem = make(chan struct{}, MaxConcurrentCalls)
+	if d.Actions == nil {
+		d.Actions = approval.New(approval.Options{Audit: d.Audit, Explain: ExplainActionError})
+	}
 	s := sdk.NewServer(&sdk.Implementation{Name: "latch", Version: d.Version}, &sdk.ServerOptions{
-		Instructions: "Latch gives read-only visibility into one server. " +
+		Instructions: "Latch gives visibility into one server and can make a few named changes. " +
 			"Use docker_list and systemd_list to see containers and services, and list_resources for named disks and DNS checks. " +
-			"Some resources may be excluded by the operator; they behave as if they do not exist.",
+			"Some resources may be excluded by the operator; they behave as if they do not exist. " +
+			"Reading is automatic. Restarting a container or unit runs automatically within a limit; stopping, starting and " +
+			"docker_compose_up wait for the server owner's approval. A change tool returns a request id: when its status is " +
+			"\"pending\", tell the user the id and check action_status later. Never claim a change happened until " +
+			"action_status says \"done\". There are no arbitrary commands.",
 	})
 	registerResources(s, d)
 	registerHost(s, d)
 	registerDocker(s, d)
 	registerSystemd(s, d)
 	registerHealth(s, d)
+	registerActions(s, d)
 	return s
 }
