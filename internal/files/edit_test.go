@@ -316,17 +316,17 @@ func TestCreate(t *testing.T) {
 
 func TestIsUnitPath(t *testing.T) {
 	for p, want := range map[string]bool{
-		"/etc/systemd/system/web.service":                  true,
-		"/etc/systemd/system/web.service.d/override.conf":  true,
-		"/run/systemd/system/x.service":                    true,
-		"/usr/lib/systemd/system/ssh.service":              true,
-		"/lib/systemd/system/cron.service":                 true,
-		"/etc/systemd/systemx/web.service":                 false,
-		"/etc/systemd/journald.conf":                       false,
-		"/etc/nginx/nginx.conf":                            false,
-		"/home/u/.config/systemd/user/x.service":           false,
-		"/etc/systemd/system":                              false,
-		"/srv/etc/systemd/system/web.service":              false,
+		"/etc/systemd/system/web.service":                 true,
+		"/etc/systemd/system/web.service.d/override.conf": true,
+		"/run/systemd/system/x.service":                   true,
+		"/usr/lib/systemd/system/ssh.service":             true,
+		"/lib/systemd/system/cron.service":                true,
+		"/etc/systemd/systemx/web.service":                false,
+		"/etc/systemd/journald.conf":                      false,
+		"/etc/nginx/nginx.conf":                           false,
+		"/home/u/.config/systemd/user/x.service":          false,
+		"/etc/systemd/system":                             false,
+		"/srv/etc/systemd/system/web.service":             false,
 		"/usr/lib/systemd/system/getty@.service.d/x.conf": true,
 	} {
 		if IsUnitPath(p) != want {

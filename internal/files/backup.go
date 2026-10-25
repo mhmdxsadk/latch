@@ -104,11 +104,11 @@ func openDirAt(fd int, name string, create bool, uid, gid int) (int, bool, error
 			// Set owner and mode explicitly; the umask and the parent's
 			// setgid bit must not decide them.
 			if err := unix.Fchown(nfd, uid, gid); err != nil {
-				unix.Close(nfd)
+				_ = unix.Close(nfd)
 				return -1, false, err
 			}
 			if err := unix.Fchmod(nfd, 0o700); err != nil {
-				unix.Close(nfd)
+				_ = unix.Close(nfd)
 				return -1, false, err
 			}
 		}
@@ -133,7 +133,7 @@ func (b *Backups) openTree(rel []string, create bool) (int, error) {
 	for i, name := range parts {
 		inside := i >= len(rootParts)-1
 		nfd, _, err := openDirAt(fd, name, create, b.uid, b.gid)
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		if errors.Is(err, unix.ENOENT) {
 			return -1, os.ErrNotExist
 		}
@@ -143,11 +143,11 @@ func (b *Backups) openTree(rel []string, create bool) (int, error) {
 		fd = nfd
 		var st unix.Stat_t
 		if err := unix.Fstat(fd, &st); err != nil {
-			unix.Close(fd)
+			_ = unix.Close(fd)
 			return -1, err
 		}
 		if !dirSafe(st, inside, b.uid) {
-			unix.Close(fd)
+			_ = unix.Close(fd)
 			return -1, ErrBackupUnsafe
 		}
 	}
@@ -181,7 +181,7 @@ func CheckBackupRoot(root string, uid int) (exists bool, err error) {
 	if err != nil {
 		return true, err
 	}
-	unix.Close(fd)
+	_ = unix.Close(fd)
 	return true, nil
 }
 
@@ -207,7 +207,7 @@ func (b *Backups) Save(orig string, content []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer unix.Close(dfd)
+	defer func() { _ = unix.Close(dfd) }()
 
 	stamp := b.now().UTC().Format(stampLayout)
 	var (
@@ -277,7 +277,7 @@ func (b *Backups) List(orig string) ([]Backup, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer unix.Close(dfd)
+	defer func() { _ = unix.Close(dfd) }()
 	return listAt(dfd, name)
 }
 
@@ -344,7 +344,7 @@ func (b *Backups) Read(orig, id string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer unix.Close(dfd)
+	defer func() { _ = unix.Close(dfd) }()
 	fd, err := unix.Openat(dfd, name+"."+id, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	switch {
 	case errors.Is(err, unix.ENOENT):

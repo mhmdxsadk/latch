@@ -13,6 +13,8 @@ import (
 	"github.com/mhmdxsadk/latch/internal/approval"
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/docker"
+	"github.com/mhmdxsadk/latch/internal/files"
+	"github.com/mhmdxsadk/latch/internal/netcheck"
 	"github.com/mhmdxsadk/latch/internal/policy"
 	"github.com/mhmdxsadk/latch/internal/systemd"
 )
@@ -142,6 +144,26 @@ func ExplainActionError(err error) (summary, reason string) {
 		return "docker compose failed", "compose_failed"
 	case errors.Is(err, systemd.ErrJobFailed):
 		return "the systemd job did not succeed", "job_failed"
+	case errors.Is(err, errRolledBack):
+		return "the change was rolled back", "rolled_back"
+	case errors.Is(err, errRollbackFailed):
+		return "the target was not up and the rollback failed", "rollback_failed"
+	case errors.Is(err, errHTTPFailed):
+		return "the request could not be completed", "http_failed"
+	case errors.Is(err, errReloadFailed):
+		return "systemd daemon-reload failed", "reload_failed"
+	case errors.Is(err, files.ErrChanged):
+		return "the file changed after the request; nothing was written; ask again", "changed"
+	case errors.Is(err, files.ErrExists):
+		return "the file exists now; nothing was written", "exists"
+	case errors.Is(err, files.ErrBlocked), errors.Is(err, files.ErrNotFound), errors.Is(err, files.ErrPermission):
+		return "the file no longer exists or is not allowed", "not_found"
+	case errors.Is(err, files.ErrBackupUnsafe):
+		return "the backup folder is not safe to use, so nothing was written", "backup_unsafe"
+	case errors.Is(err, files.ErrUnavailable), errors.Is(err, netcheck.ErrUnknown):
+		return "Latch cannot tell which containers are excluded right now, so nothing was changed", "excluded_unknown"
+	case errors.Is(err, netcheck.ErrNotAllowed):
+		return "the target is not allowed", "not_allowed"
 	case errors.Is(err, systemd.ErrJobWait), errors.Is(err, context.DeadlineExceeded):
 		return "the change did not finish in time", "timeout"
 	default:

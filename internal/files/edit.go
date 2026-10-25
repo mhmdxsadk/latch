@@ -186,7 +186,7 @@ func sameEntry(dfd int, name string, st fs.FileInfo) error {
 		return ErrChanged
 	}
 	want, ok := st.Sys().(*syscall.Stat_t)
-	if !ok || uint64(want.Dev) != uint64(cur.Dev) || uint64(want.Ino) != uint64(cur.Ino) { //nolint:unconvert // Dev differs in type by platform
+	if !ok || uint64(want.Dev) != uint64(cur.Dev) || uint64(want.Ino) != uint64(cur.Ino) { //nolint:unconvert,gosec // Dev differs in type by platform; only compared for equality
 		return ErrChanged
 	}
 	return nil

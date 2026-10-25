@@ -33,7 +33,7 @@ func TestPlanEditMatchesExactlyOnce(t *testing.T) {
 		{strings.Repeat("x", MaxEditText+1), ErrBadRequest},
 	} {
 		_, err := PlanEdit([]byte(real), tc.old, "c")
-		if !errors.Is(err, tc.want) && !(tc.want == nil && err == nil) {
+		if !errors.Is(err, tc.want) && (tc.want != nil || err != nil) {
 			t.Errorf("old %q: err %v, want %v", tc.old, err, tc.want)
 		}
 	}
@@ -143,8 +143,8 @@ func TestPlanEditRefusesBadInput(t *testing.T) {
 		{"abc\n", "b", "b", ErrNoChange},
 		{"abc\n", "b", "\x1b[31mred", ErrBadText},
 		{"abc\n", "b", "x\r\ny", ErrBadText},
-		{"abc\n", "b", "evil‮txt", ErrBadText},
-		{"abc\n", "b", "zero​width", ErrBadText},
+		{"abc\n", "b", "evil\u202etxt", ErrBadText},
+		{"abc\n", "b", "zero\u200bwidth", ErrBadText},
 		{"abc\n", "b", "bad\xffutf8", ErrBadText},
 		{strings.Repeat("a", MaxEditBytes-10) + "\nb\n", "b", strings.Repeat("c", 100), ErrTooLarge},
 	} {
