@@ -49,6 +49,7 @@ type Message struct {
 	MessageID int64  `json:"message_id"`
 	From      *User  `json:"from,omitempty"`
 	Chat      Chat   `json:"chat"`
+	Date      int64  `json:"date,omitempty"` // Unix time it was sent
 	Text      string `json:"text,omitempty"`
 	// ForwardOrigin is set on forwarded messages, which are ignored.
 	ForwardOrigin json.RawMessage `json:"forward_origin,omitempty"`
@@ -139,6 +140,13 @@ func (c *Client) Updates(ctx context.Context, offset int64) ([]Update, error) {
 		"allowed_updates": []string{"message", "callback_query"},
 	}, &out)
 	return out, err
+}
+
+// Confirm tells Telegram that every update before offset was handled, so
+// they are not delivered again after a restart. It does not wait.
+func (c *Client) Confirm(ctx context.Context, offset int64) error {
+	var out []Update
+	return c.call(ctx, "getUpdates", map[string]any{"offset": offset, "timeout": 0, "limit": 1}, &out)
 }
 
 // Send sends text to chat, with buttons when kb is not nil.

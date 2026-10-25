@@ -5,9 +5,11 @@
 *.out
 coverage.*
 
-# Local config and secrets (only config/example.yaml is tracked)
+# Local config and secrets (only the example configs are tracked)
 /config/*.yaml
 !/config/example.yaml
+!/config/telegram.example.yaml
+/latch-telegram
 *.sock
 .env
 .env.*

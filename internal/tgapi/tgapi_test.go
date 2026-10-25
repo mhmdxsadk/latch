@@ -43,9 +43,12 @@ func TestUpdates(t *testing.T) {
 	if err != nil || len(u) != 2 || u[0].Message.Text != "hi" {
 		t.Fatalf("%v %+v", err, u)
 	}
-	u, err = c.Updates(context.Background(), u[1].UpdateID+1)
+	if err := c.Confirm(context.Background(), u[1].UpdateID+1); err != nil {
+		t.Fatal(err)
+	}
+	u, err = c.Updates(context.Background(), 0)
 	if err != nil || len(u) != 0 {
-		t.Fatalf("after offset: %v %+v", err, u)
+		t.Fatalf("after confirm: %v %+v", err, u)
 	}
 }
 

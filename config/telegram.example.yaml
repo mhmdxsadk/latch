@@ -1,0 +1,30 @@
+# latch-telegram configuration: /etc/latch/telegram.yaml (root, mode 0600).
+# Check it with: latch-telegram validate, then: sudo latch-telegram doctor
+
+# Your Telegram user id. Only this account is answered, in a private chat
+# with the bot; everyone else is ignored. Ask @userinfobot for your id.
+owner_id: 123456789
+
+# The bot token from @BotFather, alone in a file (root, mode 0600). The
+# systemd unit passes it to the service as a credential.
+# token_file: /etc/latch/telegram-token
+
+# admin_socket: /run/latch/admin.sock
+# state_dir: /var/lib/latch-telegram
+
+# Chat with the agent team. Leave this section out to use the bot for
+# approvals only.
+agent:
+  # Shown before every agent answer.
+  name: keeper
+  # The agent's Linux account (never root). It must be in Latch's socket
+  # group so the agent can reach Latch.
+  user: keeper
+  command: /usr/local/bin/docker-agent
+  config: /home/keeper/keeper.yaml
+  # Extra Docker Agent flags. Each message runs as:
+  #   docker-agent run CONFIG --exec --last --session ID ARGS... -
+  # with the message on standard input.
+  args: [--safety, restricted]
+  # A turn that takes longer is stopped.
+  timeout: 10m

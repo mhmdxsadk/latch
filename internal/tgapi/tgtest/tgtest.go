@@ -59,7 +59,7 @@ func (s *Server) Client() *tgapi.Client { return tgapi.New(s.URL, Token) }
 // Message queues a text message from user in their private chat.
 func (s *Server) Message(user int64, text string) {
 	s.push(tgapi.Update{Message: &tgapi.Message{
-		From: &tgapi.User{ID: user}, Chat: tgapi.Chat{ID: user, Type: "private"}, Text: text,
+		From: &tgapi.User{ID: user}, Chat: tgapi.Chat{ID: user, Type: "private"}, Text: text, Date: time.Now().Unix(),
 	}})
 }
 
