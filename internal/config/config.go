@@ -1,9 +1,10 @@
 // Package config loads and validates Latch's configuration.
 //
 // The configuration only declares WHICH resources Latch may expose or hide. It
-// has no way to express commands, arguments, or paths to read: every field is
-// either a resource name, a name pattern, a fixed identifier (mount point), or
-// a bound. Docker containers and systemd units are exposed by default and the
+// has no way to express commands or arguments: every field is either a
+// resource name, a name pattern, a fixed identifier (mount point), a path or
+// file name to hide, or a bound. Files are readable by default and the config
+// can only take paths away. Docker containers and systemd units are exposed by default and the
 // operator lists the ones to exclude. Unknown keys are rejected so a typo can
 // never silently widen or drop policy.
 package config
@@ -13,12 +14,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -52,11 +56,41 @@ var (
 	// wildcards. Backslash and brackets are not allowed, so path.Match can
 	// never see an escape or a character class.
 	excludePattern = regexp.MustCompile(`^[A-Za-z0-9:_.@*?-]{1,200}$`)
+	// fileNamePattern is a file name pattern for files.exclude: name
+	// characters plus the * and ? wildcards. Slash, backslash and brackets are
+	// not allowed, so path.Match can never see an escape or a character class.
+	fileNamePattern = regexp.MustCompile(`^[A-Za-z0-9:_.@*?+=,~-]{1,255}$`)
 	// groupName is a conservative Unix group name.
 	groupName = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 	// dnsName is a conservative hostname check (no wildcards, no underscores).
 	dnsName = regexp.MustCompile(`^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?$`)
+	// queryName is dnsName with underscores, for DNS lookups of names such
+	// as _dmarc.example.com or _imap._tcp.example.com.
+	queryName = regexp.MustCompile(`^([A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?\.)*[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?\.?$`)
 )
+
+// MaxHostnameLen is the longest hostname accepted anywhere.
+const MaxHostnameLen = 253
+
+// ValidHostname reports whether s is a conservative hostname: letters, digits
+// and hyphens in dot-separated labels, an optional trailing dot, at most 253
+// bytes. No wildcards or underscores.
+func ValidHostname(s string) bool { return len(s) <= MaxHostnameLen && dnsName.MatchString(s) }
+
+// ValidQueryName is ValidHostname that also allows underscores, for DNS
+// lookups only. Names with underscores are never connected to.
+func ValidQueryName(s string) bool { return len(s) <= MaxHostnameLen && queryName.MatchString(s) }
+
+// NormalizeHost lowercases a hostname and removes one trailing dot, so
+// "Example.COM." and "example.com" compare equal. IP literals are returned in
+// canonical form (IPv4-mapped IPv6 as IPv4).
+func NormalizeHost(s string) string {
+	s = strings.TrimSuffix(strings.ToLower(s), ".")
+	if a, err := netip.ParseAddr(s); err == nil && a.Zone() == "" {
+		return a.Unmap().String()
+	}
+	return s
+}
 
 // ValidResourceName reports whether s is a syntactically valid resource name.
 func ValidResourceName(s string) bool { return resourceName.MatchString(s) }
@@ -88,6 +122,17 @@ type Config struct {
 	Systemd Systemd `yaml:"systemd"`
 	Host    Host    `yaml:"host"`
 	Health  Health  `yaml:"health"`
+	Files   Files   `yaml:"files"`
+	Network Network `yaml:"network"`
+}
+
+// Network configures the network diagnostic tools. Any address may be
+// checked except excluded containers (blocked automatically) and the names
+// listed in Exclude.
+type Network struct {
+	// Exclude lists exact hostnames (no wildcards) or IP addresses the
+	// network tools must never reach.
+	Exclude []string `yaml:"exclude"`
 }
 
 // Server configures the agent-facing Unix socket.
@@ -143,6 +188,16 @@ type Host struct {
 type Disk struct {
 	Name string `yaml:"name"`
 	Path string `yaml:"path"`
+}
+
+// Files configures the read-only file tools. The whole disk is readable except
+// a built-in block list (see package files) and the entries in Exclude.
+type Files struct {
+	// Exclude entries are either a clean absolute path, which blocks that file
+	// or directory and everything below it, or a name pattern with no slash
+	// (* and ? wildcards), which blocks every file or directory with a
+	// matching name and everything below it.
+	Exclude []string `yaml:"exclude"`
 }
 
 // Health lists the fixed DNS check targets.
@@ -313,12 +368,72 @@ func (c *Config) Validate() error {
 			add("health.dns: duplicate name %q", t.Name)
 		}
 		seen["dns/"+t.Name] = true
-		if len(t.Host) > 253 || !dnsName.MatchString(t.Host) {
+		if !ValidHostname(t.Host) {
 			add("health.dns[%d].host is not a valid hostname", i)
 		}
 	}
 
+	// files
+	checkFileExcludes(add, c.Files.Exclude)
+
+	// network
+	seenHost := map[string]bool{}
+	for i, h := range c.Network.Exclude {
+		a, err := netip.ParseAddr(h)
+		switch {
+		case err == nil && a.Zone() != "":
+			add("network.exclude[%d] must not have an IPv6 zone", i)
+		case err != nil && !ValidHostname(h):
+			add("network.exclude[%d] must be an exact hostname or IP address (no wildcards)", i)
+		case seenHost[NormalizeHost(h)]:
+			add("network.exclude: duplicate entry %q", h)
+		}
+		seenHost[NormalizeHost(h)] = true
+	}
+
 	return errors.Join(errs...)
+}
+
+// MaxFilePathLen is the longest path accepted in files.exclude and by the file
+// tools.
+const MaxFilePathLen = 4096
+
+// ValidFilePath reports whether p is a clean absolute path of at most
+// MaxFilePathLen bytes, valid UTF-8, with no control characters.
+func ValidFilePath(p string) bool {
+	if p == "" || len(p) > MaxFilePathLen || p[0] != '/' || !utf8.ValidString(p) || filepath.Clean(p) != p {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] < 0x20 || p[i] == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// checkFileExcludes validates files.exclude: each entry is a clean absolute
+// path or a file name pattern.
+func checkFileExcludes(add func(string, ...any), patterns []string) {
+	seen := map[string]bool{}
+	for i, p := range patterns {
+		switch {
+		case strings.Contains(p, ".."):
+			add("files.exclude[%d] must not contain \"..\"", i)
+		case strings.HasPrefix(p, "/"):
+			if !ValidFilePath(p) {
+				add("files.exclude[%d] must be a clean absolute path", i)
+			}
+		case p == ".":
+			add("files.exclude[%d] must be an absolute path or a file name pattern", i)
+		case !fileNamePattern.MatchString(p):
+			add("files.exclude[%d] must be an absolute path or a file name, optionally with * or ? wildcards", i)
+		}
+		if seen[p] {
+			add("files.exclude: duplicate entry %q", p)
+		}
+		seen[p] = true
+	}
 }
 
 // checkPatterns validates a list of exclude patterns.

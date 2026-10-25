@@ -18,16 +18,14 @@ import (
 )
 
 // actDocker is a thread-safe read client: executions run in goroutines.
+// Methods other than Status come from fakeDocker and are not used here.
 type actDocker struct {
+	fakeDocker
 	mu      sync.Mutex
 	missing map[string]bool
 	calls   []string
 }
 
-func (f *actDocker) Ping(context.Context) error { return nil }
-func (f *actDocker) List(context.Context) ([]string, error) {
-	return []string{"my-db", "my-web", "secret-vault"}, nil
-}
 func (f *actDocker) Status(_ context.Context, c string) (docker.Status, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -36,12 +34,6 @@ func (f *actDocker) Status(_ context.Context, c string) (docker.Status, error) {
 		return docker.Status{}, docker.ErrNotFound
 	}
 	return docker.Status{State: "running", Health: docker.Health{Status: "healthy"}}, nil
-}
-func (f *actDocker) Logs(context.Context, string, int, int) (docker.Logs, error) {
-	return docker.Logs{}, nil
-}
-func (f *actDocker) Settings(context.Context, string) (docker.Settings, error) {
-	return docker.Settings{}, nil
 }
 func (f *actDocker) setMissing(name string) {
 	f.mu.Lock()
@@ -107,15 +99,13 @@ func (f *fakeDockerActions) ComposeUp(_ context.Context, t docker.ComposeTarget,
 	return f.composeRes, f.composeErr
 }
 
+// Methods other than UnitStatus come from fakeSystemd.
 type actSystemd struct {
+	fakeSystemd
 	mu      sync.Mutex
 	missing map[string]bool
 }
 
-func (f *actSystemd) Ping(context.Context) error { return nil }
-func (f *actSystemd) List(context.Context) ([]systemd.ListedUnit, error) {
-	return nil, nil
-}
 func (f *actSystemd) UnitStatus(_ context.Context, u string) (systemd.UnitStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

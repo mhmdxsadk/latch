@@ -10,16 +10,21 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
+	"github.com/mhmdxsadk/latch/internal/excluded"
+	"github.com/mhmdxsadk/latch/internal/files"
 	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/mcp"
+	"github.com/mhmdxsadk/latch/internal/netcheck"
 	"github.com/mhmdxsadk/latch/internal/policy"
+	"github.com/mhmdxsadk/latch/internal/ports"
 	"github.com/mhmdxsadk/latch/internal/server"
 	"github.com/mhmdxsadk/latch/internal/systemd"
 )
@@ -113,6 +118,22 @@ func cmdValidate(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// newFileGuard builds the block list for the file tools: the built-in rules,
+// the config file itself, files.exclude and the home directories of the
+// accounts in the socket group (the agents). If those homes cannot all be
+// resolved, Latch still starts, with a warning, blocking the ones it found.
+func newFileGuard(cfg *config.Config, configPath string, folders files.Folders, stderr io.Writer) (*files.Guard, error) {
+	abs, err := filepath.Abs(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("config path: %w", err)
+	}
+	homes, err := files.AgentHomes(cfg.Server.SocketGroup)
+	if err != nil {
+		fmt.Fprintf(stderr, "latch: warning: %v\n", err)
+	}
+	return files.NewGuard(files.DefaultRules(abs, homes, cfg.Files.Exclude), folders), nil
+}
+
 func cmdServe(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -140,14 +161,26 @@ func cmdServe(args []string, stderr io.Writer) int {
 	}
 	al := audit.New(slog.New(slog.NewJSONHandler(auditOut, nil)))
 
+	pol := policy.New(cfg)
+	dk := docker.NewEngine(cfg.Docker.Socket)
+	tracker := &excluded.Tracker{Docker: dk, Policy: pol}
+	fileGuard, err := newFileGuard(cfg, *path, tracker, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "latch: %v\n", err)
+		return 1
+	}
 	deps := &mcp.Deps{
-		Policy:  policy.New(cfg),
-		Host:    host.System{},
-		Docker:  docker.NewEngine(cfg.Docker.Socket),
-		Systemd: systemd.NewBus(),
-		Health:  health.Prober{},
-		Audit:   al,
-		Version: version,
+		Policy:   pol,
+		Host:     host.System{},
+		Docker:   dk,
+		Systemd:  systemd.NewBus(),
+		Health:   health.Prober{},
+		Ports:    ports.Proc{},
+		Files:    files.NewReader(fileGuard, files.DefaultLimits()),
+		Net:      netcheck.New(pol, tracker, version),
+		Excluded: tracker,
+		Audit:    al,
+		Version:  version,
 	}
 	srv := mcp.NewServer(deps)
 

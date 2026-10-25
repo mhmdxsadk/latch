@@ -20,6 +20,9 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/mhmdxsadk/latch/internal/redact"
+	"github.com/mhmdxsadk/latch/internal/textsafe"
 )
 
 const (
@@ -36,6 +39,15 @@ const (
 
 // Same pattern as config's unit name validation (defence in depth).
 var unitName = regexp.MustCompile(`^[A-Za-z0-9:_.\\@-]{1,200}\.(service|socket|timer|mount|target|path)$`)
+
+// failedUnitName also admits the unit types that cannot be queried by name
+// but can fail (scopes, slices, swaps, devices, automounts).
+var failedUnitName = regexp.MustCompile(`^[A-Za-z0-9:_.\\@-]{1,200}\.(service|socket|timer|mount|target|path|scope|slice|swap|device|automount)$`)
+
+const (
+	maxFailed          = 500
+	maxDescriptionSize = 200
+)
 
 // UnitStatus is the projected state of one unit.
 type UnitStatus struct {
@@ -72,6 +84,12 @@ type Client interface {
 	List(ctx context.Context) ([]ListedUnit, error)
 	// UnitStatus takes a unit name that has already been resolved by policy.
 	UnitStatus(ctx context.Context, unit string) (UnitStatus, error)
+	// Failed returns the units of any type that are failed or restarting,
+	// sorted by name. The caller must filter the result through policy.
+	Failed(ctx context.Context) ([]ListedUnit, error)
+	// Logs returns the newest journal lines of a unit already resolved by
+	// policy, at most lines entries and maxBytes bytes of text in total.
+	Logs(ctx context.Context, unit string, lines, maxBytes int) (Logs, error)
 }
 
 // propertyReader abstracts the D-Bus transport so mapping is testable.
@@ -80,7 +98,9 @@ type propertyReader interface {
 }
 
 // Bus reads unit properties from the system D-Bus.
-type Bus struct{}
+type Bus struct {
+	run runner // starts journalctl; nil means the real one
+}
 
 var _ Client = (*Bus)(nil)
 
@@ -135,6 +155,24 @@ func (*Bus) Ping(ctx context.Context) error {
 
 // List returns the loaded service units known to systemd.
 func (*Bus) List(ctx context.Context) ([]ListedUnit, error) {
+	rows, err := listRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return buildList(rows), nil
+}
+
+// Failed returns the units that are failed or waiting to restart.
+func (*Bus) Failed(ctx context.Context) ([]ListedUnit, error) {
+	rows, err := listRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return buildFailed(rows), nil
+}
+
+// listRows calls Manager.ListUnits, a read-only call.
+func listRows(ctx context.Context) ([]listRow, error) {
 	ctx, cancel, conn, err := open(ctx)
 	if err != nil {
 		return nil, err
@@ -145,7 +183,7 @@ func (*Bus) List(ctx context.Context) ([]ListedUnit, error) {
 	if err := conn.Object(busName, managerPath).CallWithContext(ctx, listMethod, 0).Store(&rows); err != nil {
 		return nil, fmt.Errorf("list units: %w", err)
 	}
-	return buildList(rows), nil
+	return rows, nil
 }
 
 // listRow is the (ssssssouso) struct returned by Manager.ListUnits.
@@ -164,10 +202,42 @@ func buildList(rows []listRow) []ListedUnit {
 		if !unitName.MatchString(r.Name) || !strings.HasSuffix(r.Name, ".service") {
 			continue
 		}
-		out = append(out, ListedUnit{Name: r.Name, Description: r.Description, ActiveState: r.Active, SubState: r.Sub})
+		out = append(out, project(r))
 	}
-	slices.SortFunc(out, func(a, b ListedUnit) int { return strings.Compare(a.Name, b.Name) })
-	return slices.CompactFunc(out, func(a, b ListedUnit) bool { return a.Name == b.Name })
+	return sortUnits(out)
+}
+
+// buildFailed keeps valid units, of any type, that are failed or waiting to
+// restart, and projects them.
+func buildFailed(rows []listRow) []ListedUnit {
+	out := []ListedUnit{}
+	for _, r := range rows {
+		if !failedUnitName.MatchString(r.Name) {
+			continue
+		}
+		if r.Active == "failed" || r.Sub == "auto-restart" {
+			out = append(out, project(r))
+		}
+	}
+	out = sortUnits(out)
+	if len(out) > maxFailed {
+		out = out[:maxFailed]
+	}
+	return out
+}
+
+func project(r listRow) ListedUnit {
+	return ListedUnit{Name: r.Name, Description: cleanText(r.Description), ActiveState: r.Active, SubState: r.Sub}
+}
+
+func sortUnits(u []ListedUnit) []ListedUnit {
+	slices.SortFunc(u, func(a, b ListedUnit) int { return strings.Compare(a.Name, b.Name) })
+	return slices.CompactFunc(u, func(a, b ListedUnit) bool { return a.Name == b.Name })
+}
+
+// cleanText makes host-written text safe to show an agent.
+func cleanText(s string) string {
+	return textsafe.Head(redact.Text(textsafe.Line(s)), maxDescriptionSize)
 }
 
 // UnitStatus reads the projected status of a unit.
@@ -216,7 +286,7 @@ func buildStatus(unit, svc map[string]dbus.Variant) (UnitStatus, error) {
 		ActiveState:    get[string](unit, "ActiveState"),
 		SubState:       get[string](unit, "SubState"),
 		UnitFileState:  get[string](unit, "UnitFileState"),
-		Description:    get[string](unit, "Description"),
+		Description:    cleanText(get[string](unit, "Description")),
 		ActiveSince:    formatUsec(get[uint64](unit, "ActiveEnterTimestamp")),
 		StateChangedAt: formatUsec(get[uint64](unit, "StateChangeTimestamp")),
 		Result:         get[string](svc, "Result"),

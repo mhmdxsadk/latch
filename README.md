@@ -14,8 +14,9 @@ Latch treats the agent as untrusted and enforces the policy itself.
   to exclude in a config file. Disks and DNS names must still be listed, because
   each needs a path or a hostname.
 - An excluded resource behaves as if it does not exist.
-- The agent cannot supply its own commands, file paths or URLs, and the config
-  cannot express a command or argument.
+- The agent cannot supply its own commands, and the config cannot express a
+  command or argument. It can name files to read (except blocked ones) and
+  hosts or URLs for the network tools, checked as described under Tools.
 - Containers are addressed by exact name, never by ID. Units are addressed by
   their full name, never by alias. This stops an exclusion from being bypassed
   through another name for the same thing.
@@ -43,6 +44,11 @@ Latch is pre-release (v0.x) and read-only. These tools exist today:
 - `docker_settings` returns how a container is configured: image, restart
   policy, published ports, mounts, networks, labels and the health check
   definition. It never returns environment variables or the command line.
+- `docker_usage` returns one sample of a container's CPU, memory, network and
+  disk use and its process count.
+- `docker_events` returns what containers did in the last 1 to 24 hours:
+  die (with exit code), oom, restart, kill, stop, start and health changes.
+  Only the newest 200 are returned.
 - `docker_logs` returns recent stdout and stderr, capped by `limits` in the
   config. Logs often contain secrets, so exclude any container whose logs the
   agent must not read. A new container is visible as soon as it exists.
@@ -55,7 +61,56 @@ excluding the container is the real one.
 - `systemd_list` lists loaded services and their state.
 - `systemd_unit_status` returns the load, active and sub state of any unit that
   is not excluded.
+- `systemd_failed` lists units of any type that are failed or waiting to
+  restart.
+- `systemd_logs` returns recent journal lines of a unit, capped by `limits`
+  like `docker_logs`. Latch runs `journalctl` for this, with fixed options. The
+  user Latch runs as must be allowed to read the journal (for example by
+  being root or in the `systemd-journal` group).
+- `host_ports` lists listening TCP and UDP sockets with the program, unit and
+  container that own each. Linux only.
 - `dns_check` resolves a configured hostname and returns its addresses.
+- `file_read` returns lines of a text file: 200 by default, at most 2000 lines
+  or 256 KiB, from any start line. Binary files are refused.
+- `file_list` lists a directory: name, type, size, permissions, modification
+  time and symlink targets. Symlinks are not followed.
+- `file_find` finds files by name, with `*` and `?` wildcards, under a
+  directory. It goes at most 8 levels deep and returns at most 200 paths.
+- `file_grep` finds lines containing exact text in a file or under a
+  directory. It skips binary files and files over 4 MiB, and returns at most
+  200 lines.
+
+The file tools can read the whole disk except what is blocked. Some paths are
+always blocked: `/proc`, `/sys`, `/dev`, `/etc/shadow` and `/etc/gshadow`
+(with their backups), SSH host keys, everything in a `.ssh` folder except
+`*.pub`, `authorized_keys`, `known_hosts` and `config`, files named `*.key`,
+`*.pem`, `.env` and `.env.*`, `/var/lib/docker`, `/etc/latch`,
+`/var/lib/latch`, Latch's config file, the home folders of the users in
+`socket_group` (the agent's own keys and history), and folders mounted into
+excluded containers. Add your own paths or file names under `files.exclude`.
+A blocked file behaves as if it does not exist. Latch never follows a symlink
+into a blocked folder, and secret-looking values in file text are shown as
+`[hidden]`.
+
+- `net_ping` pings a host (up to 5 packets) and reports loss and round-trip
+  times. It runs the system `ping`.
+- `net_dns` looks up A, AAAA, CNAME, MX, TXT, NS, SRV or PTR records with the
+  server's resolver.
+- `net_tcp` checks whether a TCP port accepts connections. It sends nothing.
+- `net_traceroute` lists the hops to a host (up to 30). It needs `traceroute`
+  or `tracepath` installed (`apt install traceroute`).
+- `net_http_get` fetches a URL with a plain GET, follows up to 5 redirects and
+  returns the status, a few safe headers and up to 8 KiB of a text body. The
+  agent cannot set headers, cookies, a method or a body. Certificates are
+  verified unless the agent asks to skip that, and the result says so.
+
+The network tools run without approval and may reach any address, including
+this server and the LAN. They cannot reach excluded containers, ports that
+excluded containers publish on this server, or the hostnames and addresses in
+`network.exclude`. Latch resolves names itself and checks the address again
+when it connects, so a changing DNS answer or a redirect cannot get around
+this. Ping needs unprivileged ICMP (`net.ipv4.ping_group_range`, open on
+Debian by default).
 
 Run `latch doctor` to check that every configured resource is reachable.
 

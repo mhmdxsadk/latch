@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
@@ -38,12 +39,23 @@ func (s stubDocker) Logs(context.Context, string, int, int) (docker.Logs, error)
 func (s stubDocker) Settings(context.Context, string) (docker.Settings, error) {
 	return docker.Settings{}, nil
 }
+func (s stubDocker) Usage(context.Context, string) (docker.Usage, error) {
+	return docker.Usage{}, nil
+}
+func (s stubDocker) Events(context.Context, time.Time, time.Time, func(string) bool, int) (docker.Events, error) {
+	return docker.Events{}, nil
+}
+func (s stubDocker) IDs(context.Context) (map[string]string, error) { return nil, nil }
 
 type stubSystemd struct{ ping, list error }
 
 func (s stubSystemd) Ping(context.Context) error { return s.ping }
 func (s stubSystemd) List(context.Context) ([]systemd.ListedUnit, error) {
 	return []systemd.ListedUnit{{Name: "ssh.service"}, {Name: "vault.service"}}, s.list
+}
+func (s stubSystemd) Failed(context.Context) ([]systemd.ListedUnit, error) { return nil, nil }
+func (s stubSystemd) Logs(context.Context, string, int, int) (systemd.Logs, error) {
+	return systemd.Logs{}, nil
 }
 func (s stubSystemd) UnitStatus(context.Context, string) (systemd.UnitStatus, error) {
 	return systemd.UnitStatus{}, nil

@@ -13,6 +13,8 @@ import (
 
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/config"
+	"github.com/mhmdxsadk/latch/internal/excluded"
+	"github.com/mhmdxsadk/latch/internal/files"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/policy"
 )
@@ -61,6 +63,8 @@ systemd:
 health:
   dns:
     - {name: example, host: example.com}
+network:
+  exclude: [vault.internal, 10.9.9.9]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -72,10 +76,18 @@ health:
 		Docker:  &fakeDocker{},
 		Systemd: &fakeSystemd{},
 		Health:  &fakeHealth{},
+		Files:   files.NewReader(files.NewGuard(files.Rules{}, nil), files.DefaultLimits()),
+		Net:     &fakeNet{},
 		Audit:   audit.New(slog.New(slog.NewJSONHandler(buf, nil))),
 		Version: "test",
 	}
 	override(deps)
+	if deps.Ports == nil {
+		deps.Ports = &fakePorts{}
+	}
+	if deps.Excluded == nil {
+		deps.Excluded = &excluded.Tracker{Docker: deps.Docker, Policy: deps.Policy}
+	}
 	srv := NewServer(deps)
 	ct, st := sdk.NewInMemoryTransports()
 	ctx := context.Background()
@@ -118,8 +130,10 @@ func TestToolSurfaceIsFixed(t *testing.T) {
 	// true: read-only; false: a change that goes through the approval store.
 	want := map[string]bool{
 		"list_resources": true, "host_load": true, "host_memory": true, "host_disk": true,
-		"docker_list": true, "docker_status": true, "docker_logs": true, "docker_settings": true,
-		"systemd_list": true, "systemd_unit_status": true, "dns_check": true,
+		"docker_list": true, "docker_status": true, "docker_logs": true, "docker_settings": true, "docker_usage": true, "docker_events": true, "host_ports": true,
+		"systemd_list": true, "systemd_unit_status": true, "systemd_logs": true, "systemd_failed": true, "dns_check": true,
+		"file_read": true, "file_list": true, "file_find": true, "file_grep": true,
+		"net_ping": true, "net_dns": true, "net_tcp": true, "net_traceroute": true, "net_http_get": true,
 		"action_status": true, "actions_list": true,
 		"docker_restart": false, "docker_stop": false, "docker_start": false, "docker_compose_up": false,
 		"systemd_restart": false, "systemd_stop": false, "systemd_start": false,
@@ -136,6 +150,10 @@ func TestToolSurfaceIsFixed(t *testing.T) {
 		}
 		if !readOnly && tool.Annotations != nil && tool.Annotations.DestructiveHint == nil {
 			t.Errorf("change tool %q must state whether it is destructive", tool.Name)
+		}
+		network := strings.HasPrefix(tool.Name, "net_")
+		if tool.Annotations != nil && (tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint != network) {
+			t.Errorf("tool %q: OpenWorldHint must be %v", tool.Name, network)
 		}
 	}
 	if len(want) != 0 {
@@ -209,7 +227,7 @@ func TestToolsRejectUnexpectedArguments(t *testing.T) {
 
 func TestUnknownToolRejected(t *testing.T) {
 	h := newHarness(t, fakeHost{})
-	for _, name := range []string{"exec", "docker_exec", "shell", "read_file", "restart_service"} {
+	for _, name := range []string{"exec", "docker_exec", "shell", "read_file", "file_write", "file_edit", "restart_service"} {
 		res, err := h.call(name, map[string]any{})
 		if err == nil && !res.IsError {
 			t.Errorf("tool %q must not exist", name)

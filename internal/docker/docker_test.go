@@ -89,7 +89,9 @@ func newFake(t *testing.T, h http.HandlerFunc) (*Engine, *recorder) {
 		ok := r.Method == http.MethodGet &&
 			(r.URL.Path == "/_ping" || r.URL.Path == "/containers/json" || r.URL.Path == "/containers/web/json" ||
 				r.URL.Path == "/containers/"+testID+"/json" ||
-				r.URL.Path == "/containers/"+testID+"/logs")
+				r.URL.Path == "/containers/"+testID+"/logs" ||
+				r.URL.Path == "/containers/"+testID+"/stats" ||
+				r.URL.Path == "/events")
 		if !ok {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL)
 		}
