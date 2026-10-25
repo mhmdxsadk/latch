@@ -54,6 +54,17 @@ func TestParseRejects(t *testing.T) {
 		{"old http checks section", validBase + "health:\n  http:\n    - {name: a, url: 'https://h/'}\n", "field http not found"},
 		{"dns host with scheme", validBase + "health:\n  dns:\n    - {name: a, host: 'http://x'}\n", "hostname"},
 		{"dns wildcard", validBase + "health:\n  dns:\n    - {name: a, host: '*.example.com'}\n", "hostname"},
+		{"network exclude wildcard", validBase + "network:\n  exclude: ['*.example.com']\n", "network.exclude[0]"},
+		{"network exclude url", validBase + "network:\n  exclude: ['http://example.com']\n", "network.exclude[0]"},
+		{"network exclude with port", validBase + "network:\n  exclude: ['example.com:80']\n", "network.exclude[0]"},
+		{"network exclude cidr", validBase + "network:\n  exclude: ['10.0.0.0/8']\n", "network.exclude[0]"},
+		{"network exclude empty", validBase + "network:\n  exclude: ['']\n", "network.exclude[0]"},
+		{"network exclude zone", validBase + "network:\n  exclude: ['fe80::1%eth0']\n", "network.exclude[0]"},
+		{"network exclude too long", validBase + "network:\n  exclude: ['" + strings.Repeat("a.", 127) + "aa']\n", "network.exclude[0]"},
+		{"network exclude duplicate", validBase + "network:\n  exclude: [a.example, a.example]\n", "duplicate"},
+		{"network exclude duplicate case and dot", validBase + "network:\n  exclude: [a.example, 'A.Example.']\n", "duplicate"},
+		{"network exclude duplicate mapped ip", validBase + "network:\n  exclude: [10.0.0.1, '::ffff:10.0.0.1']\n", "duplicate"},
+		{"network unknown key", validBase + "network:\n  allow: [x]\n", "field allow not found"},
 		{"not yaml mapping", "- just\n- a list\n", "parse config"},
 		{"files unknown key", validBase + "files:\n  include: [/etc]\n", "field include not found"},
 		{"files exclude relative path", validBase + "files:\n  exclude: ['etc/x']\n", "files.exclude[0]"},
@@ -80,6 +91,27 @@ func TestParseRejects(t *testing.T) {
 				t.Errorf("error %q does not contain %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestNetworkExcludeAccepts(t *testing.T) {
+	c, err := Parse([]byte(validBase + "network:\n  exclude: [vault.internal, 'Admin.Example.', 10.0.0.5, 'fd00::5']\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Network.Exclude) != 4 {
+		t.Errorf("got %v", c.Network.Exclude)
+	}
+}
+
+func TestNormalizeHost(t *testing.T) {
+	for in, want := range map[string]string{
+		"Example.COM.": "example.com", "example.com": "example.com",
+		"::ffff:10.0.0.1": "10.0.0.1", "FD00::0005": "fd00::5", "10.0.0.1": "10.0.0.1",
+	} {
+		if got := NormalizeHost(in); got != want {
+			t.Errorf("NormalizeHost(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

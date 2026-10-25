@@ -9,6 +9,7 @@ package policy
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 
 	"github.com/mhmdxsadk/latch/internal/config"
@@ -41,6 +42,8 @@ type Policy struct {
 	dns            map[string]config.DNSTarget
 	limits         config.Limits
 	ordered        map[Kind][]string
+	netNames       map[string]bool
+	netAddrs       []netip.Addr
 }
 
 // New builds a Policy from a config that has already passed Validate.
@@ -52,6 +55,15 @@ func New(c *config.Config) *Policy {
 		dns:            map[string]config.DNSTarget{},
 		limits:         c.Limits,
 		ordered:        map[Kind][]string{},
+		netNames:       map[string]bool{},
+	}
+	for _, h := range c.Network.Exclude {
+		n := config.NormalizeHost(h)
+		if a, err := netip.ParseAddr(n); err == nil {
+			p.netAddrs = append(p.netAddrs, a)
+		} else {
+			p.netNames[n] = true
+		}
 	}
 	for _, d := range c.Host.Disks {
 		p.disks[d.Name] = d
@@ -129,6 +141,55 @@ func (p *Policy) DNSTarget(name string) (config.DNSTarget, error) {
 		return config.DNSTarget{}, ErrNotAllowed
 	}
 	return t, nil
+}
+
+// NetworkHost validates an agent-supplied host for a network check: an IP
+// address (no IPv6 zone) or a hostname. It returns the normalized form
+// (lowercase, no trailing dot, canonical IP), or ErrNotAllowed when it is
+// listed in network.exclude. The addresses a name resolves to are checked
+// separately, at connect time.
+func (p *Policy) NetworkHost(host string) (string, error) {
+	return p.networkName(host, config.ValidHostname)
+}
+
+// DNSQueryName is NetworkHost for DNS lookups, which also allow underscores
+// (_dmarc.example.com, _imap._tcp.example.com).
+func (p *Policy) DNSQueryName(name string) (string, error) {
+	return p.networkName(name, config.ValidQueryName)
+}
+
+func (p *Policy) networkName(s string, valid func(string) bool) (string, error) {
+	if a, err := netip.ParseAddr(s); err == nil {
+		if a.Zone() != "" {
+			return "", ErrInvalidName
+		}
+		a = a.Unmap()
+		if p.NetworkAddrExcluded(a) {
+			return "", ErrNotAllowed
+		}
+		return a.String(), nil
+	}
+	if !valid(s) {
+		return "", ErrInvalidName
+	}
+	n := config.NormalizeHost(s)
+	if a, err := netip.ParseAddr(n); err == nil {
+		// Only reachable for odd spellings; treat like the literal.
+		if p.NetworkAddrExcluded(a) {
+			return "", ErrNotAllowed
+		}
+		return a.String(), nil
+	}
+	if p.netNames[n] {
+		return "", ErrNotAllowed
+	}
+	return n, nil
+}
+
+// NetworkAddrExcluded reports whether a is an IP address listed in
+// network.exclude. IPv4-mapped IPv6 addresses are compared as IPv4.
+func (p *Policy) NetworkAddrExcluded(a netip.Addr) bool {
+	return slices.Contains(p.netAddrs, a.Unmap().WithZone(""))
 }
 
 // LogLimits clamps a requested log window to the configured maximum.

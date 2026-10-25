@@ -22,6 +22,7 @@ import (
 	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/mcp"
+	"github.com/mhmdxsadk/latch/internal/netcheck"
 	"github.com/mhmdxsadk/latch/internal/policy"
 	"github.com/mhmdxsadk/latch/internal/ports"
 	"github.com/mhmdxsadk/latch/internal/server"
@@ -176,6 +177,7 @@ func cmdServe(args []string, stderr io.Writer) int {
 		Health:   health.Prober{},
 		Ports:    ports.Proc{},
 		Files:    files.NewReader(fileGuard, files.DefaultLimits()),
+		Net:      netcheck.New(pol, tracker, version),
 		Excluded: tracker,
 		Audit:    al,
 		Version:  version,

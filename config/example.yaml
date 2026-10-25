@@ -66,3 +66,11 @@ files:
   exclude:
     - /srv/backups
     - "*.secret"
+
+network:
+  # The network tools (ping, DNS, TCP, traceroute, HTTP GET) may reach any
+  # address, including this host and the LAN. Excluded containers are blocked
+  # automatically: their addresses, and their published ports on this host.
+  # List other hostnames or IP addresses to block here. Names are exact (no
+  # wildcards) and case does not matter.
+  exclude: []
