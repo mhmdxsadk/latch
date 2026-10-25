@@ -29,7 +29,17 @@ func TestText(t *testing.T) {
 		{"empty value", "password=", "password="},
 		{"two on a line", "user=a password=b token=c", "user=a password=[hidden] token=[hidden]"},
 
+		{"short pass", "DB_PASS=hunter2 smtp.pass: x", "DB_PASS=[hidden] smtp.pass: [hidden]"},
+		{"rclone", "pass = obscured123", "pass = [hidden]"},
+		{"docker config", `{"auths":{"ghcr.io":{"auth":"dXNlcjpwYXNz"}}}`, `{"auths":{"ghcr.io":{"auth":"[hidden]"}}}`},
+		{"kubeconfig", "    client-key-data: LS0tLS1CRUdJTg==", "    client-key-data: [hidden]"},
+		{"netrc one line", "machine example.com login bob password s3cret", "machine example.com login bob password [hidden]"},
+		{"netrc lines", "machine example.com\n  login bob\n  password s3cret\n", "machine example.com\n  login bob\n  password [hidden]\n"},
+
 		// Ordinary log lines must pass through unchanged.
+		{"bypass", "bypass=true compass: north passthrough=1", "bypass=true compass: north passthrough=1"},
+		{"author", "author: bob oauth_flow=pkce", "author: bob oauth_flow=pkce"},
+		{"password prose", "invalid password for user bob", "invalid password for user bob"},
 		{"acme", "authorization finalized for example.com", "authorization finalized for example.com"},
 		{"secret flag", "crafty: secret flag set", "crafty: secret flag set"},
 		{"stack trace", "at Foo(Guid id, CancellationToken cancellationToken)", "at Foo(Guid id, CancellationToken cancellationToken)"},
