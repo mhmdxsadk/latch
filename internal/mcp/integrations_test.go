@@ -13,7 +13,6 @@ import (
 
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
-	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/ports"
 	"github.com/mhmdxsadk/latch/internal/systemd"
@@ -122,16 +121,6 @@ func (f *fakeSystemd) List(context.Context) ([]systemd.ListedUnit, error) {
 func (f *fakeSystemd) UnitStatus(_ context.Context, u string) (systemd.UnitStatus, error) {
 	f.units = append(f.units, u)
 	return systemd.UnitStatus{LoadState: "loaded", ActiveState: "active", SubState: "running"}, f.err
-}
-
-type fakeHealth struct {
-	err     error
-	targets []string
-}
-
-func (f *fakeHealth) DNS(_ context.Context, t config.DNSTarget) (health.DNSResult, error) {
-	f.targets = append(f.targets, t.Host)
-	return health.DNSResult{OK: true, Addresses: []string{"192.0.2.1"}}, f.err
 }
 
 func structured[T any](t *testing.T, h *harness, tool string, args any) T {
@@ -314,37 +303,11 @@ func TestExcludedLooksLikeMissing(t *testing.T) {
 	}
 }
 
-func TestHealthTools(t *testing.T) {
-	fh := &fakeHealth{}
-	h := newHarnessWith(t, func(d *Deps) { d.Health = fh })
-	dc := structured[dnsCheckOut](t, h, "dns_check", map[string]any{"name": "example"})
-	if !dc.Result.OK || len(dc.Result.Addresses) != 1 {
-		t.Errorf("got %+v", dc)
-	}
-	for _, c := range []struct {
-		tool string
-		args any
-	}{
-		{"http_check", map[string]any{"name": "example"}}, // there is no such tool any more
-		{"dns_check", map[string]any{"name": "evil.example"}},
-		{"dns_check", map[string]any{"name": "example", "host": "internal.corp"}},
-	} {
-		res, err := h.call(c.tool, c.args)
-		if err == nil && !res.IsError {
-			t.Errorf("%s %v: expected rejection", c.tool, c.args)
-		}
-	}
-	if strings.Join(fh.targets, ",") != "example.com" {
-		t.Errorf("integration saw %v", fh.targets)
-	}
-}
-
 func TestMissingResourcesAndLeaks(t *testing.T) {
 	secret := errors.New("SECRET-TOKEN hunter2 /var/lib/docker")
 	h := newHarnessWith(t, func(d *Deps) {
 		d.Docker = &fakeDocker{err: secret}
 		d.Systemd = &fakeSystemd{err: secret}
-		d.Health = &fakeHealth{err: secret}
 	})
 	for _, c := range []struct {
 		tool string
@@ -355,7 +318,6 @@ func TestMissingResourcesAndLeaks(t *testing.T) {
 		{"docker_logs", map[string]any{"name": "my-web"}},
 		{"systemd_list", map[string]any{}},
 		{"systemd_unit_status", map[string]any{"unit": "ssh.service"}},
-		{"dns_check", map[string]any{"name": "example"}},
 	} {
 		res, err := h.call(c.tool, c.args)
 		text := ""

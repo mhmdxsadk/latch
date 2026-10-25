@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -38,13 +40,45 @@ func TestParseMeminfo(t *testing.T) {
 	}
 }
 
-func TestDiskOnRoot(t *testing.T) {
-	d, err := System{}.Disk(context.Background(), "/")
+func TestStatfsOnRoot(t *testing.T) {
+	d, err := statfs("/")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.TotalBytes == 0 || d.UsedBytes > d.TotalBytes {
 		t.Errorf("implausible: %+v", d)
+	}
+}
+
+func TestDisksSkipsPseudoAndBindMounts(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "self"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	mounts := "/dev/sda1 / ext4 rw 0 0\n" +
+		"proc /proc proc rw 0 0\n" +
+		"tmpfs /run tmpfs rw 0 0\n" +
+		"overlay /var/lib/docker/overlay2/x/merged overlay rw 0 0\n" +
+		"/dev/sda1 /srv/bind ext4 rw 0 0\n" +
+		"/dev/sdb1 " + strings.ReplaceAll(tmp, " ", `\040`) + " xfs rw 0 0\n" +
+		"/dev/sdc1 /does/not/exist ext4 rw 0 0\n"
+	if err := os.WriteFile(filepath.Join(root, "self", "mounts"), []byte(mounts), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := System{ProcRoot: root}.Disks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Mount != "/" || got[0].Type != "ext4" || got[1].Mount != tmp || got[1].Type != "xfs" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestParseMountsUnescapes(t *testing.T) {
+	m := ParseMounts("/dev/sda1 /mnt/my\\040disk ext4 rw 0 0\nshort\n")
+	if len(m) != 1 || m[0].Mount != "/mnt/my disk" || m[0].Source != "/dev/sda1" {
+		t.Errorf("got %+v", m)
 	}
 }
 

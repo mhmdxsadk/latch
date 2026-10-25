@@ -12,16 +12,19 @@ import (
 
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
-	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/systemd"
 )
 
 type okHost struct{}
 
-func (okHost) Load(context.Context) (host.Load, error)         { return host.Load{}, nil }
-func (okHost) Memory(context.Context) (host.Memory, error)     { return host.Memory{}, nil }
-func (okHost) Disk(context.Context, string) (host.Disk, error) { return host.Disk{}, nil }
+func (okHost) Load(context.Context) (host.Load, error)     { return host.Load{}, nil }
+func (okHost) Memory(context.Context) (host.Memory, error) { return host.Memory{}, nil }
+func (okHost) Disks(context.Context) ([]host.Disk, error)  { return []host.Disk{{Mount: "/"}}, nil }
+
+type noDisksHost struct{ okHost }
+
+func (noDisksHost) Disks(context.Context) ([]host.Disk, error) { return nil, errors.New("no mounts") }
 
 type stubDocker struct{ ping, list error }
 
@@ -65,14 +68,6 @@ func (s stubSystemd) UnitStatus(context.Context, string) (systemd.UnitStatus, er
 	return systemd.UnitStatus{}, nil
 }
 
-type stubHealth struct {
-	dns health.DNSResult
-}
-
-func (s stubHealth) DNS(context.Context, config.DNSTarget) (health.DNSResult, error) {
-	return s.dns, nil
-}
-
 func doctorConfig(t *testing.T) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
@@ -82,8 +77,6 @@ docker:
   exclude: [secrets-*]
 systemd:
   exclude: [vault.service]
-health:
-  dns: [{name: example, host: example.com}]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +89,6 @@ func healthy() integrations {
 		host:    okHost{},
 		docker:  stubDocker{},
 		systemd: stubSystemd{},
-		health:  stubHealth{dns: health.DNSResult{OK: true}},
 		groupID: func(string) (uint32, error) { return 1500, nil },
 		euid:    func() int { return 0 },
 		compose: func(context.Context) (string, error) { return "/usr/bin/docker", nil },
@@ -153,7 +145,7 @@ func TestDoctorAllHealthy(t *testing.T) {
 	if !doctor(context.Background(), doctorConfig(t), healthy(), &out, false) {
 		t.Fatalf("expected success:\n%s", out.String())
 	}
-	for _, want := range []string{"OK    socket group latch-agents", "OK    docker daemon", "OK    docker containers (1 visible, 2 excluded)", "OK    systemd services (1 visible, 1 excluded)", "OK    dns check example", "All checks passed."} {
+	for _, want := range []string{"OK    socket group latch-agents", "OK    docker daemon", "OK    docker containers (1 visible, 2 excluded)", "OK    systemd services (1 visible, 1 excluded)", "OK    disks (1 found)", "All checks passed."} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in:\n%s", want, out.String())
 		}
@@ -176,9 +168,7 @@ func TestDoctorReportsFailures(t *testing.T) {
 		{"container list fails", func(i *integrations) { i.docker = stubDocker{list: errors.New("denied")} }, "FAIL  docker containers"},
 		{"no systemd", func(i *integrations) { i.systemd = stubSystemd{ping: errors.New("no bus")} }, "FAIL  systemd bus"},
 		{"unit list fails", func(i *integrations) { i.systemd = stubSystemd{list: errors.New("denied")} }, "FAIL  systemd services"},
-		{"dns failure", func(i *integrations) {
-			i.health = stubHealth{dns: health.DNSResult{Failure: health.FailureNotFound}}
-		}, "FAIL  dns check example\n      not_found"},
+		{"no mount table", func(i *integrations) { i.host = noDisksHost{} }, "FAIL  disks"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

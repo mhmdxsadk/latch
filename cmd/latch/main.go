@@ -22,7 +22,6 @@ import (
 	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/excluded"
 	"github.com/mhmdxsadk/latch/internal/files"
-	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/mcp"
 	"github.com/mhmdxsadk/latch/internal/netcheck"
@@ -204,7 +203,6 @@ func cmdServe(args []string, stderr io.Writer) int {
 		Host:           host.System{},
 		Docker:         dk,
 		Systemd:        systemd.NewBus(),
-		Health:         health.Prober{},
 		Ports:          ports.Proc{},
 		Files:          files.NewReader(fileGuard, files.DefaultLimits()),
 		Net:            prober,

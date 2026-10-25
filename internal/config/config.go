@@ -45,8 +45,6 @@ const (
 )
 
 var (
-	// resourceName is the shape of every agent-visible resource name.
-	resourceName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 	// containerName matches Docker's own container name rule.
 	containerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 	// unitName matches a fully qualified systemd unit name. Template
@@ -92,9 +90,6 @@ func NormalizeHost(s string) string {
 	return s
 }
 
-// ValidResourceName reports whether s is a syntactically valid resource name.
-func ValidResourceName(s string) bool { return resourceName.MatchString(s) }
-
 // ValidContainerName reports whether s is a syntactically valid container name.
 func ValidContainerName(s string) bool { return containerName.MatchString(s) }
 
@@ -120,8 +115,6 @@ type Config struct {
 	Audit   Audit   `yaml:"audit"`
 	Docker  Docker  `yaml:"docker"`
 	Systemd Systemd `yaml:"systemd"`
-	Host    Host    `yaml:"host"`
-	Health  Health  `yaml:"health"`
 	Files   Files   `yaml:"files"`
 	Network Network `yaml:"network"`
 }
@@ -179,17 +172,6 @@ type Systemd struct {
 	Approve []string `yaml:"approve"`
 }
 
-// Host lists the filesystems whose usage may be reported.
-type Host struct {
-	Disks []Disk `yaml:"disks"`
-}
-
-// Disk maps an agent-visible name to a mount point.
-type Disk struct {
-	Name string `yaml:"name"`
-	Path string `yaml:"path"`
-}
-
 // Files configures the read-only file tools. The whole disk is readable except
 // a built-in block list (see package files) and the entries in Exclude.
 type Files struct {
@@ -198,17 +180,6 @@ type Files struct {
 	// (* and ? wildcards), which blocks every file or directory with a
 	// matching name and everything below it.
 	Exclude []string `yaml:"exclude"`
-}
-
-// Health lists the fixed DNS check targets.
-type Health struct {
-	DNS []DNSTarget `yaml:"dns"`
-}
-
-// DNSTarget is a fixed hostname the agent can ask Latch to resolve by name.
-type DNSTarget struct {
-	Name string `yaml:"name"`
-	Host string `yaml:"host"`
 }
 
 // Load reads, parses and validates the file at path.
@@ -345,33 +316,6 @@ func (c *Config) Validate() error {
 	// systemd
 	checkPatterns(add, "systemd.exclude", c.Systemd.Exclude)
 	checkPatterns(add, "systemd.approve", c.Systemd.Approve)
-
-	seen := map[string]bool{}
-	// host
-	for i, d := range c.Host.Disks {
-		if !resourceName.MatchString(d.Name) {
-			add("host.disks[%d].name is not a valid resource name", i)
-		} else if seen["disk/"+d.Name] {
-			add("host.disks: duplicate name %q", d.Name)
-		}
-		seen["disk/"+d.Name] = true
-		if !filepath.IsAbs(d.Path) || filepath.Clean(d.Path) != d.Path {
-			add("host.disks[%d].path must be a clean absolute path", i)
-		}
-	}
-
-	// health
-	for i, t := range c.Health.DNS {
-		if !resourceName.MatchString(t.Name) {
-			add("health.dns[%d].name is not a valid resource name", i)
-		} else if seen["dns/"+t.Name] {
-			add("health.dns: duplicate name %q", t.Name)
-		}
-		seen["dns/"+t.Name] = true
-		if !ValidHostname(t.Host) {
-			add("health.dns[%d].host is not a valid hostname", i)
-		}
-	}
 
 	// files
 	checkFileExcludes(add, c.Files.Exclude)

@@ -100,7 +100,7 @@ type env struct {
 
 func start(t *testing.T, gid uint32) env {
 	t.Helper()
-	cfg, err := config.Parse([]byte("server: {socket: /run/l.sock, socket_group: latch-agents}\nhost: {disks: [{name: root, path: /}]}\n"))
+	cfg, err := config.Parse([]byte("server: {socket: /run/l.sock, socket_group: latch-agents}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestMCPClientOverUnixSocketInGroup(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	defer cs.Close()
-	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "host_disk", Arguments: map[string]any{"name": "root"}})
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "actions_list", Arguments: map[string]any{}})
 	if err != nil || res.IsError {
 		t.Fatalf("call: %v %+v", err, res)
 	}
@@ -205,7 +205,7 @@ func TestMCPClientAtSocketRoot(t *testing.T) {
 		t.Fatalf("connect at /: %v", err)
 	}
 	defer cs.Close()
-	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "host_disk", Arguments: map[string]any{"name": "root"}})
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "actions_list", Arguments: map[string]any{}})
 	if err != nil || res.IsError {
 		t.Fatalf("call: %v %+v", err, res)
 	}

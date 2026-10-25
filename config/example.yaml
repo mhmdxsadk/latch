@@ -1,9 +1,9 @@
 # Latch example configuration.
 #
 # This file declares WHICH resources an agent may NOT inspect (Docker
-# containers, systemd units, files) and which disks and DNS names it may. It
-# cannot define commands or arguments, and it can only hide files, never add
-# them. Unknown keys are rejected.
+# containers, systemd units, files, network addresses) and which changes always
+# wait for your approval. It cannot define commands or arguments, and it can
+# only hide things, never add them. Unknown keys are rejected.
 # Copy to /etc/latch/config.yaml and edit.
 
 server:
@@ -48,22 +48,12 @@ systemd:
   exclude:
     - vault.service
   # Units whose every change, restarts included, waits for your approval.
-  # docker.service, ssh.service, sshd.service, systemd-networkd.service,
-  # networking.service and latch.service are always on this list.
+  # Always on this list: Docker and containerd (with docker.socket), SSH (with
+  # ssh.socket), D-Bus, every systemd-* unit, networking and firewall
+  # services, and latch.service. Only services restart automatically; other
+  # unit types always wait for approval.
   approve:
     - cron.service
-
-host:
-  disks:
-    - name: root
-      path: /
-    - name: data
-      path: /var/lib
-
-health:
-  dns:
-    - name: example
-      host: example.com
 
 files:
   # The agent can read, list and search any file on the disk EXCEPT these

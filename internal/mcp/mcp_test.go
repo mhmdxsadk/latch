@@ -29,11 +29,14 @@ func (f fakeHost) Load(context.Context) (host.Load, error) {
 func (f fakeHost) Memory(context.Context) (host.Memory, error) {
 	return host.Memory{TotalBytes: 100, UsedBytes: 40, AvailableBytes: 60}, f.err
 }
-func (f fakeHost) Disk(_ context.Context, path string) (host.Disk, error) {
+func (f fakeHost) Disks(context.Context) ([]host.Disk, error) {
 	if f.err != nil {
-		return host.Disk{}, f.err
+		return nil, f.err
 	}
-	return host.Disk{TotalBytes: 1000, FreeBytes: 250, UsedBytes: 750}, nil
+	return []host.Disk{
+		{Mount: "/", Type: "ext4", TotalBytes: 1000, FreeBytes: 250, UsedBytes: 750},
+		{Mount: "/proc/fake", Type: "ext4", TotalBytes: 1},
+	}, nil
 }
 
 type harness struct {
@@ -53,16 +56,10 @@ func newHarnessWith(t *testing.T, override func(*Deps)) *harness {
 	t.Helper()
 	cfg, err := config.Parse([]byte(`
 server: {socket: /run/l.sock, socket_group: latch-agents}
-host:
-  disks:
-    - {name: root, path: /}
 docker:
   exclude: [secret-*]
 systemd:
   exclude: [vault.service]
-health:
-  dns:
-    - {name: example, host: example.com}
 network:
   exclude: [vault.internal, 10.9.9.9]
 `))
@@ -75,7 +72,6 @@ network:
 		Host:    fakeHost{},
 		Docker:  &fakeDocker{},
 		Systemd: &fakeSystemd{},
-		Health:  &fakeHealth{},
 		Files:   files.NewReader(files.NewGuard(files.Rules{}, nil), files.DefaultLimits()),
 		Net:     &fakeNet{},
 		Audit:   audit.New(slog.New(slog.NewJSONHandler(buf, nil))),
@@ -129,9 +125,9 @@ func TestToolSurfaceIsFixed(t *testing.T) {
 	}
 	// true: read-only; false: a change that goes through the approval store.
 	want := map[string]bool{
-		"list_resources": true, "host_load": true, "host_memory": true, "host_disk": true,
+		"host_load": true, "host_memory": true, "host_disk": true,
 		"docker_list": true, "docker_status": true, "docker_logs": true, "docker_settings": true, "docker_usage": true, "docker_events": true, "host_ports": true,
-		"systemd_list": true, "systemd_unit_status": true, "systemd_logs": true, "systemd_failed": true, "dns_check": true,
+		"systemd_list": true, "systemd_unit_status": true, "systemd_logs": true, "systemd_failed": true,
 		"file_read": true, "file_list": true, "file_find": true, "file_grep": true,
 		"net_ping": true, "net_dns": true, "net_tcp": true, "net_traceroute": true, "net_http_get": true,
 		"action_status": true, "actions_list": true,
@@ -163,63 +159,34 @@ func TestToolSurfaceIsFixed(t *testing.T) {
 	}
 }
 
-func TestListResources(t *testing.T) {
+func TestHostDiskListsVisibleFilesystems(t *testing.T) {
 	h := newHarness(t, fakeHost{})
-	res, err := h.call("list_resources", map[string]any{})
+	res, err := h.call("host_disk", map[string]any{})
 	if err != nil || res.IsError {
 		t.Fatalf("%v %+v", err, res)
 	}
-	var out listResourcesOut
+	var out disksOut
 	b, _ := json.Marshal(res.StructuredContent)
 	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Disks) != 1 || out.Disks[0] != "root" || len(out.DNSChecks) != 1 {
+	// /proc/fake is inside a blocked folder and must be left out.
+	if len(out.Disks) != 1 || out.Disks[0].Mount != "/" || out.Disks[0].UsedBytes != 750 {
 		t.Errorf("got %+v", out)
 	}
-}
-
-func TestHostDiskHappyPath(t *testing.T) {
-	h := newHarness(t, fakeHost{})
-	res, err := h.call("host_disk", map[string]any{"name": "root"})
-	if err != nil || res.IsError {
-		t.Fatalf("%v %+v", err, res)
-	}
-	if !strings.Contains(h.audit.String(), `"outcome":"ok"`) || !strings.Contains(h.audit.String(), `"resource":"root"`) {
+	if !strings.Contains(h.audit.String(), `"outcome":"ok"`) {
 		t.Errorf("audit missing: %s", h.audit)
 	}
-}
-
-func TestHostDiskRejections(t *testing.T) {
-	h := newHarness(t, fakeHost{})
-	tests := []struct {
-		name string
-		args any
-	}{
-		{"unknown name", map[string]any{"name": "other"}},
-		{"path instead of name", map[string]any{"name": "/"}},
-		{"traversal", map[string]any{"name": "../etc"}},
-		{"injection", map[string]any{"name": "root; cat /etc/shadow"}},
-		{"empty", map[string]any{"name": ""}},
-		{"missing name", map[string]any{}},
-		{"wrong type", map[string]any{"name": 5}},
-		{"null", map[string]any{"name": nil}},
-		{"extra field smuggling a path", map[string]any{"name": "root", "path": "/etc"}},
-		{"array instead of object", []any{"root"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			res, err := h.call("host_disk", tt.args)
-			if err == nil && (res == nil || !res.IsError) {
-				t.Fatalf("expected rejection, got %+v", res)
-			}
-		})
+	for _, args := range []any{map[string]any{"name": "root"}, map[string]any{"path": "/etc"}} {
+		if res, err := h.call("host_disk", args); err == nil && !res.IsError {
+			t.Errorf("host_disk accepted %v", args)
+		}
 	}
 }
 
 func TestToolsRejectUnexpectedArguments(t *testing.T) {
 	h := newHarness(t, fakeHost{})
-	for _, tool := range []string{"host_load", "host_memory", "list_resources", "docker_list"} {
+	for _, tool := range []string{"host_load", "host_memory", "host_disk", "docker_list"} {
 		res, err := h.call(tool, map[string]any{"path": "/etc/shadow"})
 		if err == nil && !res.IsError {
 			t.Errorf("%s accepted an unexpected argument", tool)
@@ -274,8 +241,8 @@ func TestIntegrationErrorsAreSanitised(t *testing.T) {
 
 func TestDeniedCallsAreAuditedWithoutEchoingInput(t *testing.T) {
 	h := newHarness(t, fakeHost{})
-	h.call("host_disk", map[string]any{"name": "evil-name"})
-	h.call("host_disk", map[string]any{"name": "bad name;id"})
+	h.call("docker_status", map[string]any{"name": "secret-evil-name"})
+	h.call("docker_status", map[string]any{"name": "bad name;id"})
 	a := h.audit.String()
 	if strings.Contains(a, "evil-name") || strings.Contains(a, "bad name") {
 		t.Errorf("audit log echoed untrusted input: %s", a)

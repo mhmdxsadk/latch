@@ -14,7 +14,6 @@ import (
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/docker"
 	"github.com/mhmdxsadk/latch/internal/files"
-	"github.com/mhmdxsadk/latch/internal/health"
 	"github.com/mhmdxsadk/latch/internal/host"
 	"github.com/mhmdxsadk/latch/internal/policy"
 	"github.com/mhmdxsadk/latch/internal/server"
@@ -28,7 +27,6 @@ type integrations struct {
 	host    host.Provider
 	docker  docker.Client
 	systemd systemd.Client
-	health  health.Checker
 	groupID func(name string) (uint32, error)
 	euid    func() int
 	// compose reports which docker CLI runs "docker compose".
@@ -58,7 +56,6 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 		host:    host.System{},
 		docker:  docker.NewEngine(cfg.Docker.Socket),
 		systemd: systemd.NewBus(),
-		health:  health.Prober{},
 		groupID: server.GroupID,
 		euid:    os.Geteuid,
 		compose: func(ctx context.Context) (string, error) { return docker.CheckComposeCLI(ctx, cfg.Docker.Socket) },
@@ -192,9 +189,11 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 	r.check("host load", err, hostHint(err))
 	_, err = in.host.Memory(ctx)
 	r.check("host memory", err, hostHint(err))
-	for _, d := range cfg.Host.Disks {
-		_, err := in.host.Disk(ctx, d.Path)
-		r.check("disk "+d.Name+" ("+d.Path+")", err, "Check that the path exists and is a mount point or directory.")
+	disks, err := in.host.Disks(ctx)
+	if err == nil {
+		r.check(fmt.Sprintf("disks (%d found)", len(disks)), nil, "")
+	} else {
+		r.check("disks", err, hostHint(err))
 	}
 
 	if err := in.docker.Ping(ctx); err != nil {
@@ -223,14 +222,6 @@ func doctor(ctx context.Context, cfg *config.Config, in integrations, out io.Wri
 			names = append(names, u.Name)
 		}
 		r.check("systemd services"+visible(names, err, pol.UnitVisible), err, "Can the latch service reach the system bus?")
-	}
-
-	for _, t := range cfg.Health.DNS {
-		res, err := in.health.DNS(ctx, t)
-		if err == nil && !res.OK {
-			err = errors.New(string(res.Failure))
-		}
-		r.check("dns check "+t.Name, err, "Check the hostname and that this server can reach a DNS resolver.")
 	}
 
 	r.summary()

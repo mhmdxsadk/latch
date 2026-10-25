@@ -10,9 +10,8 @@ and do. Latch contains no LLM. It only enforces policy.
 
 Latch treats the agent as untrusted and enforces the policy itself.
 
-- Docker containers and systemd units are visible by default. You list the ones
-  to exclude in a config file. Disks and DNS names must still be listed, because
-  each needs a path or a hostname.
+- Docker containers, systemd units, files and network addresses are visible by
+  default. You list the ones to exclude in a config file.
 - An excluded resource behaves as if it does not exist.
 - The agent cannot supply its own commands, and the config cannot express a
   command or argument. It can name files to read (except blocked ones) and
@@ -47,8 +46,8 @@ agent should reach only Latch's socket.
 
 Latch is pre-release (v0.x). These read-only tools exist today:
 
-- `list_resources` lists the disks and DNS checks you have exposed.
-- `host_load`, `host_memory` and `host_disk` report host metrics.
+- `host_load` and `host_memory` report host metrics. `host_disk` reports the
+  space and inodes used on every mounted disk.
 - `docker_list` and `docker_status` report each visible container's state, exit
   code, restart count, image and health. `docker_status` also returns the
   output of the latest health check, which usually says why it failed.
@@ -80,7 +79,6 @@ excluding the container is the real one.
   out; read them with `docker_logs`, where `docker.exclude` applies.
 - `host_ports` lists listening TCP and UDP sockets with the program, unit and
   container that own each. Linux only.
-- `dns_check` resolves a configured hostname and returns its addresses.
 - `file_read` returns lines of a text file: 200 by default, at most 2000 lines
   or 256 KiB, from any start line. Binary files are refused.
 - `file_list` lists a directory: name, type, size, permissions, modification
@@ -207,8 +205,8 @@ release. Re-run the script to upgrade. It keeps your config. Older versions
 ran Latch as a `latch` user; the script switches the service to root and
 leaves that user in place for you to remove.
 
-Next, edit `/etc/latch/config.yaml`. List the containers and units to hide, and
-the disks and DNS names to expose. [`config/example.yaml`](config/example.yaml)
+Next, edit `/etc/latch/config.yaml`. List the containers, units, files and
+addresses to hide. [`config/example.yaml`](config/example.yaml)
 shows every option. Then validate the config and start the service:
 
 ```sh

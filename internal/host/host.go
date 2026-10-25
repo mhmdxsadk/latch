@@ -1,7 +1,7 @@
 // Package host reports basic system metrics (load, memory, disk usage).
 //
-// It only reads fixed kernel interfaces (/proc/loadavg, /proc/meminfo, statfs)
-// and never accepts a path from a caller: disk paths come from policy.
+// It only reads fixed kernel interfaces (/proc/loadavg, /proc/meminfo,
+// /proc/self/mounts, statfs) and never accepts a path from a caller.
 package host
 
 import (
@@ -35,8 +35,10 @@ type Memory struct {
 	SwapFreeBytes  uint64 `json:"swap_free_bytes"`
 }
 
-// Disk reports filesystem usage in bytes and inodes.
+// Disk reports the usage of one mounted filesystem in bytes and inodes.
 type Disk struct {
+	Mount       string `json:"mount"`
+	Type        string `json:"type"`
 	TotalBytes  uint64 `json:"total_bytes"`
 	FreeBytes   uint64 `json:"free_bytes"`
 	UsedBytes   uint64 `json:"used_bytes"`
@@ -48,8 +50,8 @@ type Disk struct {
 type Provider interface {
 	Load(ctx context.Context) (Load, error)
 	Memory(ctx context.Context) (Memory, error)
-	// Disk takes a path that has already been resolved by policy.
-	Disk(ctx context.Context, path string) (Disk, error)
+	// Disks lists the mounted filesystems that hold data, in mount order.
+	Disks(ctx context.Context) ([]Disk, error)
 }
 
 // ErrUnsupported is returned where a metric is unavailable on this OS.
@@ -86,7 +88,84 @@ func (s System) Memory(context.Context) (Memory, error) {
 	return ParseMeminfo(bufio.NewScanner(f))
 }
 
-func (s System) Disk(_ context.Context, path string) (Disk, error) {
+// MaxDisks bounds the Disks list.
+const MaxDisks = 64
+
+// pseudoFS are filesystem types that hold no data of their own: kernel
+// interfaces, memory-backed mounts and container layers.
+var pseudoFS = map[string]bool{
+	"autofs": true, "binfmt_misc": true, "bpf": true, "cgroup": true, "cgroup2": true,
+	"configfs": true, "debugfs": true, "devpts": true, "devtmpfs": true, "efivarfs": true,
+	"fusectl": true, "fuse.lxcfs": true, "fuse.portal": true, "hugetlbfs": true,
+	"mqueue": true, "nsfs": true, "overlay": true, "proc": true, "pstore": true,
+	"ramfs": true, "rpc_pipefs": true, "securityfs": true, "selinuxfs": true,
+	"squashfs": true, "sysfs": true, "tmpfs": true, "tracefs": true,
+}
+
+// Disks lists every mounted filesystem that holds data, skipping pseudo
+// filesystems and further mounts of a device already listed (bind mounts).
+func (s System) Disks(context.Context) ([]Disk, error) {
+	b, err := os.ReadFile(s.proc("self/mounts"))
+	if err != nil {
+		return nil, unsupportedOr(err)
+	}
+	out := []Disk{}
+	seen := map[string]bool{}
+	for _, m := range ParseMounts(string(b)) {
+		if pseudoFS[m.Type] || seen[m.Source] || len(out) >= MaxDisks {
+			continue
+		}
+		d, err := statfs(m.Mount)
+		if err != nil {
+			continue // gone, or not readable: leave it out
+		}
+		seen[m.Source] = true
+		d.Mount, d.Type = m.Mount, m.Type
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+// Mount is one line of /proc/self/mounts.
+type Mount struct {
+	Source string
+	Mount  string
+	Type   string
+}
+
+// ParseMounts parses /proc/self/mounts, decoding the octal escapes the
+// kernel uses for spaces and other special characters in paths.
+func ParseMounts(s string) []Mount {
+	var out []Mount
+	for _, line := range strings.Split(s, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 3 {
+			continue
+		}
+		out = append(out, Mount{Source: unescapeMount(f[0]), Mount: unescapeMount(f[1]), Type: f[2]})
+	}
+	return out
+}
+
+func unescapeMount(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	var sb strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+3 < len(s) {
+			if n, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				sb.WriteByte(byte(n))
+				i += 3
+				continue
+			}
+		}
+		sb.WriteByte(s[i])
+	}
+	return sb.String()
+}
+
+func statfs(path string) (Disk, error) {
 	var st unix.Statfs_t
 	if err := unix.Statfs(path, &st); err != nil {
 		return Disk{}, fmt.Errorf("statfs: %w", err)

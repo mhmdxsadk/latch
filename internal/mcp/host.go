@@ -2,16 +2,18 @@ package mcp
 
 import (
 	"context"
+	"errors"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/mhmdxsadk/latch/internal/files"
 	"github.com/mhmdxsadk/latch/internal/host"
 )
 
 type noInput struct{}
 
-type diskIn struct {
-	Name string `json:"name" jsonschema:"name of a configured disk, from list_resources"`
+type disksOut struct {
+	Disks []host.Disk `json:"disks"`
 }
 
 func registerHost(s *sdk.Server, d *Deps) {
@@ -35,14 +37,25 @@ func registerHost(s *sdk.Server, d *Deps) {
 
 	sdk.AddTool(s, &sdk.Tool{
 		Name:        "host_disk",
-		Description: "Return usage of a configured filesystem, in bytes and inodes.",
+		Description: "Return the usage of every mounted filesystem that holds data, in bytes and inodes.",
 		Annotations: readOnly,
-	}, wrap(d, "host_disk", func(ctx context.Context, in diskIn) (host.Disk, string, error) {
-		disk, err := d.Policy.Disk(in.Name)
+	}, wrap(d, "host_disk", func(ctx context.Context, _ noInput) (disksOut, string, error) {
+		all, err := d.Host.Disks(ctx)
 		if err != nil {
-			return host.Disk{}, "", err
+			return disksOut{}, "", err
 		}
-		u, err := d.Host.Disk(ctx, disk.Path)
-		return u, disk.Name, err
+		// A mount point inside a blocked folder is left out like the
+		// folder itself.
+		out := disksOut{Disks: []host.Disk{}}
+		for _, disk := range all {
+			err := d.Files.Visible(ctx, disk.Mount)
+			if errors.Is(err, files.ErrUnavailable) {
+				return disksOut{}, "", err
+			}
+			if err == nil {
+				out.Disks = append(out.Disks, disk)
+			}
+		}
+		return out, "", nil
 	}))
 }

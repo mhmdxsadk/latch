@@ -61,6 +61,8 @@ type Service interface {
 	List(ctx context.Context, path string) (ListResult, error)
 	Find(ctx context.Context, path, name string) (FindResult, error)
 	Grep(ctx context.Context, path, text string) (GrepResult, error)
+	// Visible returns nil if path exists and is not blocked.
+	Visible(ctx context.Context, path string) error
 }
 
 // Reader implements the read-only file tools on top of a Guard.
@@ -71,6 +73,13 @@ type Reader struct {
 
 // NewReader returns a Reader enforcing g and lim.
 func NewReader(g *Guard, lim Limits) *Reader { return &Reader{guard: g, lim: lim} }
+
+// Visible returns nil if path exists and is not blocked, ErrUnavailable if
+// the block list is not known yet, and another error otherwise.
+func (r *Reader) Visible(ctx context.Context, path string) error {
+	_, err := r.guard.Check(ctx, path)
+	return err
+}
 
 // ReadResult is a window of a text file.
 type ReadResult struct {
