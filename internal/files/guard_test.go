@@ -128,6 +128,10 @@ func TestBuiltinRules(t *testing.T) {
 		"/var/lib/latch", "/var/lib/latch/backups/1", "/opt/latch/latch.yaml",
 		"/home/agent", "/home/agent/.codex/auth.json",
 		"/srv/backups", "/srv/backups/db.sql", "/srv/app/x.secret", "/srv/app/credentials.json", "/srv/x.secret/y",
+		"/var/lib/containerd/io.containerd.content.v1.content", "/run/containerd/io.containerd.runtime.v2.task/moby/x/config.json",
+		"/run/docker/runtime-runc/moby/x/state.json", "/run/runc/x/state.json",
+		"/root/.netrc", "/home/bob/.pgpass", "/root/.git-credentials", "/root/.my.cnf",
+		"/root/.docker/config.json", "/home/bob/.aws/credentials", "/root/.kube/config",
 	}
 	allowed := []string{
 		"/", "/proc2", "/procfoo/x", "/system", "/devices", "/var/lib/dockerfoo", "/var/lib/docker-compose",
@@ -137,6 +141,8 @@ func TestBuiltinRules(t *testing.T) {
 		"/home/bob/.ssh/config", "/srv/app/.envrc", "/srv/app/env", "/srv/app/site.pem.txt", "/srv/app/keys",
 		"/home/agentfoo", "/home/agent2/x", "/opt/latch", "/opt/latch/latch.yaml.bak", "/srv/backups2",
 		"/srv/app/credentials.json.example",
+		"/run", "/run/containerd2", "/root/.docker", "/root/.docker/buildx", "/home/bob/.aws/config", "/srv/config.json",
+		"/root/.kube", "/root/.kube/cache/x",
 	}
 	for _, p := range blocked {
 		if !c.blocked(p) {

@@ -70,16 +70,18 @@ files:
   # (always blocked, whatever this list says): /proc, /sys, /dev, /etc/shadow,
   # /etc/gshadow and their "-" backups, SSH host keys (/etc/ssh/*_key), every
   # file in a .ssh folder except *.pub, authorized_keys, known_hosts and
-  # config, files named *.key, *.pem, .env and .env.*, /var/lib/docker,
-  # /etc/latch, /var/lib/latch, this config file, the home folders of the
-  # users in server.socket_group, and folders mounted into excluded
-  # containers. Blocked files behave as if they do not exist.
+  # config, files named *.key, *.pem, .env and .env.*, credential files
+  # (.netrc, .pgpass, .git-credentials, .my.cnf, .docker/config.json,
+  # .aws/credentials, .kube/config), /var/lib/docker, /var/lib/containerd,
+  # /run/docker, /run/containerd, /run/runc, /etc/latch, /var/lib/latch,
+  # this config file, the home folders of the users in server.socket_group,
+  # and folders mounted into excluded containers. Blocked files behave as if
+  # they do not exist.
   # Each entry is an absolute path (blocks that file or the whole folder) or a
   # file name with optional * and ? wildcards and no slash (blocks every file
   # or folder with that name, anywhere).
-  exclude:
-    - /srv/backups
-    - "*.secret"
+  # For example: [/srv/backups, "*.secret"]
+  exclude: []
 
 network:
   # The network tools (ping, DNS, TCP, traceroute, HTTP GET) may reach any

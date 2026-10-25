@@ -93,8 +93,11 @@ The file tools can read the whole disk except what is blocked. Some paths are
 always blocked: `/proc`, `/sys`, `/dev`, `/etc/shadow` and `/etc/gshadow`
 (with their backups), SSH host keys, everything in a `.ssh` folder except
 `*.pub`, `authorized_keys`, `known_hosts` and `config`, files named `*.key`,
-`*.pem`, `.env` and `.env.*`, `/var/lib/docker`, `/etc/latch`,
-`/var/lib/latch`, Latch's config file, the home folders of the users in
+`*.pem`, `.env` and `.env.*`, credential files (`.netrc`, `.pgpass`,
+`.git-credentials`, `.my.cnf`, `.docker/config.json`, `.aws/credentials`,
+`.kube/config`), Docker and containerd data and runtime state
+(`/var/lib/docker`, `/var/lib/containerd`, `/run/docker`, `/run/containerd`,
+`/run/runc`), `/etc/latch`, `/var/lib/latch`, Latch's config file, the home folders of the users in
 `socket_group` (the agent's own keys and history), and folders mounted into
 excluded containers. Add your own paths or file names under `files.exclude`.
 A blocked file behaves as if it does not exist. Latch never follows a symlink
