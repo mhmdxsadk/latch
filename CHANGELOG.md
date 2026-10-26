@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/mhmdxsadk/latch/compare/v0.14.1...v0.15.0) (2026-10-26)
+
+
+### Features
+
+* **tgchat:** /new clears the chat, keep only recent conversations, resume shows history ([841c97a](https://github.com/mhmdxsadk/latch/commit/841c97a62ba1ca973794a132f1fae2f146761d2d))
+
 ## [0.14.1](https://github.com/mhmdxsadk/latch/compare/v0.14.0...v0.14.1) (2026-10-26)
 
 
