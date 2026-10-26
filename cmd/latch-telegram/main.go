@@ -141,8 +141,11 @@ func cmdServe(args []string, stderr io.Writer) int {
 
 	bot := tgapi.New(tgapi.DefaultBaseURL, tok)
 	me, err := bot.Me(ctx)
-	if err != nil {
-		return fail("the bot token does not work", err)
+	switch {
+	case ctx.Err() != nil:
+		return 0 // stopped while starting; nothing is wrong
+	case err != nil:
+		return fail("could not reach Telegram with the bot token", err)
 	}
 
 	b, err := newBridge(cfg, bot, log)
