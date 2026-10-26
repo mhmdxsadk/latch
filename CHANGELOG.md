@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/mhmdxsadk/latch/compare/v0.14.0...v0.14.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **telegram:** verify the check config before every run, from inside the service ([6a55f4a](https://github.com/mhmdxsadk/latch/commit/6a55f4aa41c5a34807d39f213c744bb7e981f30f))
+
 ## [0.14.0](https://github.com/mhmdxsadk/latch/compare/v0.13.1...v0.14.0) (2026-10-26)
 
 
