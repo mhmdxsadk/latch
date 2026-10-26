@@ -161,7 +161,7 @@ func TestAnnounceApproveAndUpdate(t *testing.T) {
 		t.Fatalf("sent %+v", sent)
 	}
 	m := sent[0]
-	for _, want := range []string{"Request 1 needs your approval", "docker_stop on container jellyfin", "stop container jellyfin", "pull: false", "From uid 1000, expires"} {
+	for _, want := range []string{"🔒 uid 1000 wants to stop container jellyfin\nExpires ", " · request 1\nstop container jellyfin\npull: false"} {
 		if !strings.Contains(m.Text, want) {
 			t.Errorf("message lacks %q:\n%s", want, m.Text)
 		}
@@ -183,7 +183,7 @@ func TestAnnounceApproveAndUpdate(t *testing.T) {
 	}
 	h.poll()
 	m = h.tg.Sent()[0]
-	if !strings.Contains(m.Text, "Request 1: done (approved in Telegram)") || !strings.Contains(m.Text, "\nstopped\nstate exited") || m.Keyboard != nil {
+	if m.Text != "🔒 Done: stopped container jellyfin\nstopped\nstate exited" || m.Keyboard != nil {
 		t.Fatalf("after approval: %q %+v", m.Text, m.Keyboard)
 	}
 	got, _ := h.store.Get(r.ID)
@@ -206,7 +206,7 @@ func TestDecidedOnTheServer(t *testing.T) {
 	}
 	h.poll()
 	m := h.tg.Sent()[0]
-	if !strings.Contains(m.Text, "Request 1: denied on the server") || m.Keyboard != nil {
+	if m.Text != "🔒 Denied: stop container web" || m.Keyboard != nil {
 		t.Fatalf("%q %+v", m.Text, m.Keyboard)
 	}
 	// The old button now only explains.
@@ -252,7 +252,7 @@ func TestLongChangeHasNoApproveButton(t *testing.T) {
 	if msg := tgtest.CheckKeyboard(kb); msg != "" {
 		t.Fatal(msg)
 	}
-	if !strings.Contains(m.Text, "more block(s) not shown") || !strings.Contains(m.Text, "latch approve 1") {
+	if !strings.Contains(m.Text, "more block(s) not shown") || !strings.Contains(m.Text, "request 1") || !strings.Contains(m.Text, "approve it on the server") {
 		t.Fatalf("text:\n%s", m.Text)
 	}
 	// A hand-made Approve press is refused too.
@@ -301,7 +301,7 @@ func TestAutomaticRestartNotice(t *testing.T) {
 	h.poll()
 	h.poll()
 	sent := h.tg.Sent()
-	if len(sent) != 1 || !strings.Contains(sent[0].Text, "Automatic change 1: done\ndocker_restart on container caddy") || sent[0].Keyboard != nil {
+	if len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "🔒 uid 1000 restarted container caddy\n") || sent[0].Keyboard != nil {
 		t.Fatalf("%+v", sent)
 	}
 }
@@ -313,8 +313,8 @@ func TestUndoRequestShowsDeadline(t *testing.T) {
 	r := h.submit(u)
 	h.poll()
 	m := h.tg.Sent()[0]
-	want := "Undo request 1: runs by itself at " + r.ExpiresAt.UTC().Format("15:04")
-	if !strings.Contains(m.Text, want) || len(m.Keyboard[0]) != 2 {
+	want := "🔒 A change did not come up. Undo it?\nLatch will undo the change to web by itself at " + r.ExpiresAt.UTC().Format("15:04") + " unless you deny it."
+	if !strings.HasPrefix(m.Text, want) || len(m.Keyboard[0]) != 2 {
 		t.Fatalf("%q %+v", m.Text, m.Keyboard)
 	}
 }
@@ -366,9 +366,9 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 			t.Fatalf("Telegram would refuse %q: %s", m.Text, msg)
 		}
 	}
-	wantCreate := "🔒 Request 1 needs your approval\nfile_create on container /root/hello.txt\nFrom keeper, expires " +
+	wantCreate := "🔒 keeper wants to create /root/hello.txt\nExpires " +
 		time.Now().Add(time.Hour).UTC().Format("15:04") +
-		"\n\ncreate /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)\nContent:\nhello"
+		" · request 1\ncreate /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)\nContent:\nhello"
 	if sent[0].Text != wantCreate {
 		t.Errorf("create:\n%s\nwant:\n%s", sent[0].Text, wantCreate)
 	}
@@ -378,7 +378,8 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 		styles = append(styles, e.Type+"="+f.Slice(e))
 	}
 	exp := time.Now().Add(time.Hour).UTC().Format("15:04")
-	if got := strings.Join(styles, "|"); got != "bold=Request 1 needs your approval|date_time="+exp+"|pre=hello" {
+	if got := strings.Join(styles, "|"); got != "bold=keeper wants to create /root/hello.txt|date_time="+exp+
+		"|expandable_blockquote=create /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)\nContent:\nhello|pre=hello" {
 		t.Errorf("create styles %s", got)
 	}
 
@@ -413,7 +414,7 @@ func TestLongDiffIsCollapsed(t *testing.T) {
 	f := m.Formatted()
 	var quote, pre bool
 	for _, e := range f.Entities {
-		quote = quote || e.Type == "expandable_blockquote" && strings.HasPrefix(f.Slice(e), "@@ -1,12")
+		quote = quote || e.Type == "expandable_blockquote" && strings.Contains(f.Slice(e), "@@ -1,12")
 		pre = pre || e.Type == "pre" && e.Language == "diff"
 	}
 	if !quote || !pre {

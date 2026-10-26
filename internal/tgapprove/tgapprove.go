@@ -315,6 +315,10 @@ func (a *Approver) decide(ctx context.Context, approve bool, id int64, fp string
 }
 
 // render is the message for r and its buttons (nil when it is decided).
+//
+// Messages read like a colleague asking for a sign-off: one line saying
+// who wants to do what, the deadline, and the exact details folded away
+// until tapped.
 func (a *Approver) render(r approval.Request) (tgapi.Text, tgapi.Keyboard) {
 	if r.Status != approval.StatusPending {
 		return a.outcome(r), nil
@@ -335,28 +339,28 @@ func (a *Approver) tooLong(r approval.Request) bool {
 	return join(head, body).Len() > tgapi.MaxText
 }
 
-// join puts the blocks of a message together, a blank line between the head
-// and the body, a line break between body blocks.
+// join puts a head and its details together, the details in one quote
+// that opens when tapped.
 func join(head tgapi.Text, body []tgapi.Text) tgapi.Text {
-	var b tgapi.Builder
-	b.Text(head)
+	var b, d tgapi.Builder
 	for i, t := range body {
-		if i == 0 {
-			b.Plain("\n\n")
-		} else {
-			b.Plain("\n")
+		if i > 0 {
+			d.Plain("\n")
 		}
-		b.Text(t)
+		d.Text(t)
+	}
+	b.Text(head)
+	if d.Len() > 0 {
+		b.Plain("\n").Quote(d.Done(), true)
 	}
 	return b.Done()
 }
 
-// shortened shows as many blocks of a long change as fit and says where to
+// shortened shows as many details of a long change as fit and says where to
 // read and approve the rest.
 func (a *Approver) shortened(r approval.Request, head tgapi.Text, body []tgapi.Text) tgapi.Text {
 	var tail tgapi.Builder
-	tail.Italic("Too long to show in full, so there is no Approve button. Read and approve it on the server: ")
-	tail.Code(fmt.Sprintf("latch approve %d", r.ID))
+	tail.Italic("Too long to show in full here, so there is no Approve button. Read and approve it on the server.")
 	budget := tgapi.MaxText - head.Len() - tail.Len() - 40
 	var kept []tgapi.Text
 	used := 0
@@ -370,33 +374,72 @@ func (a *Approver) shortened(r approval.Request, head tgapi.Text, body []tgapi.T
 		kept = append(kept, t)
 		used += t.Len() + 1
 	}
-	return join(head, append(kept, tail.Done()))
+	var b tgapi.Builder
+	b.Text(join(head, kept)).Plain("\n").Text(tail.Done())
+	return b.Done()
 }
 
-// pendingText is the head (title, what, who and when) and the body blocks
-// of a waiting request.
+// pendingText is the head (who wants to do what, and until when) and the
+// detail blocks of a waiting request.
 func (a *Approver) pendingText(r approval.Request) (tgapi.Text, []tgapi.Text) {
 	var b tgapi.Builder
 	b.Plain(tgapi.Mark + " ")
 	if r.RunsOnTimeout {
-		b.Bold(fmt.Sprintf("Undo request %d: runs by itself at ", r.ID))
-		b.Text(a.timeText(r.ExpiresAt, true))
-		b.Plain("\n")
-		a.what(&b, r)
-		b.Plain("\nA change did not come up, so Latch filed this. Approve to undo now, deny to keep the change.")
-	} else {
-		b.Bold(fmt.Sprintf("Request %d needs your approval", r.ID))
-		b.Plain("\n")
-		a.what(&b, r)
-		b.Plain(fmt.Sprintf("\nFrom %s, expires ", a.who(r.RequestedBy.UID)))
+		b.Bold("A change did not come up. Undo it?")
+		b.Plain("\nLatch will " + a.phrase(r, false) + " by itself at ")
 		b.Text(a.timeText(r.ExpiresAt, false))
+		b.Plain(" unless you deny it.")
+	} else {
+		b.Bold(a.who(r.RequestedBy.UID) + " wants to " + a.phrase(r, false))
+		b.Plain("\nExpires ")
+		b.Text(a.timeText(r.ExpiresAt, false))
+		b.Plain(fmt.Sprintf(" · request %d", r.ID))
 	}
 	return b.Done(), a.details(r)
 }
 
-// what is the action and what it changes: "file_create on file /root/x".
-func (a *Approver) what(b *tgapi.Builder, r approval.Request) {
-	b.Plain(clean(r.Action) + " on " + clean(r.Resource.Type) + " " + clean(r.Resource.Name))
+// phrase says what r does in plain words, "restart container jellyfin",
+// or in the past tense, "restarted container jellyfin".
+func (a *Approver) phrase(r approval.Request, past bool) string {
+	name := clean(r.Resource.Name)
+	thing := clean(r.Resource.Type) + " " + name
+	if r.Resource.Type == "unit" {
+		thing = name
+	}
+	verb := func(now, done string) string {
+		if past {
+			return done
+		}
+		return now
+	}
+	switch r.Action {
+	case "docker_restart", "systemd_restart":
+		return verb("restart ", "restarted ") + thing
+	case "docker_stop", "systemd_stop":
+		return verb("stop ", "stopped ") + thing
+	case "docker_start", "systemd_start":
+		return verb("start ", "started ") + thing
+	case "docker_compose_up":
+		return verb("recreate ", "recreated ") + thing + " with docker compose"
+	case "file_edit":
+		return verb("edit ", "edited ") + name
+	case "file_create":
+		return verb("create ", "created ") + name
+	case "file_restore":
+		if r.RunsOnTimeout {
+			return verb("undo the change to ", "undid the change to ") + name
+		}
+		return verb("restore ", "restored ") + name + " from a backup"
+	case "http_request":
+		method := "an HTTP"
+		for _, p := range r.Params {
+			if p.Name == "method" {
+				method = "a " + clean(p.Value)
+			}
+		}
+		return verb("send ", "sent ") + method + " request to " + name
+	}
+	return verb("run ", "ran ") + clean(r.Action) + " on " + thing
 }
 
 func (a *Approver) who(uid uint32) string {
@@ -424,7 +467,8 @@ func (a *Approver) details(r approval.Request) []tgapi.Text {
 				diff = append(diff, lines[i])
 			}
 			i--
-			out = append(out, block(strings.Join(diff, "\n"), "diff", len(diff)))
+			var b tgapi.Builder
+			out = append(out, b.Pre(strings.Join(diff, "\n"), "diff").Done())
 		case l == "content:":
 			var body []string
 			for i++; i < len(lines) && (strings.HasPrefix(lines[i], "  ") || lines[i] == ""); i++ {
@@ -432,8 +476,7 @@ func (a *Approver) details(r approval.Request) []tgapi.Text {
 			}
 			i--
 			var b tgapi.Builder
-			b.Plain("Content:\n")
-			b.Text(block(strings.Join(body, "\n"), "", len(body)))
+			b.Plain("Content:\n").Pre(strings.Join(body, "\n"), "")
 			out = append(out, b.Done())
 		default:
 			out = append(out, tgapi.Plain(l))
@@ -444,10 +487,7 @@ func (a *Approver) details(r approval.Request) []tgapi.Text {
 		if v := clean(p.Value); v != "" && strings.Contains(all, v) {
 			continue
 		}
-		var b tgapi.Builder
-		b.Plain(clean(p.Name) + ": ")
-		b.Code(clean(p.Value))
-		out = append(out, b.Done())
+		out = append(out, tgapi.Plain(clean(p.Name)+": "+clean(p.Value)))
 	}
 	return out
 }
@@ -456,88 +496,58 @@ func isDiffLine(l string) bool {
 	return l == "" || strings.HasPrefix(l, "@@") || l[0] == ' ' || l[0] == '-' || l[0] == '+' || strings.HasPrefix(l, "... ")
 }
 
-// outcome is the message for a request that is no longer pending.
+// outcome is the message for a request that is no longer pending: what
+// happened in one line, the result folded away.
 func (a *Approver) outcome(r approval.Request) tgapi.Text {
 	var b tgapi.Builder
 	b.Plain(tgapi.Mark + " ")
-	status := string(r.Status)
-	switch r.Status {
-	case approval.StatusApproved, approval.StatusRunning:
-		status = "approved, running"
-	case approval.StatusExpired:
-		status = "expired, nobody decided"
-	}
-	if r.Status == approval.StatusDenied {
-		b.Bold(fmt.Sprintf("Request %d: %s", r.ID, a.how(r)))
-	} else {
-		b.Bold(fmt.Sprintf("Request %d: %s", r.ID, status))
-		if how := a.how(r); how != "" {
-			b.Plain(" (" + how + ")")
-		}
-	}
-	b.Plain("\n")
-	a.what(&b, r)
-	a.writeResult(&b, r)
-	return fit(b.Done())
-}
-
-func (a *Approver) how(r approval.Request) string {
-	where := "on the server"
-	if r.DecidedVia == approval.ViaTelegram {
-		where = "in Telegram"
-	}
+	what := a.phrase(r, false)
 	switch {
-	case r.DecidedBy == nil && r.RunsOnTimeout && r.Status != approval.StatusExpired:
-		return "nobody decided in time, so it ran by itself"
-	case r.DecidedBy == nil:
-		return ""
+	case r.Status == approval.StatusDone && r.DecidedBy == nil && r.RunsOnTimeout:
+		b.Bold("Done: " + a.phrase(r, true)).Plain(" (nobody decided in time)")
+	case r.Status == approval.StatusDone:
+		b.Bold("Done: " + a.phrase(r, true))
+	case r.Status == approval.StatusFailed:
+		b.Bold("Failed: " + what)
 	case r.Status == approval.StatusDenied:
-		return "denied " + where
+		b.Bold("Denied: " + what)
+	case r.Status == approval.StatusExpired:
+		b.Bold("Expired: " + what).Plain(" (nobody decided)")
 	default:
-		return "approved " + where
+		b.Bold("Approved, working on it: " + what)
 	}
+	return fit(a.withResult(b.Done(), r))
 }
 
 // notice is the one-off message for an automatic change.
 func (a *Approver) notice(r approval.Request) tgapi.Text {
 	var b tgapi.Builder
 	b.Plain(tgapi.Mark + " ")
-	b.Bold(fmt.Sprintf("Automatic change %d: %s", r.ID, r.Status))
-	b.Plain("\n")
-	a.what(&b, r)
-	a.writeResult(&b, r)
-	return fit(b.Done())
+	who := a.who(r.RequestedBy.UID)
+	if r.Status == approval.StatusDone {
+		b.Bold(who + " " + a.phrase(r, true))
+	} else {
+		b.Bold(who + " tried to " + a.phrase(r, false) + ", but it " + string(r.Status))
+	}
+	return fit(a.withResult(b.Done(), r))
 }
 
-func (a *Approver) writeResult(b *tgapi.Builder, r approval.Request) {
+// withResult adds the result (summary and detail lines) to head, folded.
+func (a *Approver) withResult(head tgapi.Text, r approval.Request) tgapi.Text {
 	if r.Result == nil {
-		return
+		return head
 	}
-	b.Plain("\n" + clean(r.Result.Summary))
+	var body []tgapi.Text
+	body = append(body, tgapi.Plain(clean(r.Result.Summary)))
 	if len(r.Result.Details) > 0 {
 		lines := make([]string, len(r.Result.Details))
 		for i, d := range r.Result.Details {
 			lines[i] = clean(d)
 		}
-		b.Plain("\n")
-		b.Text(block(strings.Join(lines, "\n"), "", len(lines)))
+		var b tgapi.Builder
+		body = append(body, b.Pre(strings.Join(lines, "\n"), "").Done())
 	}
-}
-
-// collapseAfter is how many lines a code block may have before it is put in
-// a collapsed quote that opens when tapped.
-const collapseAfter = 8
-
-// block is a code block, collapsed when it is long so the message stays
-// short on a phone.
-func block(s, language string, lines int) tgapi.Text {
-	var b tgapi.Builder
-	b.Pre(s, language)
-	if lines <= collapseAfter {
-		return b.Done()
-	}
-	var q tgapi.Builder
-	return q.Quote(b.Done(), true).Done()
+	return join(head, body)
 }
 
 // fit cuts a message that is too long; the full result is in latch requests.
