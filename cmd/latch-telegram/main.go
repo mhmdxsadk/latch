@@ -25,6 +25,7 @@ import (
 
 	"github.com/mhmdxsadk/latch/internal/admin"
 	"github.com/mhmdxsadk/latch/internal/approval"
+	"github.com/mhmdxsadk/latch/internal/textsafe"
 	"github.com/mhmdxsadk/latch/internal/tgapi"
 	"github.com/mhmdxsadk/latch/internal/tgapprove"
 	"github.com/mhmdxsadk/latch/internal/tgchat"
@@ -192,6 +193,7 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			Name:      a.Name,
 			Timeout:   time.Duration(a.Timeout),
 			Location:  b.loc,
+			Host:      hostname(),
 			Logger:    log,
 		})
 		if err != nil {
@@ -212,7 +214,7 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 	if a := cfg.Agent; a != nil {
 		opts.AgentName = a.Name
 		opts.OnFinished = func(r approval.Request, message int64) {
-			b.chat.Notify(outcome(r), fmt.Sprintf("Sent %s the result of request %d.", a.Name, r.ID), message)
+			b.chat.Notify(outcome(r), "", message)
 		}
 	}
 	var err error
@@ -220,6 +222,16 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 		return nil, err
 	}
 	return b, nil
+}
+
+// hostname is the server's short name, for the chat's welcome text.
+func hostname() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	h, _, _ = strings.Cut(h, ".")
+	return textsafe.Line(h)
 }
 
 // stateDir creates the state directory, root only, and refuses a symlink.

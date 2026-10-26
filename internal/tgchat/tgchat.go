@@ -73,6 +73,8 @@ type Options struct {
 	Timeout time.Duration
 	// Location is the owner's time zone for conversation names.
 	Location *time.Location
+	// Host names the server in the welcome text.
+	Host     string
 	MaxQueue int
 	Now      func() time.Time
 	Logger   *slog.Logger
@@ -234,8 +236,7 @@ func (c *Chat) HandlePress(ctx context.Context, cb tgapi.CallbackQuery) bool {
 func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 	switch cmd {
 	case "start", "help":
-		c.say(ctx, "Send a message and "+c.o.Name+" answers it. Changes it asks for show up here with Approve and Deny buttons.\n"+
-			"/new [name] starts a new conversation, /sessions switches, /rename names this one, /stop stops the running answer.")
+		c.plain(ctx, c.welcome())
 	case "new":
 		c.mu.Lock()
 		s := c.newLocked(title(arg))
@@ -244,7 +245,11 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 		if err != nil {
 			c.o.Logger.Warn("saving the session index failed", "err", err)
 		}
-		c.say(ctx, "New conversation: "+s.label(c.o.Location))
+		if s.Title == "" {
+			c.say(ctx, "New conversation.")
+		} else {
+			c.say(ctx, "New conversation: "+s.Title)
+		}
 	case "rename":
 		if strings.TrimSpace(arg) == "" {
 			c.say(ctx, "Usage: /rename name")
@@ -421,14 +426,13 @@ func (lv *live) stop() {
 func (lv *live) loop() {
 	defer close(lv.stopped)
 	c := lv.c
-	// Not an empty draft: some apps show that as a dot, not "Thinking...".
-	drafts := c.o.Bot.Draft(lv.ctx, c.o.Chat, lv.id, c.preview(Progress{}), true) == nil
-	if !drafts {
-		c.o.Logger.Debug("drafts unavailable; showing typing instead")
-		_ = c.o.Bot.Typing(lv.ctx, c.o.Chat)
-	}
+	// Until there is something to show, only Telegram's own "typing...".
+	// The draft starts with the first tool or the first words of the
+	// answer, so a quick reply to "hello" is just a reply.
+	_ = c.o.Bot.Typing(lv.ctx, c.o.Chat)
 	tick := time.NewTicker(draftEvery)
 	defer tick.Stop()
+	drafts, shown := true, false
 	last := time.Now()
 	for {
 		select {
@@ -436,24 +440,27 @@ func (lv *live) loop() {
 			return
 		case <-tick.C:
 		}
-		if !drafts {
+		lv.mu.Lock()
+		p, dirty := lv.p, lv.dirty
+		lv.dirty = false
+		lv.mu.Unlock()
+		empty := strings.TrimSpace(p.Text) == "" && p.Status == ""
+		if !drafts || empty {
 			if time.Since(last) >= 4*time.Second {
 				_ = c.o.Bot.Typing(lv.ctx, c.o.Chat)
 				last = time.Now()
 			}
 			continue
 		}
-		lv.mu.Lock()
-		p, dirty := lv.p, lv.dirty
-		lv.dirty = false
-		lv.mu.Unlock()
-		if !dirty && time.Since(last) < draftRefresh {
+		if !dirty && shown && time.Since(last) < draftRefresh {
 			continue
 		}
 		if err := c.o.Bot.Draft(lv.ctx, c.o.Chat, lv.id, c.preview(p), true); err != nil {
-			c.o.Logger.Debug("updating the draft failed", "err", err)
+			c.o.Logger.Debug("drafts unavailable; showing typing instead", "err", err)
+			drafts = false
+			continue
 		}
-		last = time.Now()
+		shown, last = true, time.Now()
 	}
 }
 
@@ -461,11 +468,7 @@ func (lv *live) loop() {
 func (c *Chat) preview(p Progress) tgapi.Text {
 	var b tgapi.Builder
 	if strings.TrimSpace(p.Text) == "" {
-		status := "Thinking"
-		if p.Status != "" {
-			status = p.Status
-		}
-		return b.Italic(status + "...").Done()
+		return b.Italic(p.Status + "...").Done()
 	}
 	body := Markdown(p.Text)
 	if body.Len() > tgapi.MaxText-b.Len()-8 {
@@ -492,6 +495,23 @@ func (c *Chat) answer(ctx context.Context, out string, replyTo int64) {
 // say sends a short note from the bridge, in italics.
 func (c *Chat) say(ctx context.Context, text string) {
 	if _, err := c.o.Bot.Send(ctx, c.o.Chat, note(text), nil); err != nil {
+		c.o.Logger.Warn("sending failed", "err", err)
+	}
+}
+
+// welcome is the /start and /help text.
+func (c *Chat) welcome() string {
+	where := "this server"
+	if c.o.Host != "" {
+		where = c.o.Host
+	}
+	return "Ask me anything about " + where + ", or tell me what to fix. Changes wait until you tap Approve.\n\n" +
+		"/new starts over · /sessions goes back to an earlier chat · /stop stops an answer"
+}
+
+// plain sends text without the italics of a note.
+func (c *Chat) plain(ctx context.Context, text string) {
+	if _, err := c.o.Bot.Send(ctx, c.o.Chat, tgapi.Plain(text), nil); err != nil {
 		c.o.Logger.Warn("sending failed", "err", err)
 	}
 }

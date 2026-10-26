@@ -340,13 +340,14 @@ func TestLiveDraftsAndReply(t *testing.T) {
 		texts = append(texts, d.Text)
 	}
 	got := strings.Join(texts, "|")
-	if !strings.HasPrefix(got, "Thinking...|") || !strings.Contains(got, "Checking docker_status...") || !strings.Contains(got, "|Caddy is up") {
+	if !strings.HasPrefix(got, "Checking docker_status...|") || !strings.Contains(got, "|Caddy is up") {
 		t.Errorf("drafts %q", got)
 	}
 }
 
 func TestStopButton(t *testing.T) {
 	h := newHarness(t, time.Minute)
+	h.run.steps = []Progress{{Status: "Checking docker_logs"}}
 	h.run.block = true
 	h.send("long job")
 	tgtest.WaitFor(t, "a draft", func() bool { return len(h.tg.Drafts()) > 0 })
@@ -372,5 +373,27 @@ func TestCapped(t *testing.T) {
 	tail.Write([]byte("defgh"))
 	if tail.String() != "defgh" {
 		t.Errorf("%q", tail.String())
+	}
+}
+
+func TestQuickAnswerHasNoDraft(t *testing.T) {
+	h := newHarness(t, time.Minute)
+	h.send("hello")
+	h.waitText("answer to hello")
+	if d := h.tg.Drafts(); len(d) != 0 {
+		t.Errorf("drafts for a quick answer: %+v", d)
+	}
+	if h.tg.Typing() == 0 {
+		t.Error("no typing indicator")
+	}
+}
+
+func TestWelcome(t *testing.T) {
+	h := newHarness(t, time.Minute)
+	h.chat.o.Host = "lisbon"
+	h.send("/start")
+	m := h.waitText("Ask me anything about lisbon")
+	if len(m.Entities) != 0 || !strings.Contains(m.Text, "/new starts over") {
+		t.Errorf("%q %+v", m.Text, m.Entities)
 	}
 }
