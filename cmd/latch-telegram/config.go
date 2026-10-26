@@ -78,7 +78,11 @@ var (
 	argPattern = regexp.MustCompile(`^[A-Za-z0-9_./=:,@+-]{1,200}$`)
 )
 
-func loadConfig(path string) (*Config, error) {
+func loadConfig(path string) (*Config, error) { return parseConfig(path, true) }
+
+// parseConfig loads path; requireOwner is false only for pair, which writes
+// owner_id.
+func parseConfig(path string, requireOwner bool) (*Config, error) {
 	f, err := os.Open(path) //nolint:gosec // owner-supplied config location
 	if err != nil {
 		return nil, err
@@ -98,7 +102,7 @@ func loadConfig(path string) (*Config, error) {
 		return nil, cleanYAMLError(err)
 	}
 	c.defaults()
-	return &c, c.validate()
+	return &c, c.validate(requireOwner)
 }
 
 func cleanYAMLError(err error) error {
@@ -132,11 +136,11 @@ func (c *Config) defaults() {
 	}
 }
 
-func (c *Config) validate() error {
+func (c *Config) validate(requireOwner bool) error {
 	var errs []string
 	add := func(format string, args ...any) { errs = append(errs, fmt.Sprintf(format, args...)) }
-	if c.OwnerID <= 0 {
-		add("owner_id: set it to your Telegram user id (a positive number)")
+	if c.OwnerID < 0 || requireOwner && c.OwnerID == 0 {
+		add("owner_id: set it to your Telegram user id (a positive number), or run latch-telegram pair")
 	}
 	absPath := func(name, p string) {
 		if !filepath.IsAbs(p) || filepath.Clean(p) != p {

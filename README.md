@@ -265,11 +265,15 @@ when the request ends, however it was decided. Undo requests show the time
 they run by itself. Automatic restarts get a short notice.
 
 If you configure an agent, the same chat also talks to it. Each message runs
-one agent turn as the agent's own account, and its answer comes back in the
-chat. `/new` starts a fresh conversation, `/sessions` switches between them,
-`/rename` names the current one and `/stop` stops a running answer. After you
-approve or deny a request, the agent is told how it ended so it can check the
-fix.
+one agent turn as the agent's own account. While it works you see what it is
+checking, then its answer as it is written, with a Stop button; the finished
+answer arrives as a reply to your message. `/new` starts a fresh
+conversation, `/sessions` switches between them, `/rename` names the current
+one and `/stop` stops a running answer. After you approve or deny a request,
+the agent is told how it ended so it can check the fix.
+
+Times show in your own time zone, long diffs and logs stay collapsed until
+you tap them, and commands and file paths copy with a tap.
 
 How it stays safe:
 
@@ -277,7 +281,10 @@ How it stays safe:
   Everyone else gets no reply. Turn on two-step verification in Telegram:
   your account can now approve changes.
 - Request messages are written by Latch from the request itself, never by the
-  agent. Agent answers are plain text and always start with the agent's name.
+  agent. Agent answers always start with the agent's name in bold. Their
+  formatting is computed by the bridge, never taken from the agent as markup:
+  links show their full address, and nothing the agent writes can become a
+  hidden link.
 - A button names one request and what the message showed. Latch checks the
   request again before acting, so an old button can never approve something
   else. A change too long for one message has no Approve button; approve it
@@ -297,14 +304,16 @@ To set it up:
    `sudo install -m 600 /dev/null /etc/latch/telegram-token`, then put the
    token in that file. If a secrets manager writes an env file for you,
    point `token_file` at it and set `token_key` to the variable instead.
-2. Find your user id (for example with @userinfobot) and copy the example:
-   `sudo cp /etc/latch/telegram.example.yaml /etc/latch/telegram.yaml`.
-   Set `owner_id`, and either fill in the `agent` section or remove it for
-   approvals only. With `--safety restricted`, the agent config must allow
+2. Copy the example:
+   `sudo cp /etc/latch/telegram.example.yaml /etc/latch/telegram.yaml`, and
+   either fill in the `agent` section or remove it for approvals only. Then
+   run `sudo latch-telegram pair` and send your bot any message: the bot
+   sends your account a code, you type it on the server, and pair writes your
+   account into the config as `owner_id`. With `--safety restricted`, the agent config must allow
    Latch's change tools (the example shows how), or the agent cannot ask for
    any change. [`config/telegram.example.yaml`](config/telegram.example.yaml)
    explains every option.
-3. Check and start it, then send your bot a message:
+3. Check and start it:
 
 ```sh
 sudo latch-telegram validate
