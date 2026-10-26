@@ -24,8 +24,9 @@ var (
 
 // Markdown turns the Markdown an agent writes into Telegram formatting:
 // bold, italic, strikethrough, quotes, headings (bold) and bullets (•).
-// Inline code becomes plain text and code blocks become quotes, collapsed
-// when long: the owner reads answers, they do not copy them. Tables become
+// Inline code and short code blocks become plain text, long code blocks a
+// collapsed quote: the owner reads answers, they do not copy them, so
+// nothing is boxed or given a copy button. Tables become
 // a fixed-width block so their columns line up. Links become "text
 // (address)", so where a link goes is always visible; no link entity is ever
 // made. Every line is cleaned with textsafe first, and emoji are removed:
@@ -61,7 +62,12 @@ func Markdown(src string) tgapi.Text {
 				body = append(body, lines[i])
 			}
 			newline()
-			b.Quote(tgapi.Plain(strings.TrimRight(strings.Join(body, "\n"), "\n ")), len(body) > collapseAfter)
+			code := tgapi.Plain(strings.TrimRight(strings.Join(body, "\n"), "\n "))
+			if len(body) > collapseAfter {
+				b.Quote(code, true)
+			} else {
+				b.Text(code)
+			}
 		case tableLine.MatchString(l):
 			var rows []string
 			for ; i < len(lines) && tableLine.MatchString(lines[i]); i++ {
@@ -106,7 +112,7 @@ func isFenceClose(l string) bool {
 	return strings.HasPrefix(t, "```") && strings.Trim(t, "`") == ""
 }
 
-// collapseAfter is how many lines a quoted block may have before it is
+// collapseAfter is how many lines a code block may have before it is
 // collapsed until tapped.
 const collapseAfter = 6
 
