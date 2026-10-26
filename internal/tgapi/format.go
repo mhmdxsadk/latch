@@ -3,6 +3,7 @@ package tgapi
 import (
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -12,10 +13,16 @@ import (
 // links, mentions or custom emoji, so formatted text can never hide where a
 // link goes.
 type Entity struct {
-	Type     string `json:"type"` // bold, italic, strikethrough, code, pre, blockquote
+	// Type is bold, italic, strikethrough, code, pre, blockquote,
+	// expandable_blockquote or date_time.
+	Type     string `json:"type"`
 	Offset   int    `json:"offset"`
 	Length   int    `json:"length"`
 	Language string `json:"language,omitempty"` // pre only
+	// UnixTime and DateTimeFormat are for date_time only: the client shows
+	// the time in the reader's own time zone.
+	UnixTime       int64  `json:"unix_time,omitempty"`
+	DateTimeFormat string `json:"date_time_format,omitempty"`
 }
 
 // Text is message text with formatting. The zero value is empty.
@@ -54,6 +61,28 @@ func (b *Builder) Code(s string) *Builder   { return b.Styled("code", s) }
 // Pre appends s as a code block, with a language for highlighting or "".
 func (b *Builder) Pre(s, language string) *Builder {
 	return b.add(Entity{Type: "pre", Language: language}, s)
+}
+
+// Time appends t as a date_time entity: the reader's app shows it in their
+// own time zone, in the given format ("t" short time, "r" relative, "wDT"
+// and so on; see Telegram's date-time entity formatting). shown is the text
+// for apps that cannot render it.
+func (b *Builder) Time(shown string, t time.Time, format string) *Builder {
+	return b.add(Entity{Type: "date_time", UnixTime: t.Unix(), DateTimeFormat: format}, shown)
+}
+
+// Quote appends t as a block quotation, collapsed until tapped when
+// expandable, keeping t's own formatting inside.
+func (b *Builder) Quote(t Text, expandable bool) *Builder {
+	typ := "blockquote"
+	if expandable {
+		typ = "expandable_blockquote"
+	}
+	if t.S == "" {
+		return b
+	}
+	b.t.Entities = append(b.t.Entities, Entity{Type: typ, Offset: b.n, Length: t.Len()})
+	return b.Text(t)
 }
 
 // Text appends another Text, keeping its formatting.

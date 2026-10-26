@@ -52,6 +52,8 @@ type Message struct {
 	Chat      Chat   `json:"chat"`
 	Date      int64  `json:"date,omitempty"` // Unix time it was sent
 	Text      string `json:"text,omitempty"`
+	// Entities is the formatting Telegram stored for Text.
+	Entities []Entity `json:"entities,omitempty"`
 	// ForwardOrigin is set on forwarded messages, which are ignored.
 	ForwardOrigin json.RawMessage `json:"forward_origin,omitempty"`
 }
@@ -69,12 +71,35 @@ type Update struct {
 	UpdateID      int64          `json:"update_id"`
 	Message       *Message       `json:"message,omitempty"`
 	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
+	// Stopped is the owner pressing Stop under a streamed draft.
+	Stopped *GenerationStopped `json:"stopped_message_generation,omitempty"`
 }
 
-// Button is an inline keyboard button that sends Data back when pressed.
+// GenerationStopped says which draft the user asked to stop.
+type GenerationStopped struct {
+	Chat    Chat  `json:"chat"`
+	DraftID int64 `json:"draft_id"`
+}
+
+// Button styles.
+const (
+	StyleSuccess = "success" // green
+	StyleDanger  = "danger"  // red
+	StylePrimary = "primary" // blue
+)
+
+// Button is an inline keyboard button. It either sends Data back when
+// pressed, or copies Copy to the clipboard.
 type Button struct {
+	Text  string    `json:"text"`
+	Data  string    `json:"callback_data,omitempty"`
+	Copy  *CopyText `json:"copy_text,omitempty"`
+	Style string    `json:"style,omitempty"`
+}
+
+// CopyText is the text a copy button puts on the clipboard (1-256 chars).
+type CopyText struct {
 	Text string `json:"text"`
-	Data string `json:"callback_data"`
 }
 
 // Keyboard is rows of inline buttons. A nil Keyboard sends no buttons; an
@@ -138,7 +163,7 @@ func (c *Client) Updates(ctx context.Context, offset int64) ([]Update, error) {
 	err := c.call(ctx, "getUpdates", map[string]any{
 		"offset":          offset,
 		"timeout":         int(PollTimeout / time.Second),
-		"allowed_updates": []string{"message", "callback_query"},
+		"allowed_updates": []string{"message", "callback_query", "stopped_message_generation"},
 	}, &out)
 	return out, err
 }
@@ -204,6 +229,65 @@ func (c *Client) Edit(ctx context.Context, chat, message int64, t Text, kb Keybo
 func isEntityError(err error) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Code == http.StatusBadRequest && strings.Contains(strings.ToLower(e.Description), "entit")
+}
+
+// Reply sends t as a reply to the user's message replyTo (still sent if
+// that message is gone).
+func (c *Client) Reply(ctx context.Context, chat, replyTo int64, t Text) (Message, error) {
+	body := map[string]any{
+		"chat_id":              chat,
+		"text":                 t.S,
+		"link_preview_options": map[string]bool{"is_disabled": true},
+		"reply_parameters":     map[string]any{"message_id": replyTo, "allow_sending_without_reply": true},
+	}
+	if len(t.Entities) > 0 {
+		body["entities"] = t.Entities
+	}
+	var m Message
+	err := c.call(ctx, "sendMessage", body, &m)
+	if isEntityError(err) {
+		delete(body, "entities")
+		err = c.call(ctx, "sendMessage", body, &m)
+	}
+	return m, err
+}
+
+// Draft streams a partial message to a private chat: changes to the same
+// draftID are animated, an empty text shows "Thinking...", and canStop adds
+// a Stop button (pressing it arrives as Update.Stopped). A draft is a
+// preview that lasts about 30 seconds; Send the finished text to keep it.
+func (c *Client) Draft(ctx context.Context, chat, draftID int64, t Text, canStop bool) error {
+	body := map[string]any{"chat_id": chat, "draft_id": draftID, "text": t.S}
+	if len(t.Entities) > 0 {
+		body["entities"] = t.Entities
+	}
+	if canStop {
+		body["can_stop"] = true
+	}
+	err := c.call(ctx, "sendMessageDraft", body, nil)
+	if isEntityError(err) {
+		delete(body, "entities")
+		err = c.call(ctx, "sendMessageDraft", body, nil)
+	}
+	return err
+}
+
+// React sets the bot's reaction on a message; an empty emoji removes it.
+func (c *Client) React(ctx context.Context, chat, message int64, emoji string) error {
+	reaction := []map[string]string{}
+	if emoji != "" {
+		reaction = append(reaction, map[string]string{"type": "emoji", "emoji": emoji})
+	}
+	return c.call(ctx, "setMessageReaction", map[string]any{"chat_id": chat, "message_id": message, "reaction": reaction}, nil)
+}
+
+// SetDescription sets what the bot's profile and empty chat say: the
+// description (up to 512 characters) and the short description (120).
+func (c *Client) SetDescription(ctx context.Context, description, short string) error {
+	if err := c.call(ctx, "setMyDescription", map[string]any{"description": description}, nil); err != nil {
+		return err
+	}
+	return c.call(ctx, "setMyShortDescription", map[string]any{"short_description": short}, nil)
 }
 
 // Answer acknowledges a button press, showing text briefly when not empty.

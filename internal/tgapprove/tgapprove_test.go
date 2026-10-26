@@ -2,6 +2,7 @@ package tgapprove
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -165,7 +166,8 @@ func TestAnnounceApproveAndUpdate(t *testing.T) {
 			t.Errorf("message lacks %q:\n%s", want, m.Text)
 		}
 	}
-	if len(m.Keyboard) != 1 || len(m.Keyboard[0]) != 2 || m.Keyboard[0][0].Text != "Approve" || m.Keyboard[0][1].Text != "Deny" {
+	if len(m.Keyboard) != 1 || len(m.Keyboard[0]) != 2 || m.Keyboard[0][0].Text != "Approve" || m.Keyboard[0][1].Text != "Deny" ||
+		m.Keyboard[0][0].Style != tgapi.StyleSuccess || m.Keyboard[0][1].Style != tgapi.StyleDanger {
 		t.Fatalf("keyboard %+v", m.Keyboard)
 	}
 	h.poll() // a second round must not announce again
@@ -243,8 +245,12 @@ func TestLongChangeHasNoApproveButton(t *testing.T) {
 	r := h.submit(a)
 	h.poll()
 	m := h.tg.Sent()[0]
-	if len(m.Keyboard) != 1 || len(m.Keyboard[0]) != 1 || m.Keyboard[0][0].Text != "Deny" {
-		t.Fatalf("keyboard %+v", m.Keyboard)
+	kb := m.Keyboard
+	if len(kb) != 1 || len(kb[0]) != 2 || kb[0][0].Copy == nil || kb[0][0].Copy.Text != "latch approve 1" || kb[0][1].Text != "Deny" {
+		t.Fatalf("keyboard %+v", kb)
+	}
+	if msg := tgtest.CheckKeyboard(kb); msg != "" {
+		t.Fatal(msg)
 	}
 	if !strings.Contains(m.Text, "more block(s) not shown") || !strings.Contains(m.Text, "latch approve 1") {
 		t.Fatalf("text:\n%s", m.Text)
@@ -253,7 +259,7 @@ func TestLongChangeHasNoApproveButton(t *testing.T) {
 	if got := h.press(m, data(true, r.ID, fingerprint(r))); !strings.Contains(got, "Too long to approve here") {
 		t.Fatalf("answer %q", got)
 	}
-	if got := h.press(m, m.Keyboard[0][0].Data); got != "Denied request 1." {
+	if got := h.press(m, m.Keyboard[0][1].Data); got != "Denied request 1." {
 		t.Fatalf("answer %q", got)
 	}
 	if h.runs.Load() != 0 {
@@ -371,7 +377,8 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 	for _, e := range f.Entities {
 		styles = append(styles, e.Type+"="+f.Slice(e))
 	}
-	if got := strings.Join(styles, "|"); got != "bold=Request 1 needs your approval|code=file_create|code=/root/hello.txt|pre=hello" {
+	exp := time.Now().Add(time.Hour).UTC().Format("15:04")
+	if got := strings.Join(styles, "|"); got != "bold=Request 1 needs your approval|code=file_create|code=/root/hello.txt|date_time="+exp+"|pre=hello" {
 		t.Errorf("create styles %s", got)
 	}
 
@@ -388,5 +395,28 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 	}
 	if diff == nil || diff.Language != "diff" || !strings.HasPrefix(e.Slice(*diff), "@@ -1,2 +1,2 @@") {
 		t.Errorf("diff block %+v", diff)
+	}
+}
+
+func TestLongDiffIsCollapsed(t *testing.T) {
+	h := newHarness(t)
+	details := []string{"edit /etc/x.conf", "--- /etc/x.conf (now)", "+++ /etc/x.conf (after the change)", "@@ -1,12 +1,12 @@"}
+	for i := range 12 {
+		details = append(details, fmt.Sprintf("-old %d", i), fmt.Sprintf("+new %d", i))
+	}
+	h.submit(fileAction{action: action{kind: "file_edit", name: "/etc/x.conf", mode: approval.Always, runs: &h.runs, details: details}})
+	h.poll()
+	m := h.tg.Sent()[0]
+	if msg := tgtest.CheckEntities(m.Text, m.Entities); msg != "" {
+		t.Fatal(msg)
+	}
+	f := m.Formatted()
+	var quote, pre bool
+	for _, e := range f.Entities {
+		quote = quote || e.Type == "expandable_blockquote" && strings.HasPrefix(f.Slice(e), "@@ -1,12")
+		pre = pre || e.Type == "pre" && e.Language == "diff"
+	}
+	if !quote || !pre {
+		t.Fatalf("not collapsed: %+v", f.Entities)
 	}
 }

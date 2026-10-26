@@ -319,11 +319,13 @@ func (a *Approver) render(r approval.Request) (tgapi.Text, tgapi.Keyboard) {
 	}
 	head, body := a.pendingText(r)
 	fp := fingerprint(r)
-	deny := tgapi.Button{Text: "Deny", Data: data(false, r.ID, fp)}
+	deny := tgapi.Button{Text: "Deny", Data: data(false, r.ID, fp), Style: tgapi.StyleDanger}
 	if full := join(head, body); full.Len() <= tgapi.MaxText {
-		return full, tgapi.Keyboard{{{Text: "Approve", Data: data(true, r.ID, fp)}, deny}}
+		return full, tgapi.Keyboard{{{Text: "Approve", Data: data(true, r.ID, fp), Style: tgapi.StyleSuccess}, deny}}
 	}
-	return a.shortened(r, head, body), tgapi.Keyboard{{deny}}
+	// Too long to read here: offer the command to approve it on the server.
+	copyCmd := tgapi.Button{Text: "Copy approve command", Copy: &tgapi.CopyText{Text: fmt.Sprintf("latch approve %d", r.ID)}}
+	return a.shortened(r, head, body), tgapi.Keyboard{{copyCmd, deny}}
 }
 
 func (a *Approver) tooLong(r approval.Request) bool {
@@ -374,7 +376,8 @@ func (a *Approver) shortened(r approval.Request, head tgapi.Text, body []tgapi.T
 func (a *Approver) pendingText(r approval.Request) (tgapi.Text, []tgapi.Text) {
 	var b tgapi.Builder
 	if r.RunsOnTimeout {
-		b.Bold(fmt.Sprintf("Undo request %d: runs by itself at %s", r.ID, a.clock(r.ExpiresAt)))
+		b.Bold(fmt.Sprintf("Undo request %d: runs by itself at ", r.ID))
+		b.Text(a.timeText(r.ExpiresAt, true))
 		b.Plain("\n")
 		a.what(&b, r)
 		b.Plain("\nA change did not come up, so Latch filed this. Approve to undo now, deny to keep the change.")
@@ -382,7 +385,8 @@ func (a *Approver) pendingText(r approval.Request) (tgapi.Text, []tgapi.Text) {
 		b.Bold(fmt.Sprintf("Request %d needs your approval", r.ID))
 		b.Plain("\n")
 		a.what(&b, r)
-		b.Plain(fmt.Sprintf("\nFrom %s, expires %s", a.who(r.RequestedBy.UID), a.clock(r.ExpiresAt)))
+		b.Plain(fmt.Sprintf("\nFrom %s, expires ", a.who(r.RequestedBy.UID)))
+		b.Text(a.timeText(r.ExpiresAt, false))
 	}
 	return b.Done(), a.details(r)
 }
@@ -419,8 +423,7 @@ func (a *Approver) details(r approval.Request) []tgapi.Text {
 				diff = append(diff, lines[i])
 			}
 			i--
-			var b tgapi.Builder
-			out = append(out, b.Pre(strings.Join(diff, "\n"), "diff").Done())
+			out = append(out, block(strings.Join(diff, "\n"), "diff", len(diff)))
 		case l == "content:":
 			var body []string
 			for i++; i < len(lines) && (strings.HasPrefix(lines[i], "  ") || lines[i] == ""); i++ {
@@ -429,7 +432,8 @@ func (a *Approver) details(r approval.Request) []tgapi.Text {
 			i--
 			var b tgapi.Builder
 			b.Plain("Content:\n")
-			out = append(out, b.Pre(strings.Join(body, "\n"), "").Done())
+			b.Text(block(strings.Join(body, "\n"), "", len(body)))
+			out = append(out, b.Done())
 		default:
 			out = append(out, tgapi.Plain(l))
 		}
@@ -513,8 +517,24 @@ func (a *Approver) writeResult(b *tgapi.Builder, r approval.Request) {
 			lines[i] = clean(d)
 		}
 		b.Plain("\n")
-		b.Pre(strings.Join(lines, "\n"), "")
+		b.Text(block(strings.Join(lines, "\n"), "", len(lines)))
 	}
+}
+
+// collapseAfter is how many lines a code block may have before it is put in
+// a collapsed quote that opens when tapped.
+const collapseAfter = 8
+
+// block is a code block, collapsed when it is long so the message stays
+// short on a phone.
+func block(s, language string, lines int) tgapi.Text {
+	var b tgapi.Builder
+	b.Pre(s, language)
+	if lines <= collapseAfter {
+		return b.Done()
+	}
+	var q tgapi.Builder
+	return q.Quote(b.Done(), true).Done()
 }
 
 // fit cuts a message that is too long; the full result is in latch requests.
@@ -530,6 +550,20 @@ func fit(t tgapi.Text) tgapi.Text {
 
 func (a *Approver) clock(t time.Time) string {
 	return t.In(a.o.Location).Format("15:04")
+}
+
+// timeText is t as a time the reader's app shows in their own time zone;
+// the text under it (for apps that cannot) uses Location. bold keeps it
+// bold inside a bold title.
+func (a *Approver) timeText(t time.Time, bold bool) tgapi.Text {
+	var b tgapi.Builder
+	b.Time(a.clock(t), t, "t")
+	if !bold {
+		return b.Done()
+	}
+	out := b.Done()
+	out.Entities = append([]tgapi.Entity{{Type: "bold", Offset: 0, Length: out.Len()}}, out.Entities...)
+	return out
 }
 
 func clean(s string) string { return textsafe.Line(s) }

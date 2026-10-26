@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ type Sent struct {
 	Entities []tgapi.Entity
 	Keyboard tgapi.Keyboard
 	Edits    int
+	ReplyTo  int64 // the message it replies to, or 0
 }
 
 // Formatted returns the message as a tgapi.Text.
@@ -45,12 +47,64 @@ type Server struct {
 	answers  map[string]string
 	typing   int
 	commands []tgapi.Command
+	drafts   []Draft
+	// reactions maps a message id to the bot's reaction on it.
+	reactions          map[int64]string
+	description, short string
+}
+
+// Draft is one sendMessageDraft call.
+type Draft struct {
+	Chat     int64
+	ID       int64
+	Text     string
+	Entities []tgapi.Entity
+	CanStop  bool
+}
+
+// Drafts returns every draft the bot streamed, oldest first.
+func (s *Server) Drafts() []Draft {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Draft(nil), s.drafts...)
+}
+
+// Reaction returns the bot's reaction on message id.
+func (s *Server) Reaction(id int64) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reactions[id]
+}
+
+// Description returns the bot's description and short description.
+func (s *Server) Description() (string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.description, s.short
+}
+
+// Stop queues the user pressing Stop under draft id.
+func (s *Server) Stop(user, draftID int64) {
+	s.push(tgapi.Update{Stopped: &tgapi.GenerationStopped{Chat: tgapi.Chat{ID: user, Type: "private"}, DraftID: draftID}})
+}
+
+// MessageID queues a text message like Message and returns the message id
+// it will carry, so tests can check replies and reactions.
+func (s *Server) MessageID(user int64, text string) int64 {
+	s.mu.Lock()
+	id := s.nextID
+	s.nextID++
+	s.mu.Unlock()
+	s.push(tgapi.Update{Message: &tgapi.Message{
+		MessageID: id, From: &tgapi.User{ID: user}, Chat: tgapi.Chat{ID: user, Type: "private"}, Text: text, Date: time.Now().Unix(),
+	}})
+	return id
 }
 
 // New starts a fake server; it stops when the test ends.
 func New(t *testing.T) *Server {
 	t.Helper()
-	s := &Server{nextID: 100, nextUpd: 1, wake: make(chan struct{}, 1), answers: map[string]string{}}
+	s := &Server{nextID: 100, nextUpd: 1, wake: make(chan struct{}, 1), answers: map[string]string{}, reactions: map[int64]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(srv.Close)
 	s.URL = srv.URL
@@ -161,6 +215,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			Keyboard tgapi.Keyboard `json:"inline_keyboard"`
 		} `json:"reply_markup"`
 		Commands []tgapi.Command `json:"commands"`
+		DraftID  int64           `json:"draft_id"`
+		CanStop  bool            `json:"can_stop"`
+		Reply    *struct {
+			MessageID int64 `json:"message_id"`
+		} `json:"reply_parameters"`
+		Reaction []struct {
+			Type  string `json:"type"`
+			Emoji string `json:"emoji"`
+		} `json:"reaction"`
+		Description      *string `json:"description"`
+		ShortDescription *string `json:"short_description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		reply(w, false, nil, 400, "Bad Request: bad json")
@@ -170,7 +235,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		reply(w, false, nil, 400, "Bad Request: tgtest refuses parse_mode")
 		return
 	}
-	if method == "sendMessage" || method == "editMessageText" {
+	if method == "sendMessage" || method == "editMessageText" || method == "sendMessageDraft" {
+		if body.Markup != nil {
+			if msg := CheckKeyboard(body.Markup.Keyboard); msg != "" {
+				reply(w, false, nil, 400, "Bad Request: "+msg)
+				return
+			}
+		}
 		if tgapi.TextLen(body.Text) > tgapi.MaxText {
 			reply(w, false, nil, 400, "Bad Request: message is too long")
 			return
@@ -190,6 +261,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		m := &Sent{ID: s.nextID, Chat: body.ChatID, Text: body.Text, Entities: body.Entities}
 		if body.Markup != nil {
 			m.Keyboard = body.Markup.Keyboard
+		}
+		if body.Reply != nil {
+			m.ReplyTo = body.Reply.MessageID
 		}
 		s.nextID++
 		s.sent = append(s.sent, m)
@@ -223,6 +297,34 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	case "sendChatAction":
 		s.mu.Lock()
 		s.typing++
+		s.mu.Unlock()
+		reply(w, true, true, 0, "")
+	case "sendMessageDraft":
+		if body.DraftID == 0 {
+			reply(w, false, nil, 400, "Bad Request: draft_id must be non-zero")
+			return
+		}
+		s.mu.Lock()
+		s.drafts = append(s.drafts, Draft{Chat: body.ChatID, ID: body.DraftID, Text: body.Text, Entities: body.Entities, CanStop: body.CanStop})
+		s.mu.Unlock()
+		reply(w, true, true, 0, "")
+	case "setMessageReaction":
+		emoji := ""
+		if len(body.Reaction) > 0 {
+			emoji = body.Reaction[0].Emoji
+		}
+		s.mu.Lock()
+		s.reactions[body.MessageID] = emoji
+		s.mu.Unlock()
+		reply(w, true, true, 0, "")
+	case "setMyDescription", "setMyShortDescription":
+		s.mu.Lock()
+		if body.Description != nil {
+			s.description = *body.Description
+		}
+		if body.ShortDescription != nil {
+			s.short = *body.ShortDescription
+		}
 		s.mu.Unlock()
 		reply(w, true, true, 0, "")
 	case "setMyCommands":
@@ -282,7 +384,11 @@ func CheckEntities(text string, es []tgapi.Entity) string {
 	n := tgapi.TextLen(text)
 	for i, e := range es {
 		switch e.Type {
-		case "bold", "italic", "underline", "strikethrough", "code", "pre", "blockquote":
+		case "bold", "italic", "underline", "strikethrough", "code", "pre", "blockquote", "expandable_blockquote":
+		case "date_time":
+			if e.UnixTime <= 0 || !dateTimeFormat.MatchString(e.DateTimeFormat) {
+				return "date_time needs unix_time and a valid date_time_format"
+			}
 		default:
 			return "entity type " + e.Type + " is not allowed"
 		}
@@ -300,14 +406,49 @@ func CheckEntities(text string, es []tgapi.Entity) string {
 			} else if f.Offset > e.Offset || bEnd < aEnd {
 				return "entities overlap without nesting"
 			}
-			if outer.Type == "code" || outer.Type == "pre" {
-				return "nothing may be inside code or pre"
+			quote := func(t string) bool { return t == "blockquote" || t == "expandable_blockquote" }
+			if outer.Type == "code" || outer.Type == "pre" || outer.Type == "date_time" {
+				return "nothing may be inside code, pre or date_time"
 			}
-			if (inner.Type == "code" || inner.Type == "pre") && outer.Type != "blockquote" {
-				return "code and pre may only be inside blockquote"
+			if (inner.Type == "code" || inner.Type == "pre") && !quote(outer.Type) {
+				return "code and pre may only be inside a blockquote"
 			}
-			if inner.Type == "blockquote" && outer.Type == "blockquote" {
+			if quote(inner.Type) && quote(outer.Type) {
 				return "blockquotes cannot nest"
+			}
+		}
+	}
+	return ""
+}
+
+var dateTimeFormat = regexp.MustCompile(`^(r|w?[dD]?[tT]?)$`)
+
+// CheckKeyboard applies Telegram's rules for inline buttons: exactly one
+// action (callback data of 1-64 bytes, or copy text of 1-256 characters) and
+// a known style.
+func CheckKeyboard(kb tgapi.Keyboard) string {
+	for _, row := range kb {
+		for _, b := range row {
+			actions := 0
+			if b.Data != "" {
+				actions++
+				if len(b.Data) > tgapi.MaxCallbackData {
+					return "callback data too long"
+				}
+			}
+			if b.Copy != nil {
+				actions++
+				if n := tgapi.TextLen(b.Copy.Text); n < 1 || n > 256 {
+					return "copy text must be 1-256 characters"
+				}
+			}
+			if actions != 1 {
+				return "a button needs exactly one action"
+			}
+			switch b.Style {
+			case "", tgapi.StyleSuccess, tgapi.StyleDanger, tgapi.StylePrimary:
+			default:
+				return "unknown button style " + b.Style
 			}
 		}
 	}
