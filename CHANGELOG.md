@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.16.1](https://github.com/mhmdxsadk/latch/compare/v0.16.0...v0.16.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **telegram:** describe the bot, not instruct the owner ([5550506](https://github.com/mhmdxsadk/latch/commit/555050662cf0546a27ba1d5d71fc263a68a0a0c9))
+* **telegram:** plain bot description ([65a58fd](https://github.com/mhmdxsadk/latch/commit/65a58fdfdf4c23f39d9efe90d3e593bded0bf331))
+* **tgchat:** print agent bold and headings as plain text ([888979f](https://github.com/mhmdxsadk/latch/commit/888979fb882fd83bf30140bef5563ac0622bb981))
+* **tgchat:** show short code blocks as plain text ([3940fc3](https://github.com/mhmdxsadk/latch/commit/3940fc3c61d1f0af02c0548f8cfbae18e9984dfc))
+
 ## [0.16.0](https://github.com/mhmdxsadk/latch/compare/v0.15.0...v0.16.0) (2026-10-26)
 
 
