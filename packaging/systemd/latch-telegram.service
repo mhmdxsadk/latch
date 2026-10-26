@@ -25,8 +25,10 @@ StateDirectory=latch-telegram
 StateDirectoryMode=0700
 
 # Only what starting and stopping the agent needs: switching to its account
-# (SETUID, SETGID) and stopping its processes (KILL).
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL
+# (SETUID, SETGID) and stopping its processes (KILL), and reading (never
+# writing) the agent's files, which sit in its private home, to verify that
+# the scheduled-check config cannot use Latch's change tools.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_DAC_READ_SEARCH
 # NoNewPrivileges is deliberately absent: with it, systemd 257 leaves out
 # CAP_SETUID and starting the agent as its account fails. Once switched,
 # the agent has exactly its account's normal rights.

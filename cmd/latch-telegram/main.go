@@ -186,12 +186,18 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 		var checks tgchat.Runner
 		var every time.Duration
 		if ch := a.Checks; ch != nil {
-			if err := checkReadOnly(ch.Config, acct.Home); err != nil {
+			verify := func() error { return checkReadOnly(ch.Config, acct.Home) }
+			if err := verify(); err != nil {
 				log.Error("scheduled checks are off", "err", err)
 			} else {
 				// Always restricted: read-only tools run, everything
-				// else is refused without asking.
-				checks = &tgchat.ExecRunner{Command: a.Command, Config: ch.Config, ExtraArgs: []string{"--safety", "restricted"}, Account: &acct}
+				// else is refused without asking. The config is
+				// verified again before every run, so editing it later
+				// cannot add a change tool.
+				checks = guardedRunner{
+					Runner: &tgchat.ExecRunner{Command: a.Command, Config: ch.Config, ExtraArgs: []string{"--safety", "restricted"}, Account: &acct},
+					verify: verify,
+				}
 				every = time.Duration(ch.Every)
 			}
 		}
@@ -236,6 +242,19 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 		return nil, err
 	}
 	return b, nil
+}
+
+// guardedRunner runs a check only when verify passes, every time.
+type guardedRunner struct {
+	tgchat.Runner
+	verify func() error
+}
+
+func (g guardedRunner) Run(ctx context.Context, session, message string, progress func(tgchat.Progress)) (string, error) {
+	if err := g.verify(); err != nil {
+		return "", fmt.Errorf("check refused: %w", err)
+	}
+	return g.Runner.Run(ctx, session, message, progress)
 }
 
 // hostname is the server's short name, for the chat's welcome text.

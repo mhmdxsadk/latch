@@ -452,3 +452,25 @@ func TestChecksConfig(t *testing.T) {
 		}
 	}
 }
+
+type countRunner struct{ calls int }
+
+func (c *countRunner) Run(context.Context, string, string, func(tgchat.Progress)) (string, error) {
+	c.calls++
+	return "ALL_CLEAR", nil
+}
+
+func TestGuardedRunnerVerifiesEveryRun(t *testing.T) {
+	inner := &countRunner{}
+	var verr error
+	g := guardedRunner{Runner: inner, verify: func() error { return verr }}
+	if _, err := g.Run(context.Background(), "s", "m", nil); err != nil || inner.calls != 1 {
+		t.Fatalf("%v %d", err, inner.calls)
+	}
+	// The config is edited after startup to allow a change tool: the next
+	// run is refused before the agent starts.
+	verr = errors.New("allows docker_restart")
+	if _, err := g.Run(context.Background(), "s", "m", nil); err == nil || !strings.Contains(err.Error(), "check refused") || inner.calls != 1 {
+		t.Fatalf("%v %d", err, inner.calls)
+	}
+}

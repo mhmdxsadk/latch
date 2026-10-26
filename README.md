@@ -299,7 +299,8 @@ How it stays safe:
   else. A change too long for one message has no Approve button; approve it
   with `sudo latch approve <id>` after reading it in full.
 - The bridge runs as root because the admin socket only accepts root, with
-  only the capabilities it needs to start and stop the agent. The bot token
+  only the capabilities it needs to start and stop the agent and to read its
+  files (to verify that checks cannot use change tools). The bot token
   must be in a root-only file and never reaches the agent or the latch
   daemon. Keep that file out of the agent's reach too: under `/etc/latch`,
   or in a folder listed in `files.exclude`.
