@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.14.0](https://github.com/mhmdxsadk/latch/compare/v0.13.1...v0.14.0) (2026-10-26)
+
+
+### Features
+
+* **telegram:** no emoji in the chat; welcome names the server ([c092a4f](https://github.com/mhmdxsadk/latch/commit/c092a4ff0b8a187f749e0bc6cf54398464aeca8d))
+* **telegram:** quieter chat without labels, reactions or copy noise ([dadbc3d](https://github.com/mhmdxsadk/latch/commit/dadbc3dc0475cda6ba3feb951b3cec7f5c3bae7b))
+* **tgapprove:** word requests as a sign-off, details folded ([409abf2](https://github.com/mhmdxsadk/latch/commit/409abf27eda4d5227bb82036ad098634ab2ae6f5))
+* **tgchat:** scheduled read-only checks that report only new problems ([726f019](https://github.com/mhmdxsadk/latch/commit/726f019789e377219d1c822895777a6b898a3e0f))
+* **tgchat:** show only the agent until it has something to say ([09eadc0](https://github.com/mhmdxsadk/latch/commit/09eadc0d089c4a8b7491062e86758f2078d62fd3))
+
 ## [0.13.1](https://github.com/mhmdxsadk/latch/compare/v0.13.0...v0.13.1) (2026-10-26)
 
 
