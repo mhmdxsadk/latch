@@ -34,11 +34,11 @@ type bridge struct {
 // description is what the bot's profile and empty chat say.
 func (b *bridge) description() (long, short string) {
 	if b.chat != nil {
-		return "Ask the agent about your server. Any change it wants to make waits for your approval here.",
-			"Ask your server's agent. Approve or deny its changes."
+		return "The agent that looks after your server. It investigates problems, reports what it finds and makes fixes when asked. Every change waits for the owner's approval.",
+			"Looks into problems on your server and fixes them when asked."
 	}
-	return "Any change your server's agent wants to make waits for your approval here.",
-		"Approve or deny your server's agent's changes."
+	return "Approval requests for the changes your server's agent wants to make.",
+		"Approval requests from your server's agent."
 }
 
 func (b *bridge) commands() []tgapi.Command {
