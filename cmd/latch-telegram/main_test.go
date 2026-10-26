@@ -399,7 +399,7 @@ func TestStopPressOnlyFromOwner(t *testing.T) {
 	// must not panic).
 	b.dispatch(context.Background(), tgapi.Update{Stopped: &tgapi.GenerationStopped{Chat: tgapi.Chat{ID: 999}, DraftID: 1}})
 	b.dispatch(context.Background(), tgapi.Update{Stopped: &tgapi.GenerationStopped{Chat: tgapi.Chat{ID: owner}, DraftID: 1}})
-	if long, short := b.description(); !strings.Contains(long, "Only the owner") || len(short) > 120 || len(long) > 512 {
+	if long, short := b.description(); long == "" || len(short) > 120 || len(long) > 512 {
 		t.Errorf("description %q %q", long, short)
 	}
 }
