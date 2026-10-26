@@ -31,6 +31,16 @@ type bridge struct {
 	loc       *time.Location
 }
 
+// description is what the bot's profile and empty chat say.
+func (b *bridge) description() (long, short string) {
+	if b.chat != nil {
+		return "Latch: talk to your server's agent and approve the changes it asks for. Only the owner gets answers.",
+			"Your server's agent and its change approvals."
+	}
+	return "Latch: approve or deny the changes your server's agent asks for. Only the owner gets answers.",
+		"Change approvals for your server's agent."
+}
+
 func (b *bridge) commands() []tgapi.Command {
 	if b.chat != nil {
 		return tgchat.Commands
@@ -89,6 +99,11 @@ func (b *bridge) run(ctx context.Context) {
 // answered; anyone else gets no reply at all.
 func (b *bridge) dispatch(ctx context.Context, u tgapi.Update) {
 	switch {
+	case u.Stopped != nil:
+		if u.Stopped.Chat.ID != b.owner || b.chat == nil {
+			return
+		}
+		b.chat.StopDraft(u.Stopped.DraftID)
 	case u.CallbackQuery != nil:
 		cb := *u.CallbackQuery
 		if cb.From.ID != b.owner || cb.Message == nil || cb.Message.Chat.ID != b.owner {
@@ -121,7 +136,7 @@ func (b *bridge) dispatch(ctx context.Context, u tgapi.Update) {
 			b.say(ctx, fmt.Sprintf("Ignored a message sent at %s while the bridge was not running. Send it again if it still matters.",
 				time.Unix(m.Date, 0).In(b.location()).Format("15:04")))
 		case b.chat != nil:
-			b.chat.HandleText(ctx, m.Text)
+			b.chat.HandleText(ctx, m.Text, m.MessageID)
 		default:
 			b.say(ctx, "This bot handles approvals only; chatting with the agent is not set up (agent in telegram.yaml).")
 		}

@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -36,6 +37,9 @@ type Bot interface {
 	Edit(ctx context.Context, chat, message int64, t tgapi.Text, kb tgapi.Keyboard) error
 	Answer(ctx context.Context, callbackID, text string) error
 	Typing(ctx context.Context, chat int64) error
+	Reply(ctx context.Context, chat, replyTo int64, t tgapi.Text) (tgapi.Message, error)
+	Draft(ctx context.Context, chat, draftID int64, t tgapi.Text, canStop bool) error
+	React(ctx context.Context, chat, message int64, emoji string) error
 }
 
 // Defaults for Options.
@@ -53,7 +57,7 @@ var Commands = []tgapi.Command{
 	{Command: "new", Description: "Start a new conversation: /new [name]"},
 	{Command: "sessions", Description: "Switch to an earlier conversation"},
 	{Command: "rename", Description: "Rename this conversation: /rename name"},
-	{Command: "stop", Description: "Stop the running answer and drop queued messages"},
+	{Command: "stop", Description: "Stop the running answer and drop waiting messages"},
 	{Command: "help", Description: "What this bot does"},
 }
 
@@ -80,12 +84,18 @@ type Chat struct {
 	mu     sync.Mutex
 	index  index
 	cancel context.CancelFunc // of the running turn, nil when idle
+	draft  int64              // live preview id of the running turn
+
+	drafts atomic.Int64 // last draft id handed out
 }
 
 type job struct {
 	session string
 	text    string
 	note    string // shown to the owner for a message the bridge sends
+	// messageID is the owner's message, answered as a reply; 0 for
+	// messages the bridge sends.
+	messageID int64
 }
 
 type index struct {
@@ -117,6 +127,9 @@ func New(o Options) (*Chat, error) {
 		o.Logger = slog.New(slog.DiscardHandler)
 	}
 	c := &Chat{o: o, queue: make(chan job, o.MaxQueue)}
+	// Draft ids must be non-zero; start from the clock so a restarted
+	// bridge does not reuse one Telegram still animates.
+	c.drafts.Store(time.Now().UnixMilli() % 1_000_000_000)
 	b, err := os.ReadFile(o.IndexPath)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -143,8 +156,8 @@ func (c *Chat) Run(ctx context.Context) {
 }
 
 // HandleText handles a message from the owner: a command, or a message for
-// the agent.
-func (c *Chat) HandleText(ctx context.Context, text string) {
+// the agent. messageID is the owner's message, which the answer replies to.
+func (c *Chat) HandleText(ctx context.Context, text string, messageID int64) {
 	if cmd, arg, ok := command(text); ok {
 		c.handleCommand(ctx, cmd, arg)
 		return
@@ -164,7 +177,7 @@ func (c *Chat) HandleText(ctx context.Context, text string) {
 	if err != nil {
 		c.o.Logger.Warn("saving the session index failed", "err", err)
 	}
-	c.enqueue(ctx, job{session: id, text: text})
+	c.enqueue(ctx, job{session: id, text: text, messageID: messageID})
 }
 
 // Notify sends text to the agent in the active session as an automatic
@@ -292,82 +305,182 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 func (c *Chat) enqueue(ctx context.Context, j job) {
 	select {
 	case c.queue <- j:
-		c.mu.Lock()
-		busy := c.cancel != nil
-		c.mu.Unlock()
-		if busy {
-			c.say(ctx, "Queued: "+c.o.Name+" is still answering.")
+		// 👀 says "seen"; it goes away once the answer is there.
+		if j.messageID != 0 {
+			if err := c.o.Bot.React(ctx, c.o.Chat, j.messageID, seenReaction); err != nil {
+				c.o.Logger.Debug("reacting failed", "err", err)
+			}
 		}
 	default:
 		c.say(ctx, "Too many messages waiting. Wait for an answer or use /stop.")
 	}
 }
 
-// turn runs one agent turn and sends the answer.
+const seenReaction = "👀"
+
+// StopDraft stops the running turn when id is its live preview, after the
+// owner pressed Stop under it. It reports whether it stopped something.
+func (c *Chat) StopDraft(id int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cancel == nil || c.draft != id {
+		return false
+	}
+	c.cancel()
+	return true
+}
+
+// turn runs one agent turn, shows it live and sends the answer.
 func (c *Chat) turn(parent context.Context, j job) {
 	ctx, cancel := context.WithTimeout(parent, c.o.Timeout)
 	defer cancel()
 	stopped := make(chan struct{})
 	var once sync.Once
+	draftID := c.drafts.Add(1)
 	c.mu.Lock()
 	c.cancel = func() { once.Do(func() { close(stopped); cancel() }) }
+	c.draft = draftID
 	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.cancel, c.draft = nil, 0
+		c.mu.Unlock()
+	}()
 	if j.note != "" {
 		c.say(parent, j.note)
 	}
-	defer func() {
-		c.mu.Lock()
-		c.cancel = nil
-		c.mu.Unlock()
-	}()
 
-	typing := make(chan struct{})
-	go func() {
-		t := time.NewTicker(4 * time.Second)
-		defer t.Stop()
-		for {
-			_ = c.o.Bot.Typing(parent, c.o.Chat)
-			select {
-			case <-typing:
-				return
-			case <-t.C:
-			}
-		}
-	}()
-	out, err := c.o.Runner.Run(ctx, j.session, j.text)
-	close(typing)
+	lv := c.startLive(parent, draftID)
+	out, err := c.o.Runner.Run(ctx, j.session, j.text, lv.update)
+	lv.stop()
 	c.mu.Lock()
-	c.cancel = nil // idle again before any message goes out
+	c.cancel, c.draft = nil, 0 // idle again before any message goes out
 	c.mu.Unlock()
 
 	if parent.Err() != nil {
 		return
 	}
+	if j.messageID != 0 {
+		defer func() { _ = c.o.Bot.React(parent, c.o.Chat, j.messageID, "") }()
+	}
 	select {
 	case <-stopped:
-		c.say(parent, "Stopped.")
+		c.sayTo(parent, j.messageID, "Stopped.")
 		return
 	default:
 	}
 	var re *RunError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		c.say(parent, fmt.Sprintf("%s did not finish within %s and was stopped.", c.o.Name, c.o.Timeout))
+		c.sayTo(parent, j.messageID, fmt.Sprintf("%s did not finish within %s and was stopped.", c.o.Name, c.o.Timeout))
 		return
 	case errors.As(err, &re):
-		c.say(parent, fmt.Sprintf("%s failed (%s).", c.o.Name, re.Error()))
+		c.sayTo(parent, j.messageID, fmt.Sprintf("%s failed (%s).", c.o.Name, re.Error()))
 		return
 	case err != nil:
 		c.o.Logger.Warn("agent run failed", "err", err)
-		c.say(parent, "Could not start "+c.o.Name+"; see the latch-telegram log.")
+		c.sayTo(parent, j.messageID, "Could not start "+c.o.Name+"; see the latch-telegram log.")
 		return
 	}
-	c.answer(parent, out)
+	c.answer(parent, out, j.messageID)
+}
+
+// live shows a turn as it happens: a draft with a Stop button that grows
+// with the answer, or the typing indicator when drafts do not work.
+type live struct {
+	c   *Chat
+	ctx context.Context
+	id  int64
+
+	mu      sync.Mutex
+	p       Progress
+	dirty   bool
+	done    chan struct{}
+	stopped chan struct{}
+}
+
+// draftEvery is how often the preview is updated; drafts are previews of
+// about 30 seconds, so an unchanged one is sent again every draftRefresh.
+const (
+	draftEvery   = 800 * time.Millisecond
+	draftRefresh = 20 * time.Second
+)
+
+func (c *Chat) startLive(ctx context.Context, id int64) *live {
+	lv := &live{c: c, ctx: ctx, id: id, done: make(chan struct{}), stopped: make(chan struct{})}
+	go lv.loop()
+	return lv
+}
+
+func (lv *live) update(p Progress) {
+	lv.mu.Lock()
+	lv.p, lv.dirty = p, true
+	lv.mu.Unlock()
+}
+
+func (lv *live) stop() {
+	close(lv.done)
+	<-lv.stopped
+}
+
+func (lv *live) loop() {
+	defer close(lv.stopped)
+	c := lv.c
+	drafts := c.o.Bot.Draft(lv.ctx, c.o.Chat, lv.id, tgapi.Text{}, true) == nil
+	if !drafts {
+		c.o.Logger.Debug("drafts unavailable; showing typing instead")
+		_ = c.o.Bot.Typing(lv.ctx, c.o.Chat)
+	}
+	tick := time.NewTicker(draftEvery)
+	defer tick.Stop()
+	last := time.Now()
+	for {
+		select {
+		case <-lv.done:
+			return
+		case <-tick.C:
+		}
+		if !drafts {
+			if time.Since(last) >= 4*time.Second {
+				_ = c.o.Bot.Typing(lv.ctx, c.o.Chat)
+				last = time.Now()
+			}
+			continue
+		}
+		lv.mu.Lock()
+		p, dirty := lv.p, lv.dirty
+		lv.dirty = false
+		lv.mu.Unlock()
+		if !dirty && time.Since(last) < draftRefresh {
+			continue
+		}
+		if err := c.o.Bot.Draft(lv.ctx, c.o.Chat, lv.id, c.preview(p), true); err != nil {
+			c.o.Logger.Debug("updating the draft failed", "err", err)
+		}
+		last = time.Now()
+	}
+}
+
+// preview is the draft for p: the answer so far, or what the agent is doing.
+func (c *Chat) preview(p Progress) tgapi.Text {
+	var b tgapi.Builder
+	if strings.TrimSpace(p.Text) == "" {
+		if p.Status == "" {
+			return tgapi.Text{} // Telegram shows "Thinking..."
+		}
+		return b.Italic(p.Status + "...").Done()
+	}
+	b.Bold(c.o.Name).Plain(" ")
+	body := Markdown(p.Text)
+	if body.Len() > tgapi.MaxText-b.Len()-8 {
+		body = tgapi.SplitText(body, tgapi.MaxText-b.Len()-8)[0]
+	}
+	return b.Text(body).Done()
 }
 
 // answer sends the agent's answer, formatted and split, each part starting
 // with the agent's name in bold.
-func (c *Chat) answer(ctx context.Context, out string) {
+func (c *Chat) answer(ctx context.Context, out string, replyTo int64) {
 	body := Markdown(out)
 	if strings.TrimSpace(body.S) == "" {
 		body = tgapi.Plain("(no answer)")
@@ -384,10 +497,11 @@ func (c *Chat) answer(ctx context.Context, out string) {
 			b.Plain(" ")
 		}
 		b.Text(part)
-		if _, err := c.o.Bot.Send(ctx, c.o.Chat, b.Done(), nil); err != nil {
+		if err := c.send(ctx, replyTo, b.Done()); err != nil {
 			c.o.Logger.Warn("sending an answer failed", "err", err)
 			return
 		}
+		replyTo = 0 // only the first part is a reply
 	}
 }
 
@@ -396,6 +510,23 @@ func (c *Chat) say(ctx context.Context, text string) {
 	if _, err := c.o.Bot.Send(ctx, c.o.Chat, note(text), nil); err != nil {
 		c.o.Logger.Warn("sending failed", "err", err)
 	}
+}
+
+// sayTo sends a note as a reply to the owner's message replyTo (0: none).
+func (c *Chat) sayTo(ctx context.Context, replyTo int64, text string) {
+	if err := c.send(ctx, replyTo, note(text)); err != nil {
+		c.o.Logger.Warn("sending failed", "err", err)
+	}
+}
+
+func (c *Chat) send(ctx context.Context, replyTo int64, t tgapi.Text) error {
+	var err error
+	if replyTo != 0 {
+		_, err = c.o.Bot.Reply(ctx, c.o.Chat, replyTo, t)
+	} else {
+		_, err = c.o.Bot.Send(ctx, c.o.Chat, t, nil)
+	}
+	return err
 }
 
 func note(s string) tgapi.Text {

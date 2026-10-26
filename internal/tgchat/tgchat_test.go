@@ -19,19 +19,24 @@ const owner = 4242
 type call struct{ session, message string }
 
 // fakeRunner answers with reply(message), or blocks until ctx ends when
-// block is set.
+// block is set. steps are reported as progress first.
 type fakeRunner struct {
 	mu    sync.Mutex
 	calls []call
 	reply func(string) (string, error)
 	block bool
+	steps []Progress
 }
 
-func (f *fakeRunner) Run(ctx context.Context, session, message string) (string, error) {
+func (f *fakeRunner) Run(ctx context.Context, session, message string, progress func(Progress)) (string, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, call{session, message})
-	block, reply := f.block, f.reply
+	block, reply, steps := f.block, f.reply, f.steps
 	f.mu.Unlock()
+	for _, p := range steps {
+		progress(p)
+		time.Sleep(draftEvery + 100*time.Millisecond)
+	}
 	if block {
 		<-ctx.Done()
 		return "", ctx.Err()
@@ -75,7 +80,7 @@ func (h *harness) newChat(timeout time.Duration) *Chat {
 	return c
 }
 
-func (h *harness) send(text string) { h.chat.HandleText(context.Background(), text) }
+func (h *harness) send(text string) { h.chat.HandleText(context.Background(), text, 0) }
 
 // waitText waits for a sent message containing want and returns it.
 func (h *harness) waitText(want string) tgtest.Sent {
@@ -147,8 +152,9 @@ func TestStop(t *testing.T) {
 	h.run.block = true
 	h.send("long job")
 	tgtest.WaitFor(t, "the run to start", func() bool { return len(h.run.Calls()) == 1 })
-	h.send("queued one")
-	h.waitText("Queued: keeper is still answering")
+	queued := h.tg.MessageID(owner, "queued one") // id only; deliver it by hand
+	h.chat.HandleText(context.Background(), "queued one", queued)
+	tgtest.WaitFor(t, "the seen reaction", func() bool { return h.tg.Reaction(queued) == "👀" })
 	h.send("/stop")
 	h.waitText("Stopping keeper (dropped 1 waiting)")
 	h.waitText("Stopped.")
@@ -233,47 +239,125 @@ func TestCommandParsing(t *testing.T) {
 func TestExecRunner(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "docker-agent")
-	err := os.WriteFile(script, []byte(`#!/bin/sh
-echo "args: $*"
-echo "stdin: $(cat)"
-echo "token: ${BOT_TOKEN:-none}"
-`), 0o700)
-	if err != nil {
-		t.Fatal(err)
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(script, []byte("#!/bin/sh\n"+body), 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
+	// A stand-in that prints Docker Agent's events: the entry agent thinks,
+	// calls a tool, asks the researcher, then writes its final message.
+	write(`cat > "$0.stdin"
+printf '%s\n' "$*" > "$0.args"
+env > "$0.env"
+cat <<'END'
+{"type":"team_info","agent_name":"inspector","current_agent":"inspector"}
+{"type":"stream_started","agent_name":"inspector"}
+{"type":"agent_choice","agent_name":"inspector","content":"Let me check.","message_id":"m1"}
+{"type":"tool_call","agent_name":"inspector","tool_call":{"function":{"name":"docker_status","arguments":"{}"}}}
+{"type":"tool_call_response","agent_name":"inspector","response":"SECRET TOOL OUTPUT"}
+{"type":"agent_choice","agent_name":"researcher","content":"docs say","message_id":"r1"}
+not json at all
+{"type":"agent_choice","agent_name":"inspector","content":"All ","message_id":"m2"}
+{"type":"agent_choice","agent_name":"inspector","content":"**good**.","message_id":"m2"}
+{"type":"stream_stopped","agent_name":"inspector"}
+END
+`)
 	t.Setenv("BOT_TOKEN", "must-not-leak")
 	r := &ExecRunner{Command: script, Config: "/home/keeper/keeper.yaml", ExtraArgs: []string{"--safety", "restricted"}}
-	out, err := r.Run(context.Background(), "sess-1", "--yolo is just text")
+	var steps []Progress
+	out, err := r.Run(context.Background(), "sess-1", "--yolo is just text", func(p Progress) { steps = append(steps, p) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "args: run /home/keeper/keeper.yaml --exec --last --session sess-1 --safety restricted -\nstdin: --yolo is just text\ntoken: none\n"
-	if out != want {
-		t.Fatalf("got %q\nwant %q", out, want)
+	if out != "All **good**." {
+		t.Fatalf("answer %q", out)
+	}
+	read := func(suffix string) string {
+		b, _ := os.ReadFile(script + suffix)
+		return string(b)
+	}
+	if got := read(".args"); got != "run /home/keeper/keeper.yaml --exec --json --session sess-1 --safety restricted -\n" {
+		t.Errorf("args %q", got)
+	}
+	if read(".stdin") != "--yolo is just text" || strings.Contains(read(".env"), "must-not-leak") {
+		t.Errorf("stdin or env wrong: %q", read(".stdin"))
+	}
+	var seen []string
+	for _, p := range steps {
+		if strings.Contains(p.Text+p.Status, "SECRET") {
+			t.Fatalf("tool output reached the preview: %+v", p)
+		}
+		seen = append(seen, p.Status+"|"+p.Text)
+	}
+	want := "|Let me check.,Checking docker_status|,Asking researcher|,|All ,|All **good**."
+	if got := strings.Join(seen, ","); got != want {
+		t.Errorf("progress\n got  %s\n want %s", got, want)
 	}
 
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'bad config' >&2\nexit 3\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	_, err = r.Run(context.Background(), "s", "m")
+	write("echo '{\"type\":\"error\",\"error\":\"model refused: quota\"}'\necho 'bad config' >&2\nexit 3\n")
+	_, err = r.Run(context.Background(), "s", "m", nil)
 	var re *RunError
-	if !errors.As(err, &re) || re.Code != 3 || re.Stderr != "bad config" {
+	if !errors.As(err, &re) || re.Code != 3 || re.Stderr != "model refused: quota" {
+		t.Fatalf("err = %v", err)
+	}
+	write("echo 'bad config' >&2\nexit 3\n")
+	if _, err = r.Run(context.Background(), "s", "m", nil); !errors.As(err, &re) || re.Stderr != "bad config" {
 		t.Fatalf("err = %v", err)
 	}
 
 	// Stopping kills the whole process group, children included.
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 30 &\nsleep 30\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	write("sleep 30 &\nsleep 30\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if _, err := r.Run(ctx, "s", "m"); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := r.Run(ctx, "s", "m", nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v", err)
 	}
 	if time.Since(start) > 3*time.Second {
 		t.Error("stop did not kill the group quickly")
 	}
+}
+
+func TestLiveDraftsAndReply(t *testing.T) {
+	h := newHarness(t, time.Minute)
+	h.run.steps = []Progress{{Status: "Checking docker_status"}, {Text: "Caddy is **up**"}}
+	id := h.tg.MessageID(owner, "is caddy up?")
+	h.chat.HandleText(context.Background(), "is caddy up?", id)
+	m := h.waitText("answer to is caddy up?")
+	if m.ReplyTo != id {
+		t.Errorf("answer is not a reply: %+v", m)
+	}
+	tgtest.WaitFor(t, "the seen reaction to go", func() bool { return h.tg.Reaction(id) == "" })
+	var texts []string
+	for _, d := range h.tg.Drafts() {
+		if !d.CanStop {
+			t.Errorf("draft without Stop: %+v", d)
+		}
+		if msg := tgtest.CheckEntities(d.Text, d.Entities); msg != "" {
+			t.Errorf("draft %q: %s", d.Text, msg)
+		}
+		texts = append(texts, d.Text)
+	}
+	got := strings.Join(texts, "|")
+	if !strings.HasPrefix(got, "|") || !strings.Contains(got, "Checking docker_status...") || !strings.Contains(got, "keeper Caddy is up") {
+		t.Errorf("drafts %q", got)
+	}
+}
+
+func TestStopButton(t *testing.T) {
+	h := newHarness(t, time.Minute)
+	h.run.block = true
+	h.send("long job")
+	tgtest.WaitFor(t, "a draft", func() bool { return len(h.tg.Drafts()) > 0 })
+	d := h.tg.Drafts()[0]
+	if h.chat.StopDraft(d.ID + 1) {
+		t.Fatal("stopped by another draft id")
+	}
+	if !h.chat.StopDraft(d.ID) {
+		t.Fatal("not stopped")
+	}
+	h.waitText("Stopped.")
 }
 
 func TestCapped(t *testing.T) {

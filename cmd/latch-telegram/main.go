@@ -40,6 +40,7 @@ const usage = `Usage: latch-telegram <command> [flags]
 
 Commands:
   serve      Start the Telegram bridge
+  pair       Link your Telegram account: writes owner_id
   validate   Validate the configuration without starting
   doctor     Check the token, the admin socket and the agent setup
   version    Print version information
@@ -59,6 +60,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "serve":
 		return cmdServe(args[1:], stderr)
+	case "pair":
+		return cmdPair(args[1:], os.Stdin, stdout, stderr)
 	case "validate":
 		return cmdValidate(args[1:], stdout, stderr)
 	case "doctor":
@@ -148,6 +151,10 @@ func cmdServe(args []string, stderr io.Writer) int {
 	}
 	if err := bot.SetCommands(ctx, b.commands()); err != nil {
 		log.Warn("setting the command menu failed", "err", err)
+	}
+	long, short := b.description()
+	if err := bot.SetDescription(ctx, long, short); err != nil {
+		log.Warn("setting the bot description failed", "err", err)
 	}
 	log.Info("latch-telegram started", "version", version, "bot_id", me.ID, "chat", b.chat != nil)
 	b.run(ctx)
