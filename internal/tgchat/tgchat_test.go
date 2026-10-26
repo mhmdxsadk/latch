@@ -16,7 +16,7 @@ import (
 
 const owner = 4242
 
-type call struct{ session, message string }
+type call struct{ session, message, db string }
 
 // fakeRunner answers with reply(message), or blocks until ctx ends when
 // block is set. steps are reported as progress first.
@@ -26,16 +26,22 @@ type fakeRunner struct {
 	reply func(string) (string, error)
 	block bool
 	steps []Progress
+	// gate, when set, holds the run until it is closed, ignoring ctx.
+	gate chan struct{}
 }
 
-func (f *fakeRunner) Run(ctx context.Context, session, message string, progress func(Progress)) (string, error) {
+func (f *fakeRunner) Run(ctx context.Context, t Turn, progress func(Progress)) (string, error) {
 	f.mu.Lock()
-	f.calls = append(f.calls, call{session, message})
+	f.calls = append(f.calls, call{t.Session, t.Message, t.DB})
+	message := t.Message
 	block, reply, steps := f.block, f.reply, f.steps
 	f.mu.Unlock()
 	for _, p := range steps {
 		progress(p)
 		time.Sleep(draftEvery + 100*time.Millisecond)
+	}
+	if f.gate != nil {
+		<-f.gate
 	}
 	if block {
 		<-ctx.Done()
@@ -54,26 +60,40 @@ func (f *fakeRunner) Calls() []call {
 }
 
 type harness struct {
-	t     *testing.T
-	tg    *tgtest.Server
-	run   *fakeRunner
-	chat  *Chat
-	index string
+	t      *testing.T
+	tg     *tgtest.Server
+	run    *fakeRunner
+	chat   *Chat
+	index  string
+	mutate func(*Options)
 }
 
 func newHarness(t *testing.T, timeout time.Duration) *harness {
 	t.Helper()
-	h := &harness{t: t, tg: tgtest.New(t), run: &fakeRunner{}, index: filepath.Join(t.TempDir(), "sessions.json")}
+	return newHarnessWith(t, timeout, nil)
+}
+
+// newHarnessWith is newHarness with a change to the chat's options.
+func newHarnessWith(t *testing.T, timeout time.Duration, mutate func(*Options)) *harness {
+	t.Helper()
+	h := &harness{t: t, tg: tgtest.New(t), run: &fakeRunner{}, index: filepath.Join(t.TempDir(), "sessions.json"), mutate: mutate}
 	h.chat = h.newChat(timeout)
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go h.chat.Run(ctx)
+	done := make(chan struct{})
+	// Wait for the chat to stop before the test's folders are removed: a
+	// turn in flight still saves its state.
+	t.Cleanup(func() { cancel(); <-done })
+	go func() { h.chat.Run(ctx); close(done) }()
 	return h
 }
 
 func (h *harness) newChat(timeout time.Duration) *Chat {
 	h.t.Helper()
-	c, err := New(Options{Bot: h.tg.Client(), Chat: owner, Runner: h.run, IndexPath: h.index, Name: "keeper", Timeout: timeout})
+	o := Options{Bot: h.tg.Client(), Chat: owner, Runner: h.run, IndexPath: h.index, Name: "keeper", Timeout: timeout}
+	if h.mutate != nil {
+		h.mutate(&o)
+	}
+	c, err := New(o)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -267,7 +287,7 @@ END
 	t.Setenv("BOT_TOKEN", "must-not-leak")
 	r := &ExecRunner{Command: script, Config: "/home/keeper/keeper.yaml", ExtraArgs: []string{"--safety", "restricted"}}
 	var steps []Progress
-	out, err := r.Run(context.Background(), "sess-1", "--yolo is just text", func(p Progress) { steps = append(steps, p) })
+	out, err := r.Run(context.Background(), Turn{Session: "sess-1", DB: "/data/sess-1.db", Message: "--yolo is just text"}, func(p Progress) { steps = append(steps, p) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +298,7 @@ END
 		b, _ := os.ReadFile(script + suffix)
 		return string(b)
 	}
-	if got := read(".args"); got != "run /home/keeper/keeper.yaml --exec --json --session sess-1 --safety restricted -\n" {
+	if got := read(".args"); got != "run /home/keeper/keeper.yaml --exec --json --session sess-1 --session-db /data/sess-1.db --safety restricted -\n" {
 		t.Errorf("args %q", got)
 	}
 	if read(".stdin") != "--yolo is just text" || strings.Contains(read(".env"), "must-not-leak") {
@@ -297,13 +317,13 @@ END
 	}
 
 	write("echo '{\"type\":\"error\",\"error\":\"model refused: quota\"}'\necho 'bad config' >&2\nexit 3\n")
-	_, err = r.Run(context.Background(), "s", "m", nil)
+	_, err = r.Run(context.Background(), Turn{Session: "s", Message: "m"}, nil)
 	var re *RunError
 	if !errors.As(err, &re) || re.Code != 3 || re.Stderr != "model refused: quota" {
 		t.Fatalf("err = %v", err)
 	}
 	write("echo 'bad config' >&2\nexit 3\n")
-	if _, err = r.Run(context.Background(), "s", "m", nil); !errors.As(err, &re) || re.Stderr != "bad config" {
+	if _, err = r.Run(context.Background(), Turn{Session: "s", Message: "m"}, nil); !errors.As(err, &re) || re.Stderr != "bad config" {
 		t.Fatalf("err = %v", err)
 	}
 
@@ -312,7 +332,7 @@ END
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if _, err := r.Run(ctx, "s", "m", nil); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := r.Run(ctx, Turn{Session: "s", Message: "m"}, nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v", err)
 	}
 	if time.Since(start) > 3*time.Second {
@@ -393,7 +413,7 @@ func TestWelcome(t *testing.T) {
 	h.chat.o.Host = "lisbon"
 	h.send("/start")
 	m := h.waitText("Ask me anything about the Lisbon server, or tell me what to fix.")
-	if len(m.Entities) != 0 || !strings.Contains(m.Text, "/new starts over") {
+	if len(m.Entities) != 0 || !strings.Contains(m.Text, "/new clears the chat and starts over") {
 		t.Errorf("%q %+v", m.Text, m.Entities)
 	}
 }

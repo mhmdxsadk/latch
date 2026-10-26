@@ -28,6 +28,7 @@ type Sent struct {
 	Keyboard tgapi.Keyboard
 	Edits    int
 	ReplyTo  int64 // the message it replies to, or 0
+	Deleted  bool
 }
 
 // Formatted returns the message as a tgapi.Text.
@@ -49,6 +50,9 @@ type Server struct {
 	commands           []tgapi.Command
 	drafts             []Draft
 	description, short string
+	deleted            map[int64]bool
+	tooOld             map[int64]bool
+	deleteCalls        int // successful deleteMessages calls
 }
 
 // Draft is one sendMessageDraft call.
@@ -58,6 +62,39 @@ type Draft struct {
 	Text     string
 	Entities []tgapi.Entity
 	CanStop  bool
+}
+
+// Deleted reports whether message id was deleted.
+func (s *Server) Deleted(id int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deleted[id]
+}
+
+// DeleteCalls is how many deleteMessages calls succeeded.
+func (s *Server) DeleteCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deleteCalls
+}
+
+// MarkTooOld makes any deleteMessages call that includes id fail, like a
+// message older than 48 hours.
+func (s *Server) MarkTooOld(id int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tooOld[id] = true
+}
+
+// Visible returns the bot's messages that were not deleted, oldest first.
+func (s *Server) Visible() []Sent {
+	var out []Sent
+	for _, m := range s.Sent() {
+		if !m.Deleted {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // Drafts returns every draft the bot streamed, oldest first.
@@ -95,7 +132,7 @@ func (s *Server) MessageID(user int64, text string) int64 {
 // New starts a fake server; it stops when the test ends.
 func New(t *testing.T) *Server {
 	t.Helper()
-	s := &Server{nextID: 100, nextUpd: 1, wake: make(chan struct{}, 1), answers: map[string]string{}}
+	s := &Server{nextID: 100, nextUpd: 1, wake: make(chan struct{}, 1), answers: map[string]string{}, deleted: map[int64]bool{}, tooOld: map[int64]bool{}}
 	srv := httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(srv.Close)
 	s.URL = srv.URL
@@ -211,6 +248,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		Reply    *struct {
 			MessageID int64 `json:"message_id"`
 		} `json:"reply_parameters"`
+		MessageIDs       []int64 `json:"message_ids"`
 		Description      *string `json:"description"`
 		ShortDescription *string `json:"short_description"`
 	}
@@ -294,6 +332,29 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.drafts = append(s.drafts, Draft{Chat: body.ChatID, ID: body.DraftID, Text: body.Text, Entities: body.Entities, CanStop: body.CanStop})
 		s.mu.Unlock()
+		reply(w, true, true, 0, "")
+	case "deleteMessages":
+		if len(body.MessageIDs) == 0 || len(body.MessageIDs) > tgapi.MaxDelete {
+			reply(w, false, nil, 400, "Bad Request: 1-100 message ids")
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, id := range body.MessageIDs {
+			if s.tooOld[id] {
+				reply(w, false, nil, 400, "Bad Request: message can't be deleted")
+				return
+			}
+		}
+		for _, id := range body.MessageIDs {
+			s.deleted[id] = true
+			for _, m := range s.sent {
+				if m.ID == id {
+					m.Deleted = true
+				}
+			}
+		}
+		s.deleteCalls++
 		reply(w, true, true, 0, "")
 	case "setMyDescription", "setMyShortDescription":
 		s.mu.Lock()

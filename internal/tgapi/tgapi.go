@@ -272,6 +272,22 @@ func (c *Client) Draft(ctx context.Context, chat, draftID int64, t Text, canStop
 	return err
 }
 
+// MaxDelete is how many messages one DeleteMessages call takes.
+const MaxDelete = 100
+
+// DeleteMessages deletes up to MaxDelete messages of chat, the bot's own and
+// the owner's (a private chat allows both). Telegram skips ids it cannot
+// find and only deletes messages younger than 48 hours.
+func (c *Client) DeleteMessages(ctx context.Context, chat int64, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if len(ids) > MaxDelete {
+		return errors.New("telegram deleteMessages: too many ids")
+	}
+	return c.call(ctx, "deleteMessages", map[string]any{"chat_id": chat, "message_ids": ids}, nil)
+}
+
 // SetDescription sets what the bot's profile and empty chat say: the
 // description (up to 512 characters) and the short description (120).
 func (c *Client) SetDescription(ctx context.Context, description, short string) error {

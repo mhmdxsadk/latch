@@ -421,3 +421,35 @@ func TestLongDiffIsCollapsed(t *testing.T) {
 		t.Fatalf("not collapsed: %+v", f.Entities)
 	}
 }
+
+func TestFinishedMessagesLeaveWaitingRequestsAlone(t *testing.T) {
+	h := newHarness(t)
+	done := h.submit(h.stop("web"))
+	h.submit(h.stop("db"))
+	h.poll()
+	sent := h.tg.Sent()
+	if len(sent) != 2 {
+		t.Fatalf("%+v", sent)
+	}
+	h.press(sent[0], data(true, done.ID, fingerprint(done)))
+	h.poll()
+	// Request 1 is decided, request 2 still waits for the owner.
+	got := h.a.FinishedMessages()
+	if len(got) != 1 || got[0] != sent[0].ID {
+		t.Fatalf("finished messages %v, want only %d", got, sent[0].ID)
+	}
+	if again := h.a.FinishedMessages(); len(again) != 0 {
+		t.Errorf("returned again: %v", again)
+	}
+	// The waiting request still works after the others were cleared.
+	h.poll()
+	waiting, _ := h.store.Get(2)
+	if got := h.press(sent[1], data(false, 2, fingerprint(waiting))); got != "Denied request 2." {
+		t.Errorf("the waiting request does not answer: %q", got)
+	}
+	// The state survives a restart: a cleared request is not shown again.
+	h.a = h.approver()
+	if got := h.a.FinishedMessages(); len(got) != 1 || got[0] != sent[1].ID {
+		t.Errorf("after restart: %v", got)
+	}
+}

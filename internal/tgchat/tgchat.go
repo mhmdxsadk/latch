@@ -1,10 +1,12 @@
 // Package tgchat lets the owner talk to the agent team from Telegram.
 //
-// Each Telegram message becomes one agent turn in the active session. The
-// conversation itself lives in Docker Agent's session database; this package
-// only keeps an index of sessions (id, title, start time) so the owner can
-// switch between them without ever seeing an id. Turns run one at a time, in
-// order. Agent answers are untrusted text: they are cleaned of control
+// Each Telegram message becomes one agent turn in the active conversation.
+// The conversation itself lives in Docker Agent's session database, one file
+// per conversation; this package keeps an index (id, title, times, the
+// messages on screen) and a transcript per conversation, so the owner can
+// switch between them without ever seeing an id, /new clears the screen and
+// resuming shows the earlier messages again. Only the most recent few
+// conversations are kept. Turns run one at a time, in order. Agent answers are untrusted text: they are cleaned of control
 // characters and their Markdown becomes formatting this package computes
 // (never links). Answers reply to the owner's message. An agent cannot
 // pose as Latch where it matters: a request waiting for a decision always
@@ -41,6 +43,7 @@ type Bot interface {
 	Typing(ctx context.Context, chat int64) error
 	Reply(ctx context.Context, chat, replyTo int64, t tgapi.Text) (tgapi.Message, error)
 	Draft(ctx context.Context, chat, draftID int64, t tgapi.Text, canStop bool) error
+	DeleteMessages(ctx context.Context, chat int64, ids []int64) error
 }
 
 // Defaults for Options.
@@ -55,8 +58,8 @@ const (
 
 // Commands is the bot's command menu.
 var Commands = []tgapi.Command{
-	{Command: "new", Description: "Start a new conversation: /new [name]"},
-	{Command: "sessions", Description: "Switch to an earlier conversation"},
+	{Command: "new", Description: "Clear the chat and start a new conversation: /new [name]"},
+	{Command: "sessions", Description: "Go back to an earlier conversation"},
 	{Command: "rename", Description: "Rename this conversation: /rename name"},
 	{Command: "stop", Description: "Stop the running answer and drop waiting messages"},
 	{Command: "check", Description: "Check the server now"},
@@ -81,9 +84,21 @@ type Options struct {
 	// not be able to change anything.
 	CheckRunner Runner
 	CheckEvery  time.Duration
-	MaxQueue    int
-	Now         func() time.Time
-	Logger      *slog.Logger
+	// SessionDir is where each conversation's Docker Agent database lives
+	// ("" uses the agent's shared database and never deletes anything).
+	SessionDir string
+	// HistoryDir holds the transcripts, root-only ("" shows no history).
+	HistoryDir string
+	// Keep is how many conversations are kept (default DefaultKeep).
+	Keep int
+	// Remove deletes files in SessionDir, as the agent's account.
+	Remove func(ctx context.Context, paths []string) error
+	// Finished returns the chat messages of requests already decided, for
+	// /new to delete too; requests still waiting are never in it.
+	Finished func() []int64
+	MaxQueue int
+	Now      func() time.Time
+	Logger   *slog.Logger
 }
 
 // Chat runs agent turns for the owner's messages.
@@ -91,6 +106,7 @@ type Chat struct {
 	o     Options
 	queue chan job
 
+	hmu    sync.Mutex // transcripts
 	mu     sync.Mutex
 	index  index
 	cancel context.CancelFunc // of the running turn, nil when idle
@@ -113,15 +129,22 @@ type job struct {
 type index struct {
 	Active   string    `json:"active"`
 	Sessions []session `json:"sessions"`
+	// Loose are screen messages sent before any conversation existed.
+	Loose []int64 `json:"loose,omitempty"`
 	// LastCheck and Reported belong to the scheduled checks.
 	LastCheck time.Time `json:"last_check,omitzero"`
 	Reported  []report  `json:"reported,omitempty"`
 }
 
 type session struct {
-	ID      string    `json:"id"`
-	Title   string    `json:"title"`
-	Started time.Time `json:"started"`
+	ID       string    `json:"id"`
+	Title    string    `json:"title"`
+	Started  time.Time `json:"started"`
+	LastUsed time.Time `json:"last_used,omitzero"`
+	// Own says the conversation has its own database file in SessionDir.
+	Own bool `json:"own,omitempty"`
+	// Messages are the ids of the messages on the owner's screen.
+	Messages []int64 `json:"messages,omitempty"`
 }
 
 // New loads the session index (a missing file is an empty index).
@@ -137,6 +160,9 @@ func New(o Options) (*Chat, error) {
 	}
 	if o.Now == nil {
 		o.Now = time.Now
+	}
+	if o.Keep <= 0 {
+		o.Keep = DefaultKeep
 	}
 	if o.Location == nil {
 		o.Location = time.Local
@@ -189,9 +215,10 @@ func (c *Chat) Run(ctx context.Context) {
 // the agent. messageID is the owner's message, which the answer replies to.
 func (c *Chat) HandleText(ctx context.Context, text string, messageID int64) {
 	if cmd, arg, ok := command(text); ok {
-		c.handleCommand(ctx, cmd, arg)
+		c.handleCommand(ctx, cmd, arg, messageID)
 		return
 	}
+	c.track(messageID) // the owner's message is on screen too
 	if len(text) > maxMessage {
 		c.say(ctx, "That message is too long; keep it under 8 KB.")
 		return
@@ -201,12 +228,14 @@ func (c *Chat) HandleText(ctx context.Context, text string, messageID int64) {
 	if s.Title == "" {
 		s.Title = title(text)
 	}
+	s.LastUsed = c.o.Now().UTC()
 	id := s.ID
 	err := c.saveLocked()
 	c.mu.Unlock()
 	if err != nil {
 		c.o.Logger.Warn("saving the session index failed", "err", err)
 	}
+	c.appendHistory(id, "owner", text)
 	c.enqueue(ctx, job{session: id, text: text, messageID: messageID})
 }
 
@@ -235,44 +264,31 @@ func (c *Chat) HandlePress(ctx context.Context, cb tgapi.CallbackQuery) bool {
 	if !ok {
 		return false
 	}
-	c.mu.Lock()
-	i := slices.IndexFunc(c.index.Sessions, func(s session) bool { return s.ID == id })
-	answer, label := "That conversation is no longer in the list.", ""
-	if i >= 0 {
-		c.index.Active = id
-		label = c.index.Sessions[i].label(c.o.Location)
-		answer = "Switched to: " + label
-		if err := c.saveLocked(); err != nil {
-			c.o.Logger.Warn("saving the session index failed", "err", err)
-		}
+	var listMessage int64
+	if cb.Message != nil {
+		listMessage = cb.Message.MessageID
 	}
-	c.mu.Unlock()
-	if err := c.o.Bot.Answer(ctx, cb.ID, answer); err != nil {
+	if err := c.o.Bot.Answer(ctx, cb.ID, ""); err != nil {
 		c.o.Logger.Warn("answering a button failed", "err", err)
 	}
-	if i >= 0 && cb.Message != nil {
-		_ = c.o.Bot.Edit(ctx, c.o.Chat, cb.Message.MessageID, note("Now in: "+label), nil)
+	label, found := c.resume(ctx, id, listMessage)
+	if !found {
+		c.say(ctx, "That conversation is no longer in the list.")
+		return true
 	}
+	c.say(ctx, "Back in: "+label)
 	return true
 }
 
-func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
+func (c *Chat) handleCommand(ctx context.Context, cmd, arg string, messageID int64) {
+	if cmd != "new" {
+		c.track(messageID) // /new deletes its own message with the rest
+	}
 	switch cmd {
 	case "start", "help":
 		c.plain(ctx, c.welcome())
 	case "new":
-		c.mu.Lock()
-		s := c.newLocked(title(arg))
-		err := c.saveLocked()
-		c.mu.Unlock()
-		if err != nil {
-			c.o.Logger.Warn("saving the session index failed", "err", err)
-		}
-		if s.Title == "" {
-			c.say(ctx, "New conversation.")
-		} else {
-			c.say(ctx, "New conversation: "+s.Title)
-		}
+		c.newConversation(ctx, title(arg), messageID)
 	case "check":
 		if c.o.CheckRunner == nil {
 			c.say(ctx, "Checks are not set up (agent.checks in telegram.yaml).")
@@ -306,7 +322,7 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 			c.say(ctx, "No conversations yet. Send a message to start one.")
 			return
 		}
-		slices.Reverse(list) // newest first
+		slices.SortStableFunc(list, func(a, b session) int { return b.used().Compare(a.used()) }) // newest first
 		var kb tgapi.Keyboard
 		for _, s := range list[:min(len(list), shownSessions)] {
 			text := s.label(c.o.Location)
@@ -315,30 +331,14 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 			}
 			kb = append(kb, []tgapi.Button{{Text: text, Data: "s:" + s.ID}})
 		}
-		if _, err := c.o.Bot.Send(ctx, c.o.Chat, note("Pick a conversation:"), kb); err != nil {
+		if _, err := c.post(ctx, note("Pick a conversation:"), kb); err != nil {
 			c.o.Logger.Warn("sending failed", "err", err)
 		}
 	case "stop":
-		dropped := 0
-	drain:
-		for {
-			select {
-			case <-c.queue:
-				dropped++
-			default:
-				break drain
-			}
-		}
-		c.mu.Lock()
-		running := c.cancel != nil
+		dropped, running := c.stopRunning()
 		if running {
-			c.cancel()
-		}
-		c.mu.Unlock()
-		switch {
-		case running:
 			c.say(ctx, fmt.Sprintf("Stopping %s (dropped %d waiting).", c.o.Name, dropped))
-		default:
+		} else {
 			c.say(ctx, fmt.Sprintf("Nothing running (dropped %d waiting).", dropped))
 		}
 	default:
@@ -387,13 +387,21 @@ func (c *Chat) turn(parent context.Context, j job) {
 	}
 
 	lv := c.startLive(parent, draftID)
-	out, err := c.o.Runner.Run(ctx, j.session, j.text, lv.update)
+	out, err := c.o.Runner.Run(ctx, c.turnFor(j), lv.update)
 	lv.stop()
 	c.mu.Lock()
 	c.cancel, c.draft = nil, 0 // idle again before any message goes out
 	c.mu.Unlock()
 
 	if parent.Err() != nil {
+		return
+	}
+	if !c.isActive(j.session) {
+		// The owner moved to another conversation meanwhile: nothing goes
+		// to the screen, but the answer is kept for when they come back.
+		if err == nil {
+			c.appendHistory(j.session, "agent", out)
+		}
 		return
 	}
 	select {
@@ -415,7 +423,22 @@ func (c *Chat) turn(parent context.Context, j job) {
 		c.sayTo(parent, j.messageID, "Could not start "+c.o.Name+"; see the latch-telegram log.")
 		return
 	}
+	c.appendHistory(j.session, "agent", out)
 	c.answer(parent, out, j.messageID)
+}
+
+// turnFor is the Runner turn for job j: its session and that session's
+// database.
+func (c *Chat) turnFor(j job) Turn {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t := Turn{Session: j.session, Message: j.text}
+	for _, s := range c.index.Sessions {
+		if s.ID == j.session {
+			t.DB = c.dbFor(s)
+		}
+	}
+	return t
 }
 
 // live shows a turn as it happens: a draft with a Stop button that grows
@@ -527,7 +550,7 @@ func (c *Chat) answer(ctx context.Context, out string, replyTo int64) {
 
 // say sends a short note from the bridge, in italics.
 func (c *Chat) say(ctx context.Context, text string) {
-	if _, err := c.o.Bot.Send(ctx, c.o.Chat, note(text), nil); err != nil {
+	if _, err := c.post(ctx, note(text), nil); err != nil {
 		c.o.Logger.Warn("sending failed", "err", err)
 	}
 }
@@ -539,12 +562,12 @@ func (c *Chat) welcome() string {
 		where = "the " + strings.ToUpper(h[:1]) + h[1:] + " server"
 	}
 	return "Ask me anything about " + where + ", or tell me what to fix. Changes wait until you tap Approve.\n\n" +
-		"/new starts over · /sessions goes back to an earlier chat · /stop stops an answer"
+		"/new clears the chat and starts over · /sessions goes back to an earlier chat · /stop stops an answer"
 }
 
 // plain sends text without the italics of a note.
 func (c *Chat) plain(ctx context.Context, text string) {
-	if _, err := c.o.Bot.Send(ctx, c.o.Chat, tgapi.Plain(text), nil); err != nil {
+	if _, err := c.post(ctx, tgapi.Plain(text), nil); err != nil {
 		c.o.Logger.Warn("sending failed", "err", err)
 	}
 }
@@ -557,11 +580,13 @@ func (c *Chat) sayTo(ctx context.Context, replyTo int64, text string) {
 }
 
 func (c *Chat) send(ctx context.Context, replyTo int64, t tgapi.Text) error {
-	var err error
-	if replyTo != 0 {
-		_, err = c.o.Bot.Reply(ctx, c.o.Chat, replyTo, t)
-	} else {
-		_, err = c.o.Bot.Send(ctx, c.o.Chat, t, nil)
+	if replyTo == 0 {
+		_, err := c.post(ctx, t, nil)
+		return err
+	}
+	m, err := c.o.Bot.Reply(ctx, c.o.Chat, replyTo, t)
+	if err == nil {
+		c.track(m.MessageID)
 	}
 	return err
 }
@@ -582,9 +607,11 @@ func (c *Chat) activeLocked() *session {
 }
 
 func (c *Chat) newLocked(name string) *session {
-	c.index.Sessions = append(c.index.Sessions, session{ID: newID(), Title: name, Started: c.o.Now().UTC()})
+	now := c.o.Now().UTC()
+	c.index.Sessions = append(c.index.Sessions, session{ID: newID(), Title: name, Started: now, LastUsed: now, Own: c.o.SessionDir != ""})
 	s := &c.index.Sessions[len(c.index.Sessions)-1]
 	c.index.Active = s.ID
+	s.Messages, c.index.Loose = c.index.Loose, nil
 	return s
 }
 

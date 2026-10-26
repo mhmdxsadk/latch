@@ -255,6 +255,27 @@ func (a *Approver) goneLocked(ctx context.Context, id int64, s *shown) {
 	s.Text, s.Final = hashText(text), true
 }
 
+// FinishedMessages returns the chat messages of requests that are decided,
+// for the chat to delete when it is cleared, and forgets them. A request
+// still waiting is never included: its buttons must stay.
+func (a *Approver) FinishedMessages() []int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var ids []int64
+	for _, s := range a.state.Requests {
+		if s.Final && s.Message != 0 {
+			ids = append(ids, s.Message)
+			s.Message = 0
+		}
+	}
+	if len(ids) > 0 {
+		if err := a.saveLocked(); err != nil {
+			a.o.Logger.Warn("saving the request state failed", "err", err)
+		}
+	}
+	return ids
+}
+
 // HandlePress handles a button press. It reports false when the data is not
 // an approval button. The caller has already checked that the owner pressed.
 func (a *Approver) HandlePress(ctx context.Context, cb tgapi.CallbackQuery) bool {

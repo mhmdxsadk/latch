@@ -201,7 +201,36 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 				every = time.Duration(ch.Every)
 			}
 		}
+		// Each conversation gets its own Docker Agent database in the
+		// agent's home, so deleting a conversation deletes a file. The
+		// bridge creates the folder and deletes files as the agent's own
+		// account, so it needs no extra rights. If the folder cannot be
+		// made, everything shares the agent's default database and nothing
+		// is ever deleted.
+		sessionDir := filepath.Join(acct.Home, ".cagent", "latch-sessions")
+		mctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := acct.MakeDir(mctx, sessionDir); err != nil {
+			log.Warn("conversations share the agent's default database; their folder could not be made", "err", err)
+			sessionDir = ""
+		}
+		cancel()
+		historyDir := filepath.Join(cfg.StateDir, "history")
+		if err := os.MkdirAll(historyDir, 0o700); err != nil {
+			return nil, err
+		}
 		b.chat, err = tgchat.New(tgchat.Options{
+			SessionDir: sessionDir,
+			HistoryDir: historyDir,
+			Keep:       a.KeepSessions,
+			Remove: func(ctx context.Context, paths []string) error {
+				for _, p := range paths {
+					if filepath.Dir(p) != sessionDir || strings.Contains(p, "..") {
+						return fmt.Errorf("refusing to delete %q: not in %s", p, sessionDir)
+					}
+				}
+				return acct.Remove(ctx, paths...)
+			},
+			Finished:    func() []int64 { return b.approvals.FinishedMessages() },
 			CheckRunner: checks,
 			CheckEvery:  every,
 			Bot:         bot,
@@ -250,11 +279,11 @@ type guardedRunner struct {
 	verify func() error
 }
 
-func (g guardedRunner) Run(ctx context.Context, session, message string, progress func(tgchat.Progress)) (string, error) {
+func (g guardedRunner) Run(ctx context.Context, t tgchat.Turn, progress func(tgchat.Progress)) (string, error) {
 	if err := g.verify(); err != nil {
 		return "", fmt.Errorf("check refused: %w", err)
 	}
-	return g.Runner.Run(ctx, session, message, progress)
+	return g.Runner.Run(ctx, t, progress)
 }
 
 // hostname is the server's short name, for the chat's welcome text.

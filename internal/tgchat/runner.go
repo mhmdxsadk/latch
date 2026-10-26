@@ -19,10 +19,18 @@ import (
 	"github.com/mhmdxsadk/latch/internal/textsafe"
 )
 
-// Runner runs one agent turn in a session and returns its final answer,
-// reporting progress (when not nil) while it works.
+// Turn is one agent turn: a message for a session. DB is the session's own
+// database file, or "" for the agent's shared default database.
+type Turn struct {
+	Session string
+	DB      string
+	Message string
+}
+
+// Runner runs one agent turn and returns its final answer, reporting
+// progress (when not nil) while it works.
 type Runner interface {
-	Run(ctx context.Context, session, message string, progress func(Progress)) (string, error)
+	Run(ctx context.Context, t Turn, progress func(Progress)) (string, error)
 }
 
 // Account is the Linux account the agent runs as.
@@ -72,9 +80,39 @@ func LookupAccount(name string) (Account, error) {
 	return a, nil
 }
 
+// Run runs a short command as the account, with a clean environment and its
+// home as the working directory. The caller builds name and args; nothing
+// from the agent or from Telegram reaches them.
+func (a Account) Run(ctx context.Context, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed tools and paths built by the bridge
+	cmd.Dir = "/"
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: a.UID, Gid: a.GID, Groups: a.Groups}}
+	var stderr capped
+	stderr.max, stderr.keepTail = 4<<10, true
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s: %w: %s", name, err, lastLines(stderr.String(), 2))
+	}
+	return nil
+}
+
+// MakeDir creates dir (and parents) readable by the account only.
+func (a Account) MakeDir(ctx context.Context, dir string) error {
+	return a.Run(ctx, "/bin/mkdir", "-p", "-m", "700", "--", dir)
+}
+
+// Remove deletes files as the account that owns them; missing ones are fine.
+func (a Account) Remove(ctx context.Context, paths ...string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	return a.Run(ctx, "/bin/rm", append([]string{"-f", "--"}, paths...)...)
+}
+
 // ExecRunner runs Docker Agent:
 //
-//	docker-agent run CONFIG --exec --json --session ID [EXTRA...] -
+//	docker-agent run CONFIG --exec --json --session ID [--session-db DB] [EXTRA...] -
 //
 // with the message on standard input, so it can never be read as a flag and
 // never shows in the process list. The child runs as Account with a clean
@@ -102,13 +140,17 @@ type ExecRunner struct {
 const maxEventLine = 16 << 20
 
 // Run runs one turn, calling progress (when not nil) as the answer grows.
-func (r *ExecRunner) Run(ctx context.Context, session, message string, progress func(Progress)) (string, error) {
-	args := append([]string{"run", r.Config, "--exec", "--json", "--session", session}, r.ExtraArgs...)
+func (r *ExecRunner) Run(ctx context.Context, t Turn, progress func(Progress)) (string, error) {
+	args := []string{"run", r.Config, "--exec", "--json", "--session", t.Session}
+	if t.DB != "" {
+		args = append(args, "--session-db", t.DB)
+	}
+	args = append(args, r.ExtraArgs...)
 	args = append(args, "-")
 	// The command, config and extra args come from the owner's root-only
 	// config; the agent's text only reaches stdin.
 	cmd := exec.CommandContext(ctx, r.Command, args...) //nolint:gosec // owner-set argv, see above
-	cmd.Stdin = strings.NewReader(message)
+	cmd.Stdin = strings.NewReader(t.Message)
 	limit := r.MaxOutput
 	if limit <= 0 {
 		limit = 1 << 20

@@ -48,6 +48,10 @@ agent:
   args: [--safety, restricted]
   # A turn that takes longer is stopped.
   timeout: 10m
+  # How many conversations are kept. Older ones are deleted, with their
+  # Docker Agent database. /new clears the chat; /sessions brings an
+  # earlier conversation and its messages back. Default 5.
+  # keep_sessions: 5
   # Scheduled checks: the agent sweeps the server on its own and messages
   # you, in a new conversation, only when it finds something new. Checks
   # never change anything: they run with --safety restricted and this

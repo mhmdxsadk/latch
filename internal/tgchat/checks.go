@@ -2,6 +2,7 @@ package tgchat
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -72,12 +73,20 @@ func (c *Chat) check(ctx context.Context, manual bool) {
 	c.index.Reported = recent
 	c.mu.Unlock()
 
+	// A check runs in a conversation of its own with its own database, so
+	// one that finds nothing can be deleted without a trace.
 	id := newID()
+	own := c.o.SessionDir != ""
+	t := Turn{Session: id, Message: checkPrompt(recent)}
+	if own {
+		t.DB = filepath.Join(c.o.SessionDir, id+".db")
+	}
 	if manual {
 		_ = c.o.Bot.Typing(ctx, c.o.Chat)
 	}
-	out, err := c.o.CheckRunner.Run(ctx, id, checkPrompt(recent), nil)
+	out, err := c.o.CheckRunner.Run(ctx, t, nil)
 	if err != nil {
+		c.removeDB(ctx, t.DB)
 		c.o.Logger.Warn("check failed", "err", err)
 		if manual {
 			c.say(ctx, "The check could not run; see the latch-telegram log.")
@@ -86,22 +95,32 @@ func (c *Chat) check(ctx context.Context, manual bool) {
 	}
 	answer := strings.TrimSpace(out)
 	if answer == "" || strings.EqualFold(strings.Trim(answer, "`*. \n"), allClear) {
+		c.removeDB(ctx, t.DB)
 		c.o.Logger.Info("check found nothing new")
 		if manual {
 			c.plain(ctx, "All clear.")
 		}
 		return
 	}
+	// A finding becomes the active conversation, so the owner's reply
+	// ("fix it") continues there. What is on the screen now stays on it:
+	// it moves to the new conversation, which /new clears with the rest.
 	headline := title(firstLine(answer))
 	c.mu.Lock()
-	c.index.Sessions = append(c.index.Sessions, session{ID: id, Title: "Check: " + headline, Started: now})
+	screen := c.screenLocked()
+	c.index.Sessions = append(c.index.Sessions, session{
+		ID: id, Title: "Check: " + headline, Started: now, LastUsed: now, Own: own, Messages: screen,
+	})
 	c.index.Active = id
 	c.index.Reported = append(c.index.Reported, report{At: now, Headline: textHead(firstLine(answer), 200)})
+	victims := c.pruneLocked()
 	err = c.saveLocked()
 	c.mu.Unlock()
 	if err != nil {
 		c.o.Logger.Warn("saving the session index failed", "err", err)
 	}
+	c.discard(ctx, victims)
+	c.appendHistory(id, "agent", answer)
 	c.answer(ctx, answer, 0)
 }
 
