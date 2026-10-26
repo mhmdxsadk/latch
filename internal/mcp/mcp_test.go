@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/mhmdxsadk/latch/internal/approval"
 	"github.com/mhmdxsadk/latch/internal/audit"
 	"github.com/mhmdxsadk/latch/internal/config"
 	"github.com/mhmdxsadk/latch/internal/excluded"
@@ -156,6 +158,17 @@ func TestToolSurfaceIsFixed(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Errorf("missing tools: %v", want)
+	}
+	var change []string
+	for _, tool := range res.Tools {
+		if tool.Annotations != nil && !tool.Annotations.ReadOnlyHint {
+			change = append(change, tool.Name)
+		}
+	}
+	slices.Sort(change)
+	listed := slices.Sorted(slices.Values(approval.ChangeTools))
+	if !slices.Equal(change, listed) {
+		t.Errorf("approval.ChangeTools = %v, want the change tools %v", listed, change)
 	}
 }
 

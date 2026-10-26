@@ -403,3 +403,52 @@ func TestStopPressOnlyFromOwner(t *testing.T) {
 		t.Errorf("description %q %q", long, short)
 	}
 }
+
+func TestCheckReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "check.yaml")
+	home := filepath.Join(dir, "home")
+	write := func(p, body string) {
+		t.Helper()
+		os.MkdirAll(filepath.Dir(p), 0o700)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(cfg, "agents:\n  inspector:\n    model: x\n")
+	if err := checkReadOnly(cfg, home); err != nil {
+		t.Fatalf("plain config: %v", err)
+	}
+	for _, rule := range []string{"file_edit", "docker_*", "*", "http_request:url=*"} {
+		write(cfg, "permissions:\n  allow:\n    - fetch\n    - \""+rule+"\"\n")
+		if err := checkReadOnly(cfg, home); err == nil || !strings.Contains(err.Error(), "must not be able to change") {
+			t.Errorf("rule %q: %v", rule, err)
+		}
+	}
+	write(cfg, "permissions:\n  allow: [fetch, docker_status]\n")
+	if err := checkReadOnly(cfg, home); err != nil {
+		t.Errorf("read-only rules: %v", err)
+	}
+	// The account's own settings apply to every config it runs.
+	write(filepath.Join(home, ".config", "cagent", "config.yaml"), "settings:\n  permissions:\n    allow: [systemd_restart]\n")
+	if err := checkReadOnly(cfg, home); err == nil || !strings.Contains(err.Error(), "systemd_restart") {
+		t.Errorf("personal settings: %v", err)
+	}
+}
+
+func TestChecksConfig(t *testing.T) {
+	base := "owner_id: 1\nagent:\n  user: keeper\n  config: /home/keeper/keeper.yaml\n"
+	c, err := loadConfig(writeConfig(t, base+"  checks:\n    config: /home/keeper/keeper-check.yaml\n"))
+	if err != nil || time.Duration(c.Agent.Checks.Every) != 6*time.Hour {
+		t.Fatalf("%v %+v", err, c)
+	}
+	for _, tc := range []struct{ body, want string }{
+		{"  checks:\n    every: 5m\n    config: /home/keeper/keeper-check.yaml\n", "agent.checks.every"},
+		{"  checks:\n    config: /home/keeper/keeper.yaml\n", "separate agent config"},
+		{"  checks:\n    every: 1h\n", "agent.checks.config"},
+	} {
+		if _, err := loadConfig(writeConfig(t, base+tc.body)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: %v", tc.body, err)
+		}
+	}
+}

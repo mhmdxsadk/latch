@@ -48,3 +48,12 @@ agent:
   args: [--safety, restricted]
   # A turn that takes longer is stopped.
   timeout: 10m
+  # Scheduled checks: the agent sweeps the server on its own and messages
+  # you, in a new conversation, only when it finds something new. Checks
+  # never change anything: they run with --safety restricted and this
+  # config, a copy of the agent config WITHOUT the permissions allow list
+  # for Latch's change tools (latch-telegram refuses one that allows them).
+  # /check runs one now.
+  # checks:
+  #   every: 6h
+  #   config: /home/keeper/keeper-check.yaml

@@ -15,12 +15,13 @@ import (
 
 // checks are what doctor exercises; tests substitute fakes.
 type checks struct {
-	euid    func() int
-	token   func(*Config) (string, error)
-	botMe   func(ctx context.Context, token string) error
-	pending func(ctx context.Context, socket string) error
-	account func(name string) (tgchat.Account, error)
-	stat    func(path string) (os.FileInfo, error)
+	euid     func() int
+	token    func(*Config) (string, error)
+	botMe    func(ctx context.Context, token string) error
+	pending  func(ctx context.Context, socket string) error
+	account  func(name string) (tgchat.Account, error)
+	stat     func(path string) (os.FileInfo, error)
+	readOnly func(config, home string) error
 }
 
 func cmdDoctor(args []string, stdout, stderr io.Writer) int {
@@ -41,8 +42,9 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 			_, err := admin.NewClient(socket).Pending(ctx)
 			return err
 		},
-		account: tgchat.LookupAccount,
-		stat:    os.Stat,
+		account:  tgchat.LookupAccount,
+		stat:     os.Stat,
+		readOnly: checkReadOnly,
 	}
 	if !doctor(ctx, cfg, in, stdout) {
 		return 1
@@ -113,6 +115,16 @@ func doctor(ctx context.Context, cfg *Config, in checks, out io.Writer) bool {
 		}
 		_, err = in.stat(a.Config)
 		check("agent config "+a.Config, err, "set agent.config to the agent team file, for example /home/"+a.User+"/keeper.yaml")
+		if ch := a.Checks; ch != nil {
+			home := ""
+			if acct, err := in.account(a.User); err == nil {
+				home = acct.Home
+			}
+			check(fmt.Sprintf("scheduled checks every %s, read-only (%s)", time.Duration(ch.Every), ch.Config), in.readOnly(ch.Config, home),
+				"use a copy of the agent config without the permissions allow list for Latch's change tools")
+		} else {
+			fmt.Fprintln(out, "OK    scheduled checks are off (no agent.checks)")
+		}
 	}
 
 	fmt.Fprintln(out)

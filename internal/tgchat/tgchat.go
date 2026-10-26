@@ -58,6 +58,7 @@ var Commands = []tgapi.Command{
 	{Command: "sessions", Description: "Switch to an earlier conversation"},
 	{Command: "rename", Description: "Rename this conversation: /rename name"},
 	{Command: "stop", Description: "Stop the running answer and drop waiting messages"},
+	{Command: "check", Description: "Check the server now"},
 	{Command: "help", Description: "What this bot does"},
 }
 
@@ -74,10 +75,14 @@ type Options struct {
 	// Location is the owner's time zone for conversation names.
 	Location *time.Location
 	// Host names the server in the welcome text.
-	Host     string
-	MaxQueue int
-	Now      func() time.Time
-	Logger   *slog.Logger
+	Host string
+	// CheckRunner runs scheduled checks every CheckEvery (0: none). It must
+	// not be able to change anything.
+	CheckRunner Runner
+	CheckEvery  time.Duration
+	MaxQueue    int
+	Now         func() time.Time
+	Logger      *slog.Logger
 }
 
 // Chat runs agent turns for the owner's messages.
@@ -100,11 +105,16 @@ type job struct {
 	// messageID is the owner's message, answered as a reply; 0 for
 	// messages the bridge sends.
 	messageID int64
+	// check is a scheduled check; manual when the owner asked for it.
+	check, manual bool
 }
 
 type index struct {
 	Active   string    `json:"active"`
 	Sessions []session `json:"sessions"`
+	// LastCheck and Reported belong to the scheduled checks.
+	LastCheck time.Time `json:"last_check,omitzero"`
+	Reported  []report  `json:"reported,omitempty"`
 }
 
 type session struct {
@@ -152,12 +162,24 @@ func New(o Options) (*Chat, error) {
 
 // Run runs queued turns until ctx ends.
 func (c *Chat) Run(ctx context.Context) {
+	if c.o.CheckEvery > 0 && c.o.CheckRunner != nil {
+		c.mu.Lock()
+		if c.index.LastCheck.IsZero() {
+			c.index.LastCheck = c.o.Now().UTC() // the first check comes one interval after setup
+		}
+		c.mu.Unlock()
+		go c.checkLoop(ctx)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case j := <-c.queue:
-			c.turn(ctx, j)
+			if j.check {
+				c.check(ctx, j.manual)
+			} else {
+				c.turn(ctx, j)
+			}
 		}
 	}
 }
@@ -249,6 +271,16 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 			c.say(ctx, "New conversation.")
 		} else {
 			c.say(ctx, "New conversation: "+s.Title)
+		}
+	case "check":
+		if c.o.CheckRunner == nil {
+			c.say(ctx, "Checks are not set up (agent.checks in telegram.yaml).")
+			return
+		}
+		select {
+		case c.queue <- job{check: true, manual: true}:
+		default:
+			c.say(ctx, "Too many messages waiting. Wait for an answer or use /stop.")
 		}
 	case "rename":
 		if strings.TrimSpace(arg) == "" {

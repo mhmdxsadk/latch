@@ -275,6 +275,14 @@ the agent is told how it ended so it can check the fix.
 Times show in your own time zone, and long diffs and logs stay collapsed
 until you tap them.
 
+With `agent.checks`, the agent also checks the server on its own (every 6
+hours by default, or now with `/check`). You only hear from it when it finds
+something new: its report opens a new conversation, so your reply continues
+there. Checks never change anything, not even a restart: they run in
+Docker Agent's restricted mode with a config that has no allow list for
+Latch's change tools, and the bridge refuses to run checks with one that
+does. Fixes happen only when you ask for them.
+
 How it stays safe:
 
 - Only your Telegram account is answered, and only in a private chat.

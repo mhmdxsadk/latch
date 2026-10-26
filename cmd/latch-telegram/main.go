@@ -183,9 +183,23 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			return nil, err
 		}
 		agentUID = &acct.UID
+		var checks tgchat.Runner
+		var every time.Duration
+		if ch := a.Checks; ch != nil {
+			if err := checkReadOnly(ch.Config, acct.Home); err != nil {
+				log.Error("scheduled checks are off", "err", err)
+			} else {
+				// Always restricted: read-only tools run, everything
+				// else is refused without asking.
+				checks = &tgchat.ExecRunner{Command: a.Command, Config: ch.Config, ExtraArgs: []string{"--safety", "restricted"}, Account: &acct}
+				every = time.Duration(ch.Every)
+			}
+		}
 		b.chat, err = tgchat.New(tgchat.Options{
-			Bot:  bot,
-			Chat: cfg.OwnerID,
+			CheckRunner: checks,
+			CheckEvery:  every,
+			Bot:         bot,
+			Chat:        cfg.OwnerID,
 			Runner: &tgchat.ExecRunner{
 				Command: a.Command, Config: a.Config, ExtraArgs: a.Args, Account: &acct,
 			},

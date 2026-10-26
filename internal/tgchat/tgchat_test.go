@@ -397,3 +397,46 @@ func TestWelcome(t *testing.T) {
 		t.Errorf("%q %+v", m.Text, m.Entities)
 	}
 }
+
+func TestChecks(t *testing.T) {
+	h := newHarness(t, time.Minute)
+	checks := &fakeRunner{reply: func(string) (string, error) { return "ALL_CLEAR", nil }}
+	h.chat.o.CheckRunner = checks
+
+	h.send("/check")
+	h.waitText("All clear.")
+	if n := len(h.chat.index.Sessions); n != 0 {
+		t.Fatalf("an all-clear check left a conversation: %d", n)
+	}
+
+	checks.mu.Lock()
+	checks.reply = func(string) (string, error) {
+		return "**Jellyfin keeps restarting.** Its health check fails since 09:12.\n\nI would restart it if you ask.", nil
+	}
+	checks.mu.Unlock()
+	h.chat.queue <- job{check: true} // a scheduled one: silent unless it finds something
+	h.waitText("Jellyfin keeps restarting.")
+	h.chat.mu.Lock()
+	sessions, active, reported := h.chat.index.Sessions, h.chat.index.Active, h.chat.index.Reported
+	h.chat.mu.Unlock()
+	if len(sessions) != 1 || active != sessions[0].ID || !strings.HasPrefix(sessions[0].Title, "Check: Jellyfin keeps restarting.") {
+		t.Fatalf("sessions %+v active %s", sessions, active)
+	}
+	if len(reported) != 1 || reported[0].Headline != "Jellyfin keeps restarting. Its health check fails since 09:12." {
+		t.Errorf("reported %+v", reported)
+	}
+	// The owner's reply continues the check's conversation.
+	h.send("fix it")
+	h.waitText("answer to fix it")
+	if c := h.run.Calls(); c[len(c)-1].session != sessions[0].ID {
+		t.Errorf("reply went to %s, not the check's conversation", c[len(c)-1].session)
+	}
+	// The next check is told what was already reported.
+	h.send("/check")
+	tgtest.WaitFor(t, "a third check", func() bool { return len(checks.Calls()) == 3 })
+	last := checks.Calls()[2]
+	if !strings.Contains(last.message, "Already reported") || !strings.Contains(last.message, "Jellyfin keeps restarting") ||
+		!strings.Contains(last.message, "Do not file") {
+		t.Errorf("prompt:\n%s", last.message)
+	}
+}
