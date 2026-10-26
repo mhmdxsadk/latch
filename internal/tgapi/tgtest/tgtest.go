@@ -23,9 +23,13 @@ type Sent struct {
 	ID       int64
 	Chat     int64
 	Text     string
+	Entities []tgapi.Entity
 	Keyboard tgapi.Keyboard
 	Edits    int
 }
+
+// Formatted returns the message as a tgapi.Text.
+func (m Sent) Formatted() tgapi.Text { return tgapi.Text{S: m.Text, Entities: m.Entities} }
 
 // Server is a fake Bot API.
 type Server struct {
@@ -145,13 +149,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Offset    int64  `json:"offset"`
-		Timeout   int    `json:"timeout"`
-		ChatID    int64  `json:"chat_id"`
-		MessageID int64  `json:"message_id"`
-		Text      string `json:"text"`
-		ParseMode string `json:"parse_mode"`
-		CBID      string `json:"callback_query_id"`
+		Offset    int64          `json:"offset"`
+		Timeout   int            `json:"timeout"`
+		ChatID    int64          `json:"chat_id"`
+		MessageID int64          `json:"message_id"`
+		Text      string         `json:"text"`
+		Entities  []tgapi.Entity `json:"entities"`
+		ParseMode string         `json:"parse_mode"`
+		CBID      string         `json:"callback_query_id"`
 		Markup    *struct {
 			Keyboard tgapi.Keyboard `json:"inline_keyboard"`
 		} `json:"reply_markup"`
@@ -165,9 +170,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		reply(w, false, nil, 400, "Bad Request: tgtest refuses parse_mode")
 		return
 	}
-	if (method == "sendMessage" || method == "editMessageText") && tgapi.TextLen(body.Text) > tgapi.MaxText {
-		reply(w, false, nil, 400, "Bad Request: message is too long")
-		return
+	if method == "sendMessage" || method == "editMessageText" {
+		if tgapi.TextLen(body.Text) > tgapi.MaxText {
+			reply(w, false, nil, 400, "Bad Request: message is too long")
+			return
+		}
+		if msg := CheckEntities(body.Text, body.Entities); msg != "" {
+			reply(w, false, nil, 400, "Bad Request: can't parse entities: "+msg)
+			return
+		}
 	}
 	switch method {
 	case "getMe":
@@ -176,7 +187,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.getUpdates(w, r, body.Offset, time.Duration(body.Timeout)*time.Second)
 	case "sendMessage":
 		s.mu.Lock()
-		m := &Sent{ID: s.nextID, Chat: body.ChatID, Text: body.Text}
+		m := &Sent{ID: s.nextID, Chat: body.ChatID, Text: body.Text, Entities: body.Entities}
 		if body.Markup != nil {
 			m.Keyboard = body.Markup.Keyboard
 		}
@@ -197,7 +208,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 					reply(w, false, nil, 400, "Bad Request: message is not modified")
 					return
 				}
-				m.Text, m.Keyboard = body.Text, kb
+				m.Text, m.Entities, m.Keyboard = body.Text, body.Entities, kb
 				m.Edits++
 				reply(w, true, true, 0, "")
 				return
@@ -261,4 +272,44 @@ func reply(w http.ResponseWriter, ok bool, result any, code int, desc string) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": result})
+}
+
+// CheckEntities applies Telegram's rules for entities and returns what is
+// wrong, or "" when they are fine: known formatting types only, ranges inside
+// the text, ranges that overlap only by one containing the other, nothing
+// inside code or pre, and code or pre inside nothing but blockquote.
+func CheckEntities(text string, es []tgapi.Entity) string {
+	n := tgapi.TextLen(text)
+	for i, e := range es {
+		switch e.Type {
+		case "bold", "italic", "underline", "strikethrough", "code", "pre", "blockquote":
+		default:
+			return "entity type " + e.Type + " is not allowed"
+		}
+		if e.Offset < 0 || e.Length <= 0 || e.Offset+e.Length > n {
+			return "entity " + strconv.Itoa(i) + " is out of range"
+		}
+		for _, f := range es[i+1:] {
+			aEnd, bEnd := e.Offset+e.Length, f.Offset+f.Length
+			if aEnd <= f.Offset || bEnd <= e.Offset {
+				continue
+			}
+			inner, outer := e, f
+			if e.Offset <= f.Offset && aEnd >= bEnd {
+				inner, outer = f, e
+			} else if f.Offset > e.Offset || bEnd < aEnd {
+				return "entities overlap without nesting"
+			}
+			if outer.Type == "code" || outer.Type == "pre" {
+				return "nothing may be inside code or pre"
+			}
+			if (inner.Type == "code" || inner.Type == "pre") && outer.Type != "blockquote" {
+				return "code and pre may only be inside blockquote"
+			}
+			if inner.Type == "blockquote" && outer.Type == "blockquote" {
+				return "blockquotes cannot nest"
+			}
+		}
+	}
+	return ""
 }

@@ -1,7 +1,8 @@
 // Package tgapi is a small client for the Telegram Bot API: long polling for
-// updates, sending and editing plain-text messages, inline buttons, button
-// answers and the typing indicator. It never sets parse_mode, so text is shown
-// exactly as given and can never turn into links or formatting.
+// updates, sending and editing messages, inline buttons, button answers and
+// the typing indicator. It never sets parse_mode: formatting is sent as
+// entities this program computed (bold, italic, code and the like, never
+// links), so no text can turn into markup by itself.
 //
 // The bot token is part of every request URL. Errors never include the URL,
 // so the token cannot leak into logs.
@@ -149,38 +150,60 @@ func (c *Client) Confirm(ctx context.Context, offset int64) error {
 	return c.call(ctx, "getUpdates", map[string]any{"offset": offset, "timeout": 0, "limit": 1}, &out)
 }
 
-// Send sends text to chat, with buttons when kb is not nil.
-func (c *Client) Send(ctx context.Context, chat int64, text string, kb Keyboard) (Message, error) {
+// Send sends t to chat, with buttons when kb is not nil. If Telegram
+// refuses the formatting, the text goes out again without it.
+func (c *Client) Send(ctx context.Context, chat int64, t Text, kb Keyboard) (Message, error) {
 	body := map[string]any{
 		"chat_id":              chat,
-		"text":                 text,
+		"text":                 t.S,
 		"link_preview_options": map[string]bool{"is_disabled": true},
+	}
+	if len(t.Entities) > 0 {
+		body["entities"] = t.Entities
 	}
 	if kb != nil {
 		body["reply_markup"] = map[string]any{"inline_keyboard": kb}
 	}
 	var m Message
 	err := c.call(ctx, "sendMessage", body, &m)
+	if isEntityError(err) {
+		delete(body, "entities")
+		err = c.call(ctx, "sendMessage", body, &m)
+	}
 	return m, err
 }
 
 // Edit replaces the text and buttons of a message the bot sent. A nil kb
 // removes the buttons. An edit that changes nothing is not an error.
-func (c *Client) Edit(ctx context.Context, chat, message int64, text string, kb Keyboard) error {
+func (c *Client) Edit(ctx context.Context, chat, message int64, t Text, kb Keyboard) error {
 	if kb == nil {
 		kb = Keyboard{}
 	}
-	err := c.call(ctx, "editMessageText", map[string]any{
+	body := map[string]any{
 		"chat_id":              chat,
 		"message_id":           message,
-		"text":                 text,
+		"text":                 t.S,
 		"link_preview_options": map[string]bool{"is_disabled": true},
 		"reply_markup":         map[string]any{"inline_keyboard": kb},
-	}, nil)
+	}
+	if len(t.Entities) > 0 {
+		body["entities"] = t.Entities
+	}
+	err := c.call(ctx, "editMessageText", body, nil)
+	if isEntityError(err) {
+		delete(body, "entities")
+		err = c.call(ctx, "editMessageText", body, nil)
+	}
 	if IsNotModified(err) {
 		return nil
 	}
 	return err
+}
+
+// isEntityError reports whether Telegram refused a message's formatting.
+func isEntityError(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Code == http.StatusBadRequest && strings.Contains(strings.ToLower(e.Description), "entit")
 }
 
 // Answer acknowledges a button press, showing text briefly when not empty.

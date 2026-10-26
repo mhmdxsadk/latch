@@ -21,6 +21,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // time_zone works even where the system has no zone files
 
 	"github.com/mhmdxsadk/latch/internal/admin"
 	"github.com/mhmdxsadk/latch/internal/approval"
@@ -156,12 +157,21 @@ func cmdServe(args []string, stderr io.Writer) int {
 
 // newBridge wires the approvals and, when configured, the chat.
 func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error) {
-	b := &bridge{bot: bot, owner: cfg.OwnerID, log: log, now: time.Now}
+	b := &bridge{bot: bot, owner: cfg.OwnerID, log: log, now: time.Now, loc: time.Local}
+	if cfg.TimeZone != "" {
+		loc, err := time.LoadLocation(cfg.TimeZone)
+		if err != nil {
+			return nil, err
+		}
+		b.loc = loc
+	}
+	var agentUID *uint32
 	if a := cfg.Agent; a != nil {
 		acct, err := tgchat.LookupAccount(a.User)
 		if err != nil {
 			return nil, err
 		}
+		agentUID = &acct.UID
 		b.chat, err = tgchat.New(tgchat.Options{
 			Bot:  bot,
 			Chat: cfg.OwnerID,
@@ -184,10 +194,15 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 		Bot:       bot,
 		Chat:      cfg.OwnerID,
 		StatePath: filepath.Join(cfg.StateDir, "approvals.json"),
+		Location:  b.loc,
+		AgentUID:  agentUID,
 		Logger:    log,
 	}
-	if b.chat != nil {
-		opts.OnFinished = func(r approval.Request) { b.chat.Notify(outcome(r)) }
+	if a := cfg.Agent; a != nil {
+		opts.AgentName = a.Name
+		opts.OnFinished = func(r approval.Request) {
+			b.chat.Notify(outcome(r), fmt.Sprintf("Sent %s the result of request %d.", a.Name, r.ID))
+		}
 	}
 	var err error
 	if b.approvals, err = tgapprove.New(opts); err != nil {

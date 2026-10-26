@@ -97,8 +97,8 @@ func TestMessagesRunInTheActiveSession(t *testing.T) {
 	h := newHarness(t, time.Minute)
 	h.send("is caddy healthy?")
 	m := h.waitText("answer to is caddy healthy?")
-	if !strings.HasPrefix(m.Text, "keeper:\n") {
-		t.Errorf("no agent label: %q", m.Text)
+	if !strings.HasPrefix(m.Text, "keeper answer") || len(m.Entities) == 0 || m.Entities[0].Type != "bold" || m.Formatted().Slice(m.Entities[0]) != "keeper" {
+		t.Errorf("no bold agent label: %q %+v", m.Text, m.Entities)
 	}
 	h.send("and jellyfin?")
 	h.waitText("answer to and jellyfin?")
@@ -108,7 +108,7 @@ func TestMessagesRunInTheActiveSession(t *testing.T) {
 	}
 
 	h.send("/new disk check")
-	h.waitText("new conversation: disk check")
+	h.waitText("New conversation: disk check")
 	h.send("how full is /srv?")
 	h.waitText("answer to how full is /srv?")
 	if c := h.run.Calls(); c[2].session == c[0].session {
@@ -116,7 +116,7 @@ func TestMessagesRunInTheActiveSession(t *testing.T) {
 	}
 
 	h.send("/sessions")
-	list := h.waitText("pick a conversation")
+	list := h.waitText("Pick a conversation")
 	if len(list.Keyboard) != 2 || !strings.HasPrefix(list.Keyboard[0][0].Text, "* disk check") || !strings.HasPrefix(list.Keyboard[1][0].Text, "is caddy healthy?") {
 		t.Fatalf("keyboard %+v", list.Keyboard)
 	}
@@ -131,7 +131,7 @@ func TestMessagesRunInTheActiveSession(t *testing.T) {
 	}
 
 	h.send("/rename caddy and jellyfin")
-	h.waitText("renamed to: caddy and jellyfin")
+	h.waitText("Renamed to: caddy and jellyfin")
 	// The index survives a bridge restart.
 	c := h.newChat(time.Minute)
 	if c.index.Active != h.run.Calls()[0].session || len(c.index.Sessions) != 2 || c.index.Sessions[0].Title != "caddy and jellyfin" {
@@ -148,12 +148,12 @@ func TestStop(t *testing.T) {
 	h.send("long job")
 	tgtest.WaitFor(t, "the run to start", func() bool { return len(h.run.Calls()) == 1 })
 	h.send("queued one")
-	h.waitText("queued; keeper is still answering")
+	h.waitText("Queued: keeper is still answering")
 	h.send("/stop")
-	h.waitText("stopping keeper (dropped 1 queued)")
-	h.waitText("Latch: stopped.")
+	h.waitText("Stopping keeper (dropped 1 waiting)")
+	h.waitText("Stopped.")
 	h.send("/stop")
-	h.waitText("nothing running")
+	h.waitText("Nothing running")
 	if n := len(h.run.Calls()); n != 1 {
 		t.Errorf("the dropped message ran: %d calls", n)
 	}
@@ -169,12 +169,12 @@ func TestTimeoutAndFailure(t *testing.T) {
 	h.run.reply = func(string) (string, error) { return "", &RunError{Code: 2, Stderr: "no model"} }
 	h.run.mu.Unlock()
 	h.send("again")
-	h.waitText("Latch: keeper failed (exit status 2: no model).")
+	h.waitText("keeper failed (exit status 2: no model).")
 	h.run.mu.Lock()
 	h.run.reply = func(string) (string, error) { return "", errors.New("fork/exec: secret detail") }
 	h.run.mu.Unlock()
 	h.send("third")
-	m := h.waitText("could not start keeper")
+	m := h.waitText("Could not start keeper")
 	if strings.Contains(m.Text, "secret detail") {
 		t.Error("internal error text shown")
 	}
@@ -187,11 +187,11 @@ func TestAnswersAreCleanedAndSplit(t *testing.T) {
 	h.send("hi")
 	tgtest.WaitFor(t, "three parts", func() bool { return len(h.tg.Sent()) >= 3 })
 	sent := h.tg.Sent()
-	if !strings.HasPrefix(sent[0].Text, "keeper:\nred evil\n") {
+	if !strings.HasPrefix(sent[0].Text, "keeper red evil\n") {
 		t.Errorf("not cleaned: %q", sent[0].Text[:30])
 	}
 	for _, m := range sent {
-		if !strings.HasPrefix(m.Text, "keeper:\n") || tgapi.TextLen(m.Text) > tgapi.MaxText {
+		if !strings.HasPrefix(m.Text, "keeper ") || tgapi.TextLen(m.Text) > tgapi.MaxText || tgtest.CheckEntities(m.Text, m.Entities) != "" {
 			t.Errorf("bad part: %d %q", tgapi.TextLen(m.Text), m.Text[:20])
 		}
 	}
@@ -199,11 +199,11 @@ func TestAnswersAreCleanedAndSplit(t *testing.T) {
 
 func TestNotify(t *testing.T) {
 	h := newHarness(t, time.Minute)
-	h.chat.Notify("ignored: no conversation yet")
+	h.chat.Notify("ignored: no conversation yet", "note")
 	h.send("restart caddy please")
 	h.waitText("answer to restart caddy please")
-	h.chat.Notify("Latch: request 3 was approved and finished: done.")
-	h.waitText("Latch: told keeper: Latch: request 3 was approved")
+	h.chat.Notify("Latch: request 3 was approved and finished: done.", "Sent keeper the result of request 3.")
+	h.waitText("Sent keeper the result of request 3.")
 	h.waitText("answer to Latch: request 3")
 	c := h.run.Calls()
 	if len(c) != 2 || c[1].session != c[0].session {

@@ -28,6 +28,7 @@ type bridge struct {
 	chat      *tgchat.Chat // nil: approvals only
 	log       *slog.Logger
 	now       func() time.Time
+	loc       *time.Location
 }
 
 func (b *bridge) commands() []tgapi.Command {
@@ -113,22 +114,30 @@ func (b *bridge) dispatch(ctx context.Context, u tgapi.Update) {
 		}
 		switch {
 		case len(m.ForwardOrigin) > 0:
-			b.say(ctx, "Latch: forwarded messages are ignored. Type the message yourself.")
+			b.say(ctx, "Forwarded messages are ignored. Type the message yourself.")
 		case m.Text == "":
-			b.say(ctx, "Latch: only text messages are read.")
+			b.say(ctx, "Only text messages are read.")
 		case m.Date > 0 && b.now().Sub(time.Unix(m.Date, 0)) > staleAfter:
-			b.say(ctx, fmt.Sprintf("Latch: ignored a message sent at %s while the bridge was not running. Send it again if it still matters.",
-				time.Unix(m.Date, 0).Local().Format("15:04")))
+			b.say(ctx, fmt.Sprintf("Ignored a message sent at %s while the bridge was not running. Send it again if it still matters.",
+				time.Unix(m.Date, 0).In(b.location()).Format("15:04")))
 		case b.chat != nil:
 			b.chat.HandleText(ctx, m.Text)
 		default:
-			b.say(ctx, "Latch: this bot handles approvals only; chatting with the agent is not set up (agent in telegram.yaml).")
+			b.say(ctx, "This bot handles approvals only; chatting with the agent is not set up (agent in telegram.yaml).")
 		}
 	}
 }
 
+func (b *bridge) location() *time.Location {
+	if b.loc == nil {
+		return time.Local
+	}
+	return b.loc
+}
+
 func (b *bridge) say(ctx context.Context, text string) {
-	if _, err := b.bot.Send(ctx, b.owner, text, nil); err != nil {
+	var t tgapi.Builder
+	if _, err := b.bot.Send(ctx, b.owner, t.Italic(text).Done(), nil); err != nil {
 		b.log.Warn("sending failed", "err", err)
 	}
 }

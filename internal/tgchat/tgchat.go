@@ -4,9 +4,10 @@
 // conversation itself lives in Docker Agent's session database; this package
 // only keeps an index of sessions (id, title, start time) so the owner can
 // switch between them without ever seeing an id. Turns run one at a time, in
-// order. Agent answers are untrusted text: they are sent as plain text,
-// cleaned of control characters and always start with the agent's name, so
-// they cannot pose as a message from Latch.
+// order. Agent answers are untrusted text: they are cleaned of control
+// characters, their Markdown becomes formatting this package computes (never
+// links), and every message of an answer starts with the agent's name in
+// bold. A message that does not start that way comes from Latch.
 package tgchat
 
 import (
@@ -31,8 +32,8 @@ import (
 
 // Bot is the part of the Telegram client the chat uses.
 type Bot interface {
-	Send(ctx context.Context, chat int64, text string, kb tgapi.Keyboard) (tgapi.Message, error)
-	Edit(ctx context.Context, chat, message int64, text string, kb tgapi.Keyboard) error
+	Send(ctx context.Context, chat int64, t tgapi.Text, kb tgapi.Keyboard) (tgapi.Message, error)
+	Edit(ctx context.Context, chat, message int64, t tgapi.Text, kb tgapi.Keyboard) error
 	Answer(ctx context.Context, callbackID, text string) error
 	Typing(ctx context.Context, chat int64) error
 }
@@ -84,7 +85,7 @@ type Chat struct {
 type job struct {
 	session string
 	text    string
-	auto    bool // sent by the bridge, not typed by the owner
+	note    string // shown to the owner for a message the bridge sends
 }
 
 type index struct {
@@ -149,7 +150,7 @@ func (c *Chat) HandleText(ctx context.Context, text string) {
 		return
 	}
 	if len(text) > maxMessage {
-		c.say(ctx, "Latch: that message is too long; keep it under 8 KB.")
+		c.say(ctx, "That message is too long; keep it under 8 KB.")
 		return
 	}
 	c.mu.Lock()
@@ -167,9 +168,10 @@ func (c *Chat) HandleText(ctx context.Context, text string) {
 }
 
 // Notify sends text to the agent in the active session as an automatic
-// message, for example the outcome of a request the owner decided. It never
-// blocks; when the queue is full the message is dropped and logged.
-func (c *Chat) Notify(text string) {
+// message, for example the outcome of a request the owner decided, and shows
+// the owner note instead of the whole text. It never blocks; when the queue
+// is full the message is dropped and logged.
+func (c *Chat) Notify(text, note string) {
 	c.mu.Lock()
 	id := c.index.Active
 	c.mu.Unlock()
@@ -177,7 +179,7 @@ func (c *Chat) Notify(text string) {
 		return // no conversation yet: nobody to tell
 	}
 	select {
-	case c.queue <- job{session: id, text: text, auto: true}:
+	case c.queue <- job{session: id, text: text, note: note}:
 	default:
 		c.o.Logger.Warn("queue full; dropped an automatic message")
 	}
@@ -205,7 +207,7 @@ func (c *Chat) HandlePress(ctx context.Context, cb tgapi.CallbackQuery) bool {
 		c.o.Logger.Warn("answering a button failed", "err", err)
 	}
 	if i >= 0 && cb.Message != nil {
-		_ = c.o.Bot.Edit(ctx, c.o.Chat, cb.Message.MessageID, "Latch: now in "+label, nil)
+		_ = c.o.Bot.Edit(ctx, c.o.Chat, cb.Message.MessageID, note("Now in: "+label), nil)
 	}
 	return true
 }
@@ -213,7 +215,7 @@ func (c *Chat) HandlePress(ctx context.Context, cb tgapi.CallbackQuery) bool {
 func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 	switch cmd {
 	case "start", "help":
-		c.say(ctx, "Latch: send a message and "+c.o.Name+" answers it. Changes it asks for show up here with Approve and Deny buttons.\n"+
+		c.say(ctx, "Send a message and "+c.o.Name+" answers it. Changes it asks for show up here with Approve and Deny buttons.\n"+
 			"/new [name] starts a new conversation, /sessions switches, /rename names this one, /stop stops the running answer.")
 	case "new":
 		c.mu.Lock()
@@ -223,10 +225,10 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 		if err != nil {
 			c.o.Logger.Warn("saving the session index failed", "err", err)
 		}
-		c.say(ctx, "Latch: new conversation: "+s.label())
+		c.say(ctx, "New conversation: "+s.label())
 	case "rename":
 		if strings.TrimSpace(arg) == "" {
-			c.say(ctx, "Latch: usage: /rename name")
+			c.say(ctx, "Usage: /rename name")
 			return
 		}
 		c.mu.Lock()
@@ -237,14 +239,14 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 		if err != nil {
 			c.o.Logger.Warn("saving the session index failed", "err", err)
 		}
-		c.say(ctx, "Latch: renamed to: "+s.label())
+		c.say(ctx, "Renamed to: "+s.label())
 	case "sessions":
 		c.mu.Lock()
 		list := slices.Clone(c.index.Sessions)
 		active := c.index.Active
 		c.mu.Unlock()
 		if len(list) == 0 {
-			c.say(ctx, "Latch: no conversations yet. Send a message to start one.")
+			c.say(ctx, "No conversations yet. Send a message to start one.")
 			return
 		}
 		slices.Reverse(list) // newest first
@@ -256,7 +258,7 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 			}
 			kb = append(kb, []tgapi.Button{{Text: text, Data: "s:" + s.ID}})
 		}
-		if _, err := c.o.Bot.Send(ctx, c.o.Chat, "Latch: pick a conversation", kb); err != nil {
+		if _, err := c.o.Bot.Send(ctx, c.o.Chat, note("Pick a conversation:"), kb); err != nil {
 			c.o.Logger.Warn("sending failed", "err", err)
 		}
 	case "stop":
@@ -278,12 +280,12 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 		c.mu.Unlock()
 		switch {
 		case running:
-			c.say(ctx, fmt.Sprintf("Latch: stopping %s (dropped %d queued).", c.o.Name, dropped))
+			c.say(ctx, fmt.Sprintf("Stopping %s (dropped %d waiting).", c.o.Name, dropped))
 		default:
-			c.say(ctx, fmt.Sprintf("Latch: nothing running (dropped %d queued).", dropped))
+			c.say(ctx, fmt.Sprintf("Nothing running (dropped %d waiting).", dropped))
 		}
 	default:
-		c.say(ctx, "Latch: unknown command. Try /help.")
+		c.say(ctx, "Unknown command. Try /help.")
 	}
 }
 
@@ -294,10 +296,10 @@ func (c *Chat) enqueue(ctx context.Context, j job) {
 		busy := c.cancel != nil
 		c.mu.Unlock()
 		if busy {
-			c.say(ctx, "Latch: queued; "+c.o.Name+" is still answering.")
+			c.say(ctx, "Queued: "+c.o.Name+" is still answering.")
 		}
 	default:
-		c.say(ctx, "Latch: too many messages waiting. Wait for an answer or use /stop.")
+		c.say(ctx, "Too many messages waiting. Wait for an answer or use /stop.")
 	}
 }
 
@@ -310,8 +312,8 @@ func (c *Chat) turn(parent context.Context, j job) {
 	c.mu.Lock()
 	c.cancel = func() { once.Do(func() { close(stopped); cancel() }) }
 	c.mu.Unlock()
-	if j.auto {
-		c.say(parent, "Latch: told "+c.o.Name+": "+j.text)
+	if j.note != "" {
+		c.say(parent, j.note)
 	}
 	defer func() {
 		c.mu.Lock()
@@ -343,49 +345,62 @@ func (c *Chat) turn(parent context.Context, j job) {
 	}
 	select {
 	case <-stopped:
-		c.say(parent, "Latch: stopped.")
+		c.say(parent, "Stopped.")
 		return
 	default:
 	}
 	var re *RunError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		c.say(parent, fmt.Sprintf("Latch: %s did not finish within %s and was stopped.", c.o.Name, c.o.Timeout))
+		c.say(parent, fmt.Sprintf("%s did not finish within %s and was stopped.", c.o.Name, c.o.Timeout))
 		return
 	case errors.As(err, &re):
-		c.say(parent, fmt.Sprintf("Latch: %s failed (%s).", c.o.Name, re.Error()))
+		c.say(parent, fmt.Sprintf("%s failed (%s).", c.o.Name, re.Error()))
 		return
 	case err != nil:
 		c.o.Logger.Warn("agent run failed", "err", err)
-		c.say(parent, "Latch: could not start "+c.o.Name+"; see the latch-telegram log.")
+		c.say(parent, "Could not start "+c.o.Name+"; see the latch-telegram log.")
 		return
 	}
 	c.answer(parent, out)
 }
 
-// answer sends the agent's answer, cleaned and split, each part labelled.
+// answer sends the agent's answer, formatted and split, each part starting
+// with the agent's name in bold.
 func (c *Chat) answer(ctx context.Context, out string) {
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	for i, l := range lines {
-		lines[i] = textsafe.Line(l)
+	body := Markdown(out)
+	if strings.TrimSpace(body.S) == "" {
+		body = tgapi.Plain("(no answer)")
 	}
-	text := strings.TrimSpace(strings.Join(lines, "\n"))
-	if text == "" {
-		text = "(no answer)"
-	}
-	prefix := c.o.Name + ":\n"
-	for _, part := range tgapi.Split(text, tgapi.MaxText-tgapi.TextLen(prefix)) {
-		if _, err := c.o.Bot.Send(ctx, c.o.Chat, prefix+part, nil); err != nil {
+	head := c.o.Name + " "
+	for _, part := range tgapi.SplitText(body, tgapi.MaxText-tgapi.TextLen(head)-1) {
+		var b tgapi.Builder
+		b.Bold(c.o.Name)
+		// Blocks read better on a line of their own.
+		if strings.HasPrefix(part.S, "• ") || (len(part.Entities) > 0 && part.Entities[0].Offset == 0 &&
+			(part.Entities[0].Type == "pre" || part.Entities[0].Type == "blockquote")) {
+			b.Plain("\n")
+		} else {
+			b.Plain(" ")
+		}
+		b.Text(part)
+		if _, err := c.o.Bot.Send(ctx, c.o.Chat, b.Done(), nil); err != nil {
 			c.o.Logger.Warn("sending an answer failed", "err", err)
 			return
 		}
 	}
 }
 
+// say sends a short note from the bridge, in italics.
 func (c *Chat) say(ctx context.Context, text string) {
-	if _, err := c.o.Bot.Send(ctx, c.o.Chat, text, nil); err != nil {
+	if _, err := c.o.Bot.Send(ctx, c.o.Chat, note(text), nil); err != nil {
 		c.o.Logger.Warn("sending failed", "err", err)
 	}
+}
+
+func note(s string) tgapi.Text {
+	var b tgapi.Builder
+	return b.Italic(s).Done()
 }
 
 // activeLocked returns the active session, starting one if there is none.

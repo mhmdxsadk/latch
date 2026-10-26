@@ -13,6 +13,10 @@ owner_id: 123456789
 # token_file: /run/secrets-broker/latch/secrets.env
 # token_key: TELEGRAM_BOT_TOKEN
 
+# Your time zone, for the times shown in the chat (request expiry, undo
+# deadlines). An IANA name; default: the server's time zone.
+# time_zone: Europe/Berlin
+
 # admin_socket: /run/latch/admin.sock
 # state_dir: /var/lib/latch-telegram
 

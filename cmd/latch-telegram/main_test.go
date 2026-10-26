@@ -56,6 +56,12 @@ func TestConfigErrors(t *testing.T) {
 			t.Errorf("%q: err = %v, want %q", tc.body, err, tc.want)
 		}
 	}
+	if _, err := loadConfig(writeConfig(t, "owner_id: 1\ntime_zone: Mars/Olympus\n")); err == nil || !strings.Contains(err.Error(), "time_zone") {
+		t.Errorf("bad time zone: %v", err)
+	}
+	if c, err := loadConfig(writeConfig(t, "owner_id: 1\ntime_zone: Europe/Berlin\n")); err != nil || c.TimeZone != "Europe/Berlin" {
+		t.Errorf("time zone: %v", err)
+	}
 	c, err := loadConfig(writeConfig(t, "owner_id: 5\n"))
 	if err != nil || c.Agent != nil || c.AdminSocket != defaultAdminSocket {
 		t.Fatalf("approvals only: %v %+v", err, c)
@@ -212,7 +218,7 @@ func TestOddMessages(t *testing.T) {
 	b.dispatch(ctx, old)
 	tgtest.WaitFor(t, "three replies", func() bool { return len(tg.Sent()) == 3 })
 	s := tg.Sent()
-	for i, want := range []string{"forwarded messages are ignored", "only text messages", "while the bridge was not running"} {
+	for i, want := range []string{"Forwarded messages are ignored", "Only text messages", "while the bridge was not running"} {
 		if !strings.Contains(s[i].Text, want) {
 			t.Errorf("reply %d = %q, want %q", i, s[i].Text, want)
 		}

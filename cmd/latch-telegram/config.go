@@ -38,6 +38,9 @@ type Config struct {
 	TokenKey    string `yaml:"token_key"`
 	AdminSocket string `yaml:"admin_socket"`
 	StateDir    string `yaml:"state_dir"`
+	// TimeZone is the owner's time zone for times shown in the chat, an
+	// IANA name like Europe/Berlin. Default: the server's.
+	TimeZone string `yaml:"time_zone"`
 	// Agent is optional: without it the bot only handles approvals.
 	Agent *AgentConfig `yaml:"agent"`
 }
@@ -141,6 +144,11 @@ func (c *Config) validate() error {
 		}
 	}
 	absPath("token_file", c.TokenFile)
+	if c.TimeZone != "" {
+		if _, err := time.LoadLocation(c.TimeZone); err != nil {
+			add("time_zone: %q is not a time zone name like Europe/Berlin", c.TimeZone)
+		}
+	}
 	if c.TokenKey != "" && !envKey.MatchString(c.TokenKey) {
 		add("token_key: %q must be an environment variable name like TELEGRAM_BOT_TOKEN", c.TokenKey)
 	}

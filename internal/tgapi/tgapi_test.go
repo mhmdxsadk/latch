@@ -18,14 +18,14 @@ func TestSendEditAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	kb := tgapi.Keyboard{{{Text: "Approve", Data: "a:1"}}}
-	m, err := c.Send(ctx, 42, "hello <b>", kb)
+	m, err := c.Send(ctx, 42, tgapi.Plain("hello <b>"), kb)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Edit(ctx, 42, m.MessageID, "done", nil); err != nil {
+	if err := c.Edit(ctx, 42, m.MessageID, tgapi.Plain("done"), nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Edit(ctx, 42, m.MessageID, "done", nil); err != nil {
+	if err := c.Edit(ctx, 42, m.MessageID, tgapi.Plain("done"), nil); err != nil {
 		t.Fatalf("unchanged edit: %v", err)
 	}
 	got := srv.Sent()
@@ -54,7 +54,7 @@ func TestUpdates(t *testing.T) {
 
 func TestErrorsNeverShowTheToken(t *testing.T) {
 	c := tgapi.New("http://127.0.0.1:1", "999:secret-token-value")
-	_, err := c.Send(context.Background(), 1, "x", nil)
+	_, err := c.Send(context.Background(), 1, tgapi.Plain("x"), nil)
 	if err == nil || strings.Contains(err.Error(), "secret-token-value") {
 		t.Fatalf("err = %v", err)
 	}
@@ -88,5 +88,50 @@ func TestSplit(t *testing.T) {
 	}
 	if n := tgapi.TextLen("a😀é"); n != 4 {
 		t.Errorf("TextLen = %d", n)
+	}
+}
+
+func TestFormattedTextAndFallback(t *testing.T) {
+	srv := tgtest.New(t)
+	c := srv.Client()
+	ctx := context.Background()
+	var b tgapi.Builder
+	b.Bold("Request 5").Plain(" on ").Code("/root/hello.txt").Plain("\n").Pre("hello", "")
+	if _, err := c.Send(ctx, 1, b.Done(), nil); err != nil {
+		t.Fatal(err)
+	}
+	m := srv.Sent()[0]
+	f := m.Formatted()
+	if len(f.Entities) != 3 || f.Slice(f.Entities[0]) != "Request 5" || f.Slice(f.Entities[1]) != "/root/hello.txt" || f.Slice(f.Entities[2]) != "hello" {
+		t.Fatalf("%+v", f)
+	}
+	// Formatting Telegram refuses (code inside code) falls back to plain text.
+	bad := tgapi.Text{S: "abc", Entities: []tgapi.Entity{{Type: "code", Offset: 0, Length: 3}, {Type: "bold", Offset: 1, Length: 1}}}
+	if _, err := c.Send(ctx, 1, bad, nil); err != nil {
+		t.Fatal(err)
+	}
+	if m := srv.Sent()[1]; m.Text != "abc" || len(m.Entities) != 0 {
+		t.Fatalf("fallback: %+v", m)
+	}
+}
+
+func TestSplitTextCarriesFormatting(t *testing.T) {
+	var b tgapi.Builder
+	b.Bold("aaaa bbbb").Plain(" cccc ").Code("dd😀d")
+	parts := tgapi.SplitText(b.Done(), 10)
+	if len(parts) != 2 {
+		t.Fatalf("%+v", parts)
+	}
+	for _, p := range parts {
+		if msg := tgtest.CheckEntities(p.S, p.Entities); msg != "" {
+			t.Errorf("%q: %s", p.S, msg)
+		}
+	}
+	if parts[0].S != "aaaa bbbb" || parts[0].Slice(parts[0].Entities[0]) != "aaaa bbbb" {
+		t.Errorf("part 0 %+v", parts[0])
+	}
+	last := parts[1]
+	if last.S != "cccc dd😀d" || len(last.Entities) != 1 || last.Slice(last.Entities[0]) != "dd😀d" {
+		t.Errorf("last %+v", last)
 	}
 }

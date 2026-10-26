@@ -44,8 +44,8 @@ type Admin interface {
 
 // Bot is the part of the Telegram client the approver uses.
 type Bot interface {
-	Send(ctx context.Context, chat int64, text string, kb tgapi.Keyboard) (tgapi.Message, error)
-	Edit(ctx context.Context, chat, message int64, text string, kb tgapi.Keyboard) error
+	Send(ctx context.Context, chat int64, t tgapi.Text, kb tgapi.Keyboard) (tgapi.Message, error)
+	Edit(ctx context.Context, chat, message int64, t tgapi.Text, kb tgapi.Keyboard) error
 	Answer(ctx context.Context, callbackID, text string) error
 }
 
@@ -69,7 +69,12 @@ type Options struct {
 	StatePath string
 	Interval  time.Duration
 	Now       func() time.Time
-	Location  *time.Location
+	// Location is the owner's time zone for the times shown.
+	Location *time.Location
+	// AgentName and AgentUID name requests from the agent's account ("From
+	// keeper" rather than "From uid 1000"). Optional.
+	AgentName string
+	AgentUID  *uint32
 	Logger    *slog.Logger
 	// OnFinished is called once when a request the owner was asked about
 	// ends, however it was decided. The chat bridge uses it to tell the
@@ -198,7 +203,7 @@ func (a *Approver) updateLocked(ctx context.Context, r approval.Request) {
 				a.o.Logger.Warn("announcing a request failed", "id", r.ID, "err", err)
 				return // tried again next round
 			}
-			a.state.Requests[r.ID] = &shown{Message: m.MessageID, Text: hash(text)}
+			a.state.Requests[r.ID] = &shown{Message: m.MessageID, Text: hashText(text)}
 		case !r.NeedsApproval && !final:
 			// An automatic restart still running: wait for its outcome.
 		case !r.NeedsApproval && a.o.Now().Sub(r.FinishedAt) < noticeWindow:
@@ -220,12 +225,12 @@ func (a *Approver) updateLocked(ctx context.Context, r approval.Request) {
 		return
 	}
 	text, kb := a.render(r)
-	if hash(text) != s.Text {
+	if hashText(text) != s.Text {
 		if err := a.o.Bot.Edit(ctx, a.o.Chat, s.Message, text, kb); err != nil {
 			a.o.Logger.Warn("updating a request message failed", "id", r.ID, "err", err)
 			return
 		}
-		s.Text = hash(text)
+		s.Text = hashText(text)
 	}
 	if final {
 		s.Final = true
@@ -238,12 +243,15 @@ func (a *Approver) updateLocked(ctx context.Context, r approval.Request) {
 // goneLocked marks a shown request Latch no longer knows: Latch keeps
 // pending requests in memory only, so a restart forgets them.
 func (a *Approver) goneLocked(ctx context.Context, id int64, s *shown) {
-	text := fmt.Sprintf("Latch request %d is gone: Latch no longer knows it (it restarted, or the request was forgotten). Nothing will run.", id)
+	var b tgapi.Builder
+	b.Bold(fmt.Sprintf("Request %d is gone", id))
+	b.Plain("\nLatch no longer knows it (it restarted, or forgot the request). Nothing will run.")
+	text := b.Done()
 	if err := a.o.Bot.Edit(ctx, a.o.Chat, s.Message, text, nil); err != nil {
 		a.o.Logger.Warn("updating a request message failed", "id", id, "err", err)
 		return
 	}
-	s.Text, s.Final = hash(text), true
+	s.Text, s.Final = hashText(text), true
 }
 
 // HandlePress handles a button press. It reports false when the data is not
@@ -305,15 +313,14 @@ func (a *Approver) decide(ctx context.Context, approve bool, id int64, fp string
 }
 
 // render is the message for r and its buttons (nil when it is decided).
-func (a *Approver) render(r approval.Request) (string, tgapi.Keyboard) {
+func (a *Approver) render(r approval.Request) (tgapi.Text, tgapi.Keyboard) {
 	if r.Status != approval.StatusPending {
 		return a.outcome(r), nil
 	}
 	head, body := a.pendingText(r)
 	fp := fingerprint(r)
 	deny := tgapi.Button{Text: "Deny", Data: data(false, r.ID, fp)}
-	full := head + "\n\n" + strings.Join(body, "\n")
-	if tgapi.TextLen(full) <= tgapi.MaxText {
+	if full := join(head, body); full.Len() <= tgapi.MaxText {
 		return full, tgapi.Keyboard{{{Text: "Approve", Data: data(true, r.ID, fp)}, deny}}
 	}
 	return a.shortened(r, head, body), tgapi.Keyboard{{deny}}
@@ -321,91 +328,204 @@ func (a *Approver) render(r approval.Request) (string, tgapi.Keyboard) {
 
 func (a *Approver) tooLong(r approval.Request) bool {
 	head, body := a.pendingText(r)
-	return tgapi.TextLen(head+"\n\n"+strings.Join(body, "\n")) > tgapi.MaxText
+	return join(head, body).Len() > tgapi.MaxText
 }
 
-// shortened shows as much of a long change as fits and says where to read
-// and approve the rest.
-func (a *Approver) shortened(r approval.Request, head string, body []string) string {
-	tail := fmt.Sprintf("\n... %%d more lines not shown.\nThis change is too long to show here in full, so it has no Approve button. Read and approve it on the server: latch pending, then latch approve %d", r.ID)
-	budget := tgapi.MaxText - tgapi.TextLen(head) - tgapi.TextLen(tail) - 16
-	var b strings.Builder
-	n := 0
-	for _, l := range body {
-		if tgapi.TextLen(b.String())+tgapi.TextLen(l)+1 > budget {
+// join puts the blocks of a message together, a blank line between the head
+// and the body, a line break between body blocks.
+func join(head tgapi.Text, body []tgapi.Text) tgapi.Text {
+	var b tgapi.Builder
+	b.Text(head)
+	for i, t := range body {
+		if i == 0 {
+			b.Plain("\n\n")
+		} else {
+			b.Plain("\n")
+		}
+		b.Text(t)
+	}
+	return b.Done()
+}
+
+// shortened shows as many blocks of a long change as fit and says where to
+// read and approve the rest.
+func (a *Approver) shortened(r approval.Request, head tgapi.Text, body []tgapi.Text) tgapi.Text {
+	var tail tgapi.Builder
+	tail.Italic("Too long to show in full, so there is no Approve button. Read and approve it on the server: ")
+	tail.Code(fmt.Sprintf("latch approve %d", r.ID))
+	budget := tgapi.MaxText - head.Len() - tail.Len() - 40
+	var kept []tgapi.Text
+	used := 0
+	for _, t := range body {
+		if used+t.Len()+1 > budget {
+			// A block that does not fit is cut, never shown in part as if
+			// it were whole: say so.
+			kept = append(kept, tgapi.Plain(fmt.Sprintf("... %d more block(s) not shown.", len(body)-len(kept))))
 			break
 		}
-		b.WriteString("\n" + l)
-		n++
+		kept = append(kept, t)
+		used += t.Len() + 1
 	}
-	return head + "\n" + b.String() + fmt.Sprintf(tail, len(body)-n)
+	return join(head, append(kept, tail.Done()))
 }
 
-func (a *Approver) pendingText(r approval.Request) (string, []string) {
-	var head string
+// pendingText is the head (title, what, who and when) and the body blocks
+// of a waiting request.
+func (a *Approver) pendingText(r approval.Request) (tgapi.Text, []tgapi.Text) {
+	var b tgapi.Builder
 	if r.RunsOnTimeout {
-		head = fmt.Sprintf("Latch undo request %d\n%s on %s %s\nFiled by Latch because a change did not come up. RUNS BY ITSELF at %s unless you deny it.",
-			r.ID, clean(r.Action), clean(r.Resource.Type), clean(r.Resource.Name), a.clock(r.ExpiresAt))
+		b.Bold(fmt.Sprintf("Undo request %d: runs by itself at %s", r.ID, a.clock(r.ExpiresAt)))
+		b.Plain("\n")
+		a.what(&b, r)
+		b.Plain("\nA change did not come up, so Latch filed this. Approve to undo now, deny to keep the change.")
 	} else {
-		head = fmt.Sprintf("Latch request %d needs your approval\n%s on %s %s\nAsked by uid %d, expires at %s.",
-			r.ID, clean(r.Action), clean(r.Resource.Type), clean(r.Resource.Name), r.RequestedBy.UID, a.clock(r.ExpiresAt))
+		b.Bold(fmt.Sprintf("Request %d needs your approval", r.ID))
+		b.Plain("\n")
+		a.what(&b, r)
+		b.Plain(fmt.Sprintf("\nFrom %s, expires %s", a.who(r.RequestedBy.UID), a.clock(r.ExpiresAt)))
 	}
-	var body []string
-	for _, d := range r.Details {
-		body = append(body, clean(d))
+	return b.Done(), a.details(r)
+}
+
+// what is the action and what it changes: "file_create on /root/hello.txt".
+func (a *Approver) what(b *tgapi.Builder, r approval.Request) {
+	b.Code(clean(r.Action))
+	b.Plain(" on " + clean(r.Resource.Type) + " ")
+	b.Code(clean(r.Resource.Name))
+}
+
+func (a *Approver) who(uid uint32) string {
+	if a.o.AgentName != "" && a.o.AgentUID != nil && *a.o.AgentUID == uid {
+		return a.o.AgentName
 	}
+	return fmt.Sprintf("uid %d", uid)
+}
+
+// details turns Latch's description lines into blocks: a unified diff and
+// file content become code blocks, everything else stays plain. Params that
+// the description already states (the path, the mode) are left out.
+func (a *Approver) details(r approval.Request) []tgapi.Text {
+	lines := make([]string, len(r.Details))
+	for i, d := range r.Details {
+		lines[i] = clean(d)
+	}
+	var out []tgapi.Text
+	for i := 0; i < len(lines); i++ {
+		l := lines[i]
+		switch {
+		case strings.HasPrefix(l, "--- ") && i+1 < len(lines) && strings.HasPrefix(lines[i+1], "+++ "):
+			var diff []string
+			for i += 2; i < len(lines) && isDiffLine(lines[i]); i++ {
+				diff = append(diff, lines[i])
+			}
+			i--
+			var b tgapi.Builder
+			out = append(out, b.Pre(strings.Join(diff, "\n"), "diff").Done())
+		case l == "content:":
+			var body []string
+			for i++; i < len(lines) && (strings.HasPrefix(lines[i], "  ") || lines[i] == ""); i++ {
+				body = append(body, strings.TrimPrefix(lines[i], "  "))
+			}
+			i--
+			var b tgapi.Builder
+			b.Plain("Content:\n")
+			out = append(out, b.Pre(strings.Join(body, "\n"), "").Done())
+		default:
+			out = append(out, tgapi.Plain(l))
+		}
+	}
+	all := strings.Join(lines, "\n")
 	for _, p := range r.Params {
-		body = append(body, clean(p.Name)+": "+clean(p.Value))
+		if v := clean(p.Value); v != "" && strings.Contains(all, v) {
+			continue
+		}
+		var b tgapi.Builder
+		b.Plain(clean(p.Name) + ": ")
+		b.Code(clean(p.Value))
+		out = append(out, b.Done())
 	}
-	return head, body
+	return out
+}
+
+func isDiffLine(l string) bool {
+	return l == "" || strings.HasPrefix(l, "@@") || l[0] == ' ' || l[0] == '-' || l[0] == '+' || strings.HasPrefix(l, "... ")
 }
 
 // outcome is the message for a request that is no longer pending.
-func (a *Approver) outcome(r approval.Request) string {
-	how := ""
-	switch {
-	case r.DecidedBy == nil && r.RunsOnTimeout && r.Status != approval.StatusExpired:
-		how = " (nobody decided in time, so it ran by itself)"
-	case r.DecidedVia == approval.ViaTelegram:
-		how = " (decided in Telegram)"
-	case r.DecidedBy != nil:
-		how = " (decided on the server)"
-	}
+func (a *Approver) outcome(r approval.Request) tgapi.Text {
+	var b tgapi.Builder
 	status := string(r.Status)
 	switch r.Status {
 	case approval.StatusApproved, approval.StatusRunning:
 		status = "approved, running"
+	case approval.StatusExpired:
+		status = "expired, nobody decided"
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "Latch request %d: %s%s\n%s on %s %s", r.ID, status, how, clean(r.Action), clean(r.Resource.Type), clean(r.Resource.Name))
-	writeResult(&b, r)
-	return fit(b.String())
+	if r.Status == approval.StatusDenied {
+		b.Bold(fmt.Sprintf("Request %d: %s", r.ID, a.how(r)))
+	} else {
+		b.Bold(fmt.Sprintf("Request %d: %s", r.ID, status))
+		if how := a.how(r); how != "" {
+			b.Plain(" (" + how + ")")
+		}
+	}
+	b.Plain("\n")
+	a.what(&b, r)
+	a.writeResult(&b, r)
+	return fit(b.Done())
+}
+
+func (a *Approver) how(r approval.Request) string {
+	where := "on the server"
+	if r.DecidedVia == approval.ViaTelegram {
+		where = "in Telegram"
+	}
+	switch {
+	case r.DecidedBy == nil && r.RunsOnTimeout && r.Status != approval.StatusExpired:
+		return "nobody decided in time, so it ran by itself"
+	case r.DecidedBy == nil:
+		return ""
+	case r.Status == approval.StatusDenied:
+		return "denied " + where
+	default:
+		return "approved " + where
+	}
 }
 
 // notice is the one-off message for an automatic change.
-func (a *Approver) notice(r approval.Request) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Latch ran request %d automatically: %s on %s %s, %s", r.ID, clean(r.Action), clean(r.Resource.Type), clean(r.Resource.Name), r.Status)
-	writeResult(&b, r)
-	return fit(b.String())
+func (a *Approver) notice(r approval.Request) tgapi.Text {
+	var b tgapi.Builder
+	b.Bold(fmt.Sprintf("Automatic change %d: %s", r.ID, r.Status))
+	b.Plain("\n")
+	a.what(&b, r)
+	a.writeResult(&b, r)
+	return fit(b.Done())
 }
 
-func writeResult(b *strings.Builder, r approval.Request) {
+func (a *Approver) writeResult(b *tgapi.Builder, r approval.Request) {
 	if r.Result == nil {
 		return
 	}
-	fmt.Fprintf(b, "\nresult: %s", clean(r.Result.Summary))
-	for _, d := range r.Result.Details {
-		fmt.Fprintf(b, "\n  %s", clean(d))
+	b.Plain("\n" + clean(r.Result.Summary))
+	if len(r.Result.Details) > 0 {
+		lines := make([]string, len(r.Result.Details))
+		for i, d := range r.Result.Details {
+			lines[i] = clean(d)
+		}
+		b.Plain("\n")
+		b.Pre(strings.Join(lines, "\n"), "")
 	}
 }
 
-// fit cuts text that is too long for one message.
-func fit(s string) string {
-	if tgapi.TextLen(s) <= tgapi.MaxText {
-		return s
+// fit cuts a message that is too long; the full result is in latch requests.
+func fit(t tgapi.Text) tgapi.Text {
+	if t.Len() <= tgapi.MaxText {
+		return t
 	}
-	return tgapi.Split(s, tgapi.MaxText-40)[0] + "\n... (cut; see latch requests)"
+	var b tgapi.Builder
+	b.Text(tgapi.SplitText(t, tgapi.MaxText-60)[0])
+	b.Italic("\n... cut; see latch requests on the server")
+	return b.Done()
 }
 
 func (a *Approver) clock(t time.Time) string {
@@ -468,8 +588,10 @@ func isFinal(st approval.Status) bool {
 	return false
 }
 
-func hash(s string) string {
-	h := sha256.Sum256([]byte(s))
+// hashText identifies what a message shows, formatting included.
+func hashText(t tgapi.Text) string {
+	b, _ := json.Marshal(t)
+	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:8])
 }
 

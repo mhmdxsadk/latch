@@ -160,7 +160,7 @@ func TestAnnounceApproveAndUpdate(t *testing.T) {
 		t.Fatalf("sent %+v", sent)
 	}
 	m := sent[0]
-	for _, want := range []string{"request 1 needs your approval", "docker_stop on container jellyfin", "stop container jellyfin", "pull: false", "uid 1000"} {
+	for _, want := range []string{"Request 1 needs your approval", "docker_stop on container jellyfin", "stop container jellyfin", "pull: false", "From uid 1000, expires"} {
 		if !strings.Contains(m.Text, want) {
 			t.Errorf("message lacks %q:\n%s", want, m.Text)
 		}
@@ -181,7 +181,7 @@ func TestAnnounceApproveAndUpdate(t *testing.T) {
 	}
 	h.poll()
 	m = h.tg.Sent()[0]
-	if !strings.Contains(m.Text, "request 1: done (decided in Telegram)") || !strings.Contains(m.Text, "result: stopped") || m.Keyboard != nil {
+	if !strings.Contains(m.Text, "Request 1: done (approved in Telegram)") || !strings.Contains(m.Text, "\nstopped\nstate exited") || m.Keyboard != nil {
 		t.Fatalf("after approval: %q %+v", m.Text, m.Keyboard)
 	}
 	got, _ := h.store.Get(r.ID)
@@ -204,7 +204,7 @@ func TestDecidedOnTheServer(t *testing.T) {
 	}
 	h.poll()
 	m := h.tg.Sent()[0]
-	if !strings.Contains(m.Text, "request 1: denied (decided on the server)") || m.Keyboard != nil {
+	if !strings.Contains(m.Text, "Request 1: denied on the server") || m.Keyboard != nil {
 		t.Fatalf("%q %+v", m.Text, m.Keyboard)
 	}
 	// The old button now only explains.
@@ -246,7 +246,7 @@ func TestLongChangeHasNoApproveButton(t *testing.T) {
 	if len(m.Keyboard) != 1 || len(m.Keyboard[0]) != 1 || m.Keyboard[0][0].Text != "Deny" {
 		t.Fatalf("keyboard %+v", m.Keyboard)
 	}
-	if !strings.Contains(m.Text, "more lines not shown") || !strings.Contains(m.Text, "latch approve 1") {
+	if !strings.Contains(m.Text, "more block(s) not shown") || !strings.Contains(m.Text, "latch approve 1") {
 		t.Fatalf("text:\n%s", m.Text)
 	}
 	// A hand-made Approve press is refused too.
@@ -283,7 +283,7 @@ func TestLatchRestartMarksRequestsGone(t *testing.T) {
 	h.serve(approval.New(approval.Options{})) // Latch restarts and forgets
 	h.poll()
 	m := h.tg.Sent()[0]
-	if !strings.Contains(m.Text, "request 1 is gone") || m.Keyboard != nil {
+	if !strings.Contains(m.Text, "Request 1 is gone") || m.Keyboard != nil {
 		t.Fatalf("%q %+v", m.Text, m.Keyboard)
 	}
 }
@@ -295,7 +295,7 @@ func TestAutomaticRestartNotice(t *testing.T) {
 	h.poll()
 	h.poll()
 	sent := h.tg.Sent()
-	if len(sent) != 1 || !strings.Contains(sent[0].Text, "ran request 1 automatically: docker_restart on container caddy, done") || sent[0].Keyboard != nil {
+	if len(sent) != 1 || !strings.Contains(sent[0].Text, "Automatic change 1: done\ndocker_restart on container caddy") || sent[0].Keyboard != nil {
 		t.Fatalf("%+v", sent)
 	}
 }
@@ -307,8 +307,8 @@ func TestUndoRequestShowsDeadline(t *testing.T) {
 	r := h.submit(u)
 	h.poll()
 	m := h.tg.Sent()[0]
-	want := "RUNS BY ITSELF at " + r.ExpiresAt.UTC().Format("15:04")
-	if !strings.Contains(m.Text, "Latch undo request 1") || !strings.Contains(m.Text, want) || len(m.Keyboard[0]) != 2 {
+	want := "Undo request 1: runs by itself at " + r.ExpiresAt.UTC().Format("15:04")
+	if !strings.Contains(m.Text, want) || len(m.Keyboard[0]) != 2 {
 		t.Fatalf("%q %+v", m.Text, m.Keyboard)
 	}
 }
@@ -326,5 +326,67 @@ func TestHandlePressIgnoresOtherButtons(t *testing.T) {
 	}
 	if a, ok := h.tg.Answer("cb1"); !ok || a != "Denied request 1." {
 		t.Errorf("answer %q %v", a, ok)
+	}
+}
+
+type fileAction struct {
+	action
+	params []approval.Param
+}
+
+func (f fileAction) Params() []approval.Param { return f.params }
+
+func TestFileRequestsAreFormatted(t *testing.T) {
+	h := newHarness(t)
+	uid := uint32(1000)
+	h.a.o.AgentName, h.a.o.AgentUID = "keeper", &uid
+
+	create := fileAction{action: action{kind: "file_create", name: "/root/hello.txt", mode: approval.Always, runs: &h.runs,
+		details: []string{"create /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)", "content:", "  hello"}},
+		params: []approval.Param{{Name: "path", Value: "/root/hello.txt"}, {Name: "mode", Value: "0644"}}}
+	edit := fileAction{action: action{kind: "file_edit", name: "/etc/caddy/Caddyfile", mode: approval.Always, runs: &h.runs,
+		details: []string{"edit /etc/caddy/Caddyfile", "--- /etc/caddy/Caddyfile (now)", "+++ /etc/caddy/Caddyfile (after the change)",
+			"@@ -1,2 +1,2 @@", " example.com {", "-  respond 404", "+  respond 200", "then restart container caddy and check it"}},
+		params: []approval.Param{{Name: "path", Value: "/etc/caddy/Caddyfile"}, {Name: "restart", Value: "container caddy"}, {Name: "backup", Value: "b1"}}}
+	h.submit(create)
+	h.submit(edit)
+	h.poll()
+	sent := h.tg.Sent()
+	if len(sent) != 2 {
+		t.Fatalf("%+v", sent)
+	}
+	for _, m := range sent {
+		if msg := tgtest.CheckEntities(m.Text, m.Entities); msg != "" {
+			t.Fatalf("Telegram would refuse %q: %s", m.Text, msg)
+		}
+	}
+	wantCreate := "Request 1 needs your approval\nfile_create on container /root/hello.txt\nFrom keeper, expires " +
+		time.Now().Add(time.Hour).UTC().Format("15:04") +
+		"\n\ncreate /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)\nContent:\nhello"
+	if sent[0].Text != wantCreate {
+		t.Errorf("create:\n%s\nwant:\n%s", sent[0].Text, wantCreate)
+	}
+	f := sent[0].Formatted()
+	var styles []string
+	for _, e := range f.Entities {
+		styles = append(styles, e.Type+"="+f.Slice(e))
+	}
+	if got := strings.Join(styles, "|"); got != "bold=Request 1 needs your approval|code=file_create|code=/root/hello.txt|pre=hello" {
+		t.Errorf("create styles %s", got)
+	}
+
+	e := sent[1].Formatted()
+	if !strings.Contains(e.S, " example.com {\n-  respond 404\n+  respond 200\nthen restart container caddy and check it\nbackup: b1") ||
+		strings.Contains(e.S, "path:") || strings.Contains(e.S, "restart: container caddy") || strings.Contains(e.S, "+++ ") {
+		t.Errorf("edit:\n%s", e.S)
+	}
+	var diff *tgapi.Entity
+	for i := range e.Entities {
+		if e.Entities[i].Type == "pre" {
+			diff = &e.Entities[i]
+		}
+	}
+	if diff == nil || diff.Language != "diff" || !strings.HasPrefix(e.Slice(*diff), "@@ -1,2 +1,2 @@") {
+		t.Errorf("diff block %+v", diff)
 	}
 }
