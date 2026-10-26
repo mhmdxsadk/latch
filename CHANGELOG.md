@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.16.0](https://github.com/mhmdxsadk/latch/compare/v0.15.0...v0.16.0) (2026-10-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **tgchat:** agent.keep_sessions is no longer a known key; remove it from telegram.yaml if set. /sessions and /rename are gone.
+
+### Features
+
+* **tgchat:** one conversation, drop session history ([a507ebd](https://github.com/mhmdxsadk/latch/commit/a507ebdc41bcdd854faa731856c43abb809c1eb4))
+
 ## [0.15.0](https://github.com/mhmdxsadk/latch/compare/v0.14.1...v0.15.0) (2026-10-26)
 
 
