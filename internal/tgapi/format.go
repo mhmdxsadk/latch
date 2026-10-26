@@ -31,11 +31,6 @@ type Text struct {
 	Entities []Entity
 }
 
-// Mark starts every message Latch writes itself (requests and their
-// outcomes). The chat removes it from agent text, so an agent can never
-// write something that looks like it came from Latch.
-const Mark = "🔒"
-
 // Plain is unformatted text.
 func Plain(s string) Text { return Text{S: s} }
 

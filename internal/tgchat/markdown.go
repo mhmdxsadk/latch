@@ -28,10 +28,10 @@ var (
 // when long: the owner reads answers, they do not copy them. Tables become
 // a fixed-width block so their columns line up. Links become "text
 // (address)", so where a link goes is always visible; no link entity is ever
-// made. Every line is cleaned with textsafe first, and Latch's own mark
-// (tgapi.Mark) is removed.
+// made. Every line is cleaned with textsafe first, and emoji are removed:
+// the owner wants none.
 func Markdown(src string) tgapi.Text {
-	src = strings.ReplaceAll(src, tgapi.Mark, "")
+	src = noEmoji(src)
 	lines := strings.Split(strings.ReplaceAll(src, "\r\n", "\n"), "\n")
 	for i, l := range lines {
 		lines[i] = textsafe.Line(l)
@@ -233,4 +233,47 @@ func tidy(t tgapi.Text) tgapi.Text {
 	})
 	t.Entities = kept
 	return t
+}
+
+// noEmoji removes emoji: pictographs, symbols and dingbats drawn as emoji,
+// flags, keycaps and the joiners and selectors that build them. Plain
+// punctuation such as arrows, bullets and dashes stays.
+func noEmoji(s string) string {
+	if utf8.ValidString(s) && !strings.ContainsFunc(s, isEmoji) {
+		return s
+	}
+	var b strings.Builder
+	removed := false // just removed an emoji
+	last := '\n'     // the last rune written; a line start counts as space
+	for _, r := range s {
+		switch {
+		case isEmoji(r):
+			removed = true
+			continue
+		case removed && r == ' ' && (last == ' ' || last == '\n'):
+			// "done ✅ next" becomes "done next", not "done  next".
+			continue
+		}
+		removed = false
+		b.WriteRune(r)
+		last = r
+	}
+	return b.String()
+}
+
+func isEmoji(r rune) bool {
+	switch {
+	case r >= 0x1F000 && r <= 0x1FAFF, // pictographs, emoticons, transport, symbols
+		r >= 0x2600 && r <= 0x27BF,   // miscellaneous symbols and dingbats
+		r >= 0x2B05 && r <= 0x2B55,   // arrows and shapes drawn as emoji
+		r >= 0x1F1E6 && r <= 0x1F1FF, // flags
+		r == 0x20E3,                  // keycap
+		r == 0x200D,                  // zero-width joiner
+		r >= 0xFE00 && r <= 0xFE0F,   // variation selectors
+		r >= 0xE0020 && r <= 0xE007F, // tag characters
+		r == 0x231A, r == 0x231B, r == 0x23F0, r == 0x23F3, r >= 0x23E9 && r <= 0x23EC,
+		r == 0x2139, r == 0x24C2, r == 0x3030, r == 0x303D, r == 0x3297, r == 0x3299:
+		return true
+	}
+	return false
 }

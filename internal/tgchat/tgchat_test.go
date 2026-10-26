@@ -392,7 +392,7 @@ func TestWelcome(t *testing.T) {
 	h := newHarness(t, time.Minute)
 	h.chat.o.Host = "lisbon"
 	h.send("/start")
-	m := h.waitText("Ask me anything about lisbon")
+	m := h.waitText("Ask me anything about the Lisbon server, or tell me what to fix.")
 	if len(m.Entities) != 0 || !strings.Contains(m.Text, "/new starts over") {
 		t.Errorf("%q %+v", m.Text, m.Entities)
 	}

@@ -245,7 +245,6 @@ func (a *Approver) updateLocked(ctx context.Context, r approval.Request) {
 // pending requests in memory only, so a restart forgets them.
 func (a *Approver) goneLocked(ctx context.Context, id int64, s *shown) {
 	var b tgapi.Builder
-	b.Plain(tgapi.Mark + " ")
 	b.Bold(fmt.Sprintf("Request %d is gone", id))
 	b.Plain("\nLatch no longer knows it (it restarted, or forgot the request). Nothing will run.")
 	text := b.Done()
@@ -383,7 +382,6 @@ func (a *Approver) shortened(r approval.Request, head tgapi.Text, body []tgapi.T
 // detail blocks of a waiting request.
 func (a *Approver) pendingText(r approval.Request) (tgapi.Text, []tgapi.Text) {
 	var b tgapi.Builder
-	b.Plain(tgapi.Mark + " ")
 	if r.RunsOnTimeout {
 		b.Bold("A change did not come up. Undo it?")
 		b.Plain("\nLatch will " + a.phrase(r, false) + " by itself at ")
@@ -500,7 +498,6 @@ func isDiffLine(l string) bool {
 // happened in one line, the result folded away.
 func (a *Approver) outcome(r approval.Request) tgapi.Text {
 	var b tgapi.Builder
-	b.Plain(tgapi.Mark + " ")
 	what := a.phrase(r, false)
 	switch {
 	case r.Status == approval.StatusDone && r.DecidedBy == nil && r.RunsOnTimeout:
@@ -522,7 +519,6 @@ func (a *Approver) outcome(r approval.Request) tgapi.Text {
 // notice is the one-off message for an automatic change.
 func (a *Approver) notice(r approval.Request) tgapi.Text {
 	var b tgapi.Builder
-	b.Plain(tgapi.Mark + " ")
 	who := a.who(r.RequestedBy.UID)
 	if r.Status == approval.StatusDone {
 		b.Bold(who + " " + a.phrase(r, true))

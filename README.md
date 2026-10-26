@@ -289,10 +289,11 @@ How it stays safe:
   Everyone else gets no reply. Turn on two-step verification in Telegram:
   your account can now approve changes.
 - Request messages are written by Latch from the request itself, never by the
-  agent, and start with 🔒. The bridge removes 🔒 from everything the agent
-  writes, so the agent cannot pose as Latch. Agent formatting is computed by
-  the bridge, never taken from the agent as markup: links show their full
-  address, and nothing the agent writes can become a hidden link.
+  agent. A request waiting for you always has Approve and Deny buttons, which
+  agent text never gets, and its outcome replaces that same message. Agent
+  formatting is computed by the bridge, never taken from the agent as markup:
+  links show their full address, and nothing the agent writes can become a
+  hidden link.
 - A button names one request and what the message showed. Latch checks the
   request again before acting, so an old button can never approve something
   else. A change too long for one message has no Approve button; approve it

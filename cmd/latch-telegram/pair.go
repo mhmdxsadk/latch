@@ -91,7 +91,7 @@ func pair(ctx context.Context, bot pairing, current int64, in *bufio.Reader, out
 	}
 	var b tgapi.Builder
 	// The code is a spoiler, hidden until tapped.
-	b.Plain(tgapi.Mark+" ").Bold("Latch pairing code: ").Styled("spoiler", code)
+	b.Bold("Latch pairing code: ").Styled("spoiler", code)
 	b.Plain("\nTap to show it, or use Copy code. Type it into latch-telegram pair on the server. If you did not start pairing, ignore this message.")
 	kb := tgapi.Keyboard{{{Text: "Copy code", Copy: &tgapi.CopyText{Text: code}}}}
 	if _, err := bot.Send(ctx, user, b.Done(), kb); err != nil {

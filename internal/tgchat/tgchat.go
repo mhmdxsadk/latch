@@ -6,9 +6,10 @@
 // switch between them without ever seeing an id. Turns run one at a time, in
 // order. Agent answers are untrusted text: they are cleaned of control
 // characters and their Markdown becomes formatting this package computes
-// (never links). Answers reply to the owner's message. Latch marks its own
-// messages with tgapi.Mark, which is removed from agent text, so an agent
-// cannot pose as Latch.
+// (never links). Answers reply to the owner's message. An agent cannot
+// pose as Latch where it matters: a request waiting for a decision always
+// has buttons, which agent text never gets, and its outcome is an edit of
+// that same message.
 package tgchat
 
 import (
@@ -534,8 +535,8 @@ func (c *Chat) say(ctx context.Context, text string) {
 // welcome is the /start and /help text.
 func (c *Chat) welcome() string {
 	where := "this server"
-	if c.o.Host != "" {
-		where = c.o.Host
+	if h := c.o.Host; h != "" {
+		where = "the " + strings.ToUpper(h[:1]) + h[1:] + " server"
 	}
 	return "Ask me anything about " + where + ", or tell me what to fix. Changes wait until you tap Approve.\n\n" +
 		"/new starts over · /sessions goes back to an earlier chat · /stop stops an answer"

@@ -161,7 +161,7 @@ func TestAnnounceApproveAndUpdate(t *testing.T) {
 		t.Fatalf("sent %+v", sent)
 	}
 	m := sent[0]
-	for _, want := range []string{"🔒 uid 1000 wants to stop container jellyfin\nExpires ", " · request 1\nstop container jellyfin\npull: false"} {
+	for _, want := range []string{"uid 1000 wants to stop container jellyfin\nExpires ", " · request 1\nstop container jellyfin\npull: false"} {
 		if !strings.Contains(m.Text, want) {
 			t.Errorf("message lacks %q:\n%s", want, m.Text)
 		}
@@ -183,7 +183,7 @@ func TestAnnounceApproveAndUpdate(t *testing.T) {
 	}
 	h.poll()
 	m = h.tg.Sent()[0]
-	if m.Text != "🔒 Done: stopped container jellyfin\nstopped\nstate exited" || m.Keyboard != nil {
+	if m.Text != "Done: stopped container jellyfin\nstopped\nstate exited" || m.Keyboard != nil {
 		t.Fatalf("after approval: %q %+v", m.Text, m.Keyboard)
 	}
 	got, _ := h.store.Get(r.ID)
@@ -206,7 +206,7 @@ func TestDecidedOnTheServer(t *testing.T) {
 	}
 	h.poll()
 	m := h.tg.Sent()[0]
-	if m.Text != "🔒 Denied: stop container web" || m.Keyboard != nil {
+	if m.Text != "Denied: stop container web" || m.Keyboard != nil {
 		t.Fatalf("%q %+v", m.Text, m.Keyboard)
 	}
 	// The old button now only explains.
@@ -301,7 +301,7 @@ func TestAutomaticRestartNotice(t *testing.T) {
 	h.poll()
 	h.poll()
 	sent := h.tg.Sent()
-	if len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "🔒 uid 1000 restarted container caddy\n") || sent[0].Keyboard != nil {
+	if len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "uid 1000 restarted container caddy\n") || sent[0].Keyboard != nil {
 		t.Fatalf("%+v", sent)
 	}
 }
@@ -313,7 +313,7 @@ func TestUndoRequestShowsDeadline(t *testing.T) {
 	r := h.submit(u)
 	h.poll()
 	m := h.tg.Sent()[0]
-	want := "🔒 A change did not come up. Undo it?\nLatch will undo the change to web by itself at " + r.ExpiresAt.UTC().Format("15:04") + " unless you deny it."
+	want := "A change did not come up. Undo it?\nLatch will undo the change to web by itself at " + r.ExpiresAt.UTC().Format("15:04") + " unless you deny it."
 	if !strings.HasPrefix(m.Text, want) || len(m.Keyboard[0]) != 2 {
 		t.Fatalf("%q %+v", m.Text, m.Keyboard)
 	}
@@ -366,7 +366,7 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 			t.Fatalf("Telegram would refuse %q: %s", m.Text, msg)
 		}
 	}
-	wantCreate := "🔒 keeper wants to create /root/hello.txt\nExpires " +
+	wantCreate := "keeper wants to create /root/hello.txt\nExpires " +
 		time.Now().Add(time.Hour).UTC().Format("15:04") +
 		" · request 1\ncreate /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)\nContent:\nhello"
 	if sent[0].Text != wantCreate {
