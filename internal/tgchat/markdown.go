@@ -23,7 +23,8 @@ var (
 )
 
 // Markdown turns the Markdown an agent writes into Telegram formatting:
-// bold, italic, strikethrough, quotes, headings (bold) and bullets (•).
+// italic, strikethrough, quotes and bullets (•). Bold and headings are
+// plain text: the owner does not want the first sentence shouting.
 // Inline code and short code blocks become plain text, long code blocks a
 // collapsed quote: the owner reads answers, they do not copy them, so
 // nothing is boxed or given a copy button. Tables become
@@ -91,7 +92,7 @@ func Markdown(src string) tgapi.Text {
 			b.Text(wrap(q.Done(), "blockquote"))
 		case headingLine.MatchString(l):
 			newline()
-			b.Text(wrap(inline(headingLine.FindStringSubmatch(l)[1]), "bold"))
+			b.Text(inline(headingLine.FindStringSubmatch(l)[1]))
 		case bulletLine.MatchString(l):
 			m := bulletLine.FindStringSubmatch(l)
 			newline()
@@ -116,7 +117,7 @@ func isFenceClose(l string) bool {
 // collapsed until tapped.
 const collapseAfter = 6
 
-// inline formats one line: **bold**, __bold__, *italic*, _italic_,
+// inline formats one line: **bold** and __bold__ (printed plain), *italic*, _italic_,
 // ~~strike~~, links and backslash escapes; `code` loses its backticks.
 func inline(s string) tgapi.Text {
 	var b tgapi.Builder
@@ -144,7 +145,7 @@ func inline(s string) tgapi.Text {
 		case strings.HasPrefix(rest, "**"), strings.HasPrefix(rest, "__"):
 			if j := strings.Index(rest[2:], rest[:2]); j > 0 && !unicode.IsSpace(rune(rest[2])) {
 				flush()
-				b.Text(wrap(inline(rest[2:2+j]), "bold"))
+				b.Text(inline(rest[2 : 2+j]))
 				i += j + 4
 				continue
 			}
