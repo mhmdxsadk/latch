@@ -23,11 +23,15 @@ var (
 )
 
 // Markdown turns the Markdown an agent writes into Telegram formatting:
-// bold, italic, strikethrough, inline code, code blocks, quotes, headings
-// (bold) and bullets (•). Tables become code blocks so their columns line up.
-// Links become "text (address)", so where a link goes is always visible; no
-// link entity is ever made. Every line is cleaned with textsafe first.
+// bold, italic, strikethrough, quotes, headings (bold) and bullets (•).
+// Inline code becomes plain text and code blocks become quotes, collapsed
+// when long: the owner reads answers, they do not copy them. Tables become
+// a fixed-width block so their columns line up. Links become "text
+// (address)", so where a link goes is always visible; no link entity is ever
+// made. Every line is cleaned with textsafe first, and Latch's own mark
+// (tgapi.Mark) is removed.
 func Markdown(src string) tgapi.Text {
+	src = strings.ReplaceAll(src, tgapi.Mark, "")
 	lines := strings.Split(strings.ReplaceAll(src, "\r\n", "\n"), "\n")
 	for i, l := range lines {
 		lines[i] = textsafe.Line(l)
@@ -52,13 +56,12 @@ func Markdown(src string) tgapi.Text {
 		blank = false
 		switch {
 		case fenceLine.MatchString(l):
-			lang := fenceLine.FindStringSubmatch(l)[1]
 			var body []string
 			for i++; i < len(lines) && !isFenceClose(lines[i]); i++ {
 				body = append(body, lines[i])
 			}
 			newline()
-			b.Pre(strings.Join(body, "\n"), lang)
+			b.Quote(tgapi.Plain(strings.TrimRight(strings.Join(body, "\n"), "\n ")), len(body) > collapseAfter)
 		case tableLine.MatchString(l):
 			var rows []string
 			for ; i < len(lines) && tableLine.MatchString(lines[i]); i++ {
@@ -75,22 +78,22 @@ func Markdown(src string) tgapi.Text {
 				if q.Len() > 0 {
 					q.Plain("\n")
 				}
-				q.Text(inline(quoteLine.FindStringSubmatch(lines[i])[1], true))
+				q.Text(inline(quoteLine.FindStringSubmatch(lines[i])[1]))
 			}
 			i--
 			newline()
 			b.Text(wrap(q.Done(), "blockquote"))
 		case headingLine.MatchString(l):
 			newline()
-			b.Text(wrap(inline(headingLine.FindStringSubmatch(l)[1], false), "bold"))
+			b.Text(wrap(inline(headingLine.FindStringSubmatch(l)[1]), "bold"))
 		case bulletLine.MatchString(l):
 			m := bulletLine.FindStringSubmatch(l)
 			newline()
 			b.Plain(strings.Repeat("  ", min(len(m[1])/2, 4)) + "• ")
-			b.Text(inline(m[2], true))
+			b.Text(inline(m[2]))
 		default:
 			newline()
-			b.Text(inline(l, true))
+			b.Text(inline(l))
 		}
 	}
 	t := b.Done()
@@ -103,10 +106,13 @@ func isFenceClose(l string) bool {
 	return strings.HasPrefix(t, "```") && strings.Trim(t, "`") == ""
 }
 
-// inline formats one line: `code`, **bold**, __bold__, *italic*, _italic_,
-// ~~strike~~, links and backslash escapes. allowCode is false inside bold
-// and italic, where Telegram does not allow code.
-func inline(s string, allowCode bool) tgapi.Text {
+// collapseAfter is how many lines a quoted block may have before it is
+// collapsed until tapped.
+const collapseAfter = 6
+
+// inline formats one line: **bold**, __bold__, *italic*, _italic_,
+// ~~strike~~, links and backslash escapes; `code` loses its backticks.
+func inline(s string) tgapi.Text {
 	var b tgapi.Builder
 	plain := strings.Builder{}
 	flush := func() {
@@ -125,32 +131,28 @@ func inline(s string, allowCode bool) tgapi.Text {
 		case rest[0] == '`':
 			if j := strings.IndexByte(rest[1:], '`'); j > 0 {
 				flush()
-				if allowCode {
-					b.Code(rest[1 : 1+j])
-				} else {
-					b.Plain(rest[1 : 1+j])
-				}
+				b.Plain(rest[1 : 1+j])
 				i += j + 2
 				continue
 			}
 		case strings.HasPrefix(rest, "**"), strings.HasPrefix(rest, "__"):
 			if j := strings.Index(rest[2:], rest[:2]); j > 0 && !unicode.IsSpace(rune(rest[2])) {
 				flush()
-				b.Text(wrap(inline(rest[2:2+j], false), "bold"))
+				b.Text(wrap(inline(rest[2:2+j]), "bold"))
 				i += j + 4
 				continue
 			}
 		case strings.HasPrefix(rest, "~~"):
 			if j := strings.Index(rest[2:], "~~"); j > 0 {
 				flush()
-				b.Text(wrap(inline(rest[2:2+j], false), "strikethrough"))
+				b.Text(wrap(inline(rest[2:2+j]), "strikethrough"))
 				i += j + 4
 				continue
 			}
 		case rest[0] == '*' || rest[0] == '_':
 			if j, ok := emphasisEnd(s, i); ok {
 				flush()
-				b.Text(wrap(inline(s[i+1:j], false), "italic"))
+				b.Text(wrap(inline(s[i+1:j]), "italic"))
 				i = j + 1
 				continue
 			}

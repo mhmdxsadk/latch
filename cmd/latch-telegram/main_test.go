@@ -322,7 +322,7 @@ func runPair(t *testing.T, tg *tgtest.Server, typed func(code string) string) (i
 	}()
 	tgtest.WaitFor(t, "the code message", func() bool {
 		for _, m := range tg.Sent() {
-			if strings.HasPrefix(m.Text, "Latch pairing code: ") {
+			if strings.HasPrefix(m.Text, "🔒 Latch pairing code: ") {
 				return true
 			}
 		}
@@ -330,14 +330,14 @@ func runPair(t *testing.T, tg *tgtest.Server, typed func(code string) string) (i
 	})
 	var code string
 	for _, m := range tg.Sent() {
-		if c, ok := strings.CutPrefix(m.Text, "Latch pairing code: "); ok {
+		if c, ok := strings.CutPrefix(m.Text, "🔒 Latch pairing code: "); ok {
 			code, _, _ = strings.Cut(c, "\n")
 			if len(m.Keyboard) != 1 || m.Keyboard[0][0].Copy == nil || m.Keyboard[0][0].Copy.Text != code {
 				t.Errorf("no copy button for the code: %+v", m.Keyboard)
 			}
 			f := m.Formatted()
-			if len(f.Entities) < 2 || f.Slice(f.Entities[1]) != code || f.Entities[1].Type != "code" {
-				t.Errorf("code is not tap-to-copy: %+v", f.Entities)
+			if len(f.Entities) < 2 || f.Slice(f.Entities[1]) != code || f.Entities[1].Type != "spoiler" {
+				t.Errorf("code is not hidden: %+v", f.Entities)
 			}
 		}
 	}

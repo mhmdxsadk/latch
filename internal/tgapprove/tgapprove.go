@@ -78,8 +78,9 @@ type Options struct {
 	Logger    *slog.Logger
 	// OnFinished is called once when a request the owner was asked about
 	// ends, however it was decided. The chat bridge uses it to tell the
-	// agent the outcome. It must not block.
-	OnFinished func(approval.Request)
+	// agent the outcome. message is the request's chat message. It must
+	// not block.
+	OnFinished func(r approval.Request, message int64)
 }
 
 // Approver announces requests and handles button presses.
@@ -235,7 +236,7 @@ func (a *Approver) updateLocked(ctx context.Context, r approval.Request) {
 	if final {
 		s.Final = true
 		if a.o.OnFinished != nil && r.NeedsApproval {
-			a.o.OnFinished(r)
+			a.o.OnFinished(r, s.Message)
 		}
 	}
 }
@@ -244,6 +245,7 @@ func (a *Approver) updateLocked(ctx context.Context, r approval.Request) {
 // pending requests in memory only, so a restart forgets them.
 func (a *Approver) goneLocked(ctx context.Context, id int64, s *shown) {
 	var b tgapi.Builder
+	b.Plain(tgapi.Mark + " ")
 	b.Bold(fmt.Sprintf("Request %d is gone", id))
 	b.Plain("\nLatch no longer knows it (it restarted, or forgot the request). Nothing will run.")
 	text := b.Done()
@@ -375,6 +377,7 @@ func (a *Approver) shortened(r approval.Request, head tgapi.Text, body []tgapi.T
 // of a waiting request.
 func (a *Approver) pendingText(r approval.Request) (tgapi.Text, []tgapi.Text) {
 	var b tgapi.Builder
+	b.Plain(tgapi.Mark + " ")
 	if r.RunsOnTimeout {
 		b.Bold(fmt.Sprintf("Undo request %d: runs by itself at ", r.ID))
 		b.Text(a.timeText(r.ExpiresAt, true))
@@ -391,11 +394,9 @@ func (a *Approver) pendingText(r approval.Request) (tgapi.Text, []tgapi.Text) {
 	return b.Done(), a.details(r)
 }
 
-// what is the action and what it changes: "file_create on /root/hello.txt".
+// what is the action and what it changes: "file_create on file /root/x".
 func (a *Approver) what(b *tgapi.Builder, r approval.Request) {
-	b.Code(clean(r.Action))
-	b.Plain(" on " + clean(r.Resource.Type) + " ")
-	b.Code(clean(r.Resource.Name))
+	b.Plain(clean(r.Action) + " on " + clean(r.Resource.Type) + " " + clean(r.Resource.Name))
 }
 
 func (a *Approver) who(uid uint32) string {
@@ -458,6 +459,7 @@ func isDiffLine(l string) bool {
 // outcome is the message for a request that is no longer pending.
 func (a *Approver) outcome(r approval.Request) tgapi.Text {
 	var b tgapi.Builder
+	b.Plain(tgapi.Mark + " ")
 	status := string(r.Status)
 	switch r.Status {
 	case approval.StatusApproved, approval.StatusRunning:
@@ -499,6 +501,7 @@ func (a *Approver) how(r approval.Request) string {
 // notice is the one-off message for an automatic change.
 func (a *Approver) notice(r approval.Request) tgapi.Text {
 	var b tgapi.Builder
+	b.Plain(tgapi.Mark + " ")
 	b.Bold(fmt.Sprintf("Automatic change %d: %s", r.ID, r.Status))
 	b.Plain("\n")
 	a.what(&b, r)

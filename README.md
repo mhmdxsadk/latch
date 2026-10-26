@@ -272,8 +272,8 @@ conversation, `/sessions` switches between them, `/rename` names the current
 one and `/stop` stops a running answer. After you approve or deny a request,
 the agent is told how it ended so it can check the fix.
 
-Times show in your own time zone, long diffs and logs stay collapsed until
-you tap them, and commands and file paths copy with a tap.
+Times show in your own time zone, and long diffs and logs stay collapsed
+until you tap them.
 
 How it stays safe:
 
@@ -281,10 +281,10 @@ How it stays safe:
   Everyone else gets no reply. Turn on two-step verification in Telegram:
   your account can now approve changes.
 - Request messages are written by Latch from the request itself, never by the
-  agent. Agent answers always start with the agent's name in bold. Their
-  formatting is computed by the bridge, never taken from the agent as markup:
-  links show their full address, and nothing the agent writes can become a
-  hidden link.
+  agent, and start with 🔒. The bridge removes 🔒 from everything the agent
+  writes, so the agent cannot pose as Latch. Agent formatting is computed by
+  the bridge, never taken from the agent as markup: links show their full
+  address, and nothing the agent writes can become a hidden link.
 - A button names one request and what the message showed. Latch checks the
   request again before acting, so an old button can never approve something
   else. A change too long for one message has no Approve button; approve it
@@ -308,8 +308,8 @@ To set it up:
    `sudo cp /etc/latch/telegram.example.yaml /etc/latch/telegram.yaml`, and
    either fill in the `agent` section or remove it for approvals only. Then
    run `sudo latch-telegram pair` and send your bot any message: the bot
-   sends your account a code, you type it on the server, and pair writes your
-   account into the config as `owner_id`. With `--safety restricted`, the agent config must allow
+   sends your account a hidden code (tap to show, or copy it), you type it on
+   the server, and pair writes your account into the config as `owner_id`. With `--safety restricted`, the agent config must allow
    Latch's change tools (the example shows how), or the agent cannot ask for
    any change. [`config/telegram.example.yaml`](config/telegram.example.yaml)
    explains every option.

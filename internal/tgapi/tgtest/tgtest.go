@@ -37,19 +37,17 @@ func (m Sent) Formatted() tgapi.Text { return tgapi.Text{S: m.Text, Entities: m.
 type Server struct {
 	URL string
 
-	mu       sync.Mutex
-	nextID   int64
-	nextUpd  int64
-	nextCB   int
-	updates  []tgapi.Update
-	wake     chan struct{}
-	sent     []*Sent
-	answers  map[string]string
-	typing   int
-	commands []tgapi.Command
-	drafts   []Draft
-	// reactions maps a message id to the bot's reaction on it.
-	reactions          map[int64]string
+	mu                 sync.Mutex
+	nextID             int64
+	nextUpd            int64
+	nextCB             int
+	updates            []tgapi.Update
+	wake               chan struct{}
+	sent               []*Sent
+	answers            map[string]string
+	typing             int
+	commands           []tgapi.Command
+	drafts             []Draft
 	description, short string
 }
 
@@ -69,13 +67,6 @@ func (s *Server) Drafts() []Draft {
 	return append([]Draft(nil), s.drafts...)
 }
 
-// Reaction returns the bot's reaction on message id.
-func (s *Server) Reaction(id int64) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.reactions[id]
-}
-
 // Description returns the bot's description and short description.
 func (s *Server) Description() (string, string) {
 	s.mu.Lock()
@@ -89,7 +80,7 @@ func (s *Server) Stop(user, draftID int64) {
 }
 
 // MessageID queues a text message like Message and returns the message id
-// it will carry, so tests can check replies and reactions.
+// it will carry, so tests can check replies.
 func (s *Server) MessageID(user int64, text string) int64 {
 	s.mu.Lock()
 	id := s.nextID
@@ -104,7 +95,7 @@ func (s *Server) MessageID(user int64, text string) int64 {
 // New starts a fake server; it stops when the test ends.
 func New(t *testing.T) *Server {
 	t.Helper()
-	s := &Server{nextID: 100, nextUpd: 1, wake: make(chan struct{}, 1), answers: map[string]string{}, reactions: map[int64]string{}}
+	s := &Server{nextID: 100, nextUpd: 1, wake: make(chan struct{}, 1), answers: map[string]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(srv.Close)
 	s.URL = srv.URL
@@ -220,10 +211,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		Reply    *struct {
 			MessageID int64 `json:"message_id"`
 		} `json:"reply_parameters"`
-		Reaction []struct {
-			Type  string `json:"type"`
-			Emoji string `json:"emoji"`
-		} `json:"reaction"`
 		Description      *string `json:"description"`
 		ShortDescription *string `json:"short_description"`
 	}
@@ -308,15 +295,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.drafts = append(s.drafts, Draft{Chat: body.ChatID, ID: body.DraftID, Text: body.Text, Entities: body.Entities, CanStop: body.CanStop})
 		s.mu.Unlock()
 		reply(w, true, true, 0, "")
-	case "setMessageReaction":
-		emoji := ""
-		if len(body.Reaction) > 0 {
-			emoji = body.Reaction[0].Emoji
-		}
-		s.mu.Lock()
-		s.reactions[body.MessageID] = emoji
-		s.mu.Unlock()
-		reply(w, true, true, 0, "")
 	case "setMyDescription", "setMyShortDescription":
 		s.mu.Lock()
 		if body.Description != nil {
@@ -384,7 +362,7 @@ func CheckEntities(text string, es []tgapi.Entity) string {
 	n := tgapi.TextLen(text)
 	for i, e := range es {
 		switch e.Type {
-		case "bold", "italic", "underline", "strikethrough", "code", "pre", "blockquote", "expandable_blockquote":
+		case "bold", "italic", "underline", "strikethrough", "spoiler", "code", "pre", "blockquote", "expandable_blockquote":
 		case "date_time":
 			if e.UnixTime <= 0 || !dateTimeFormat.MatchString(e.DateTimeFormat) {
 				return "date_time needs unix_time and a valid date_time_format"

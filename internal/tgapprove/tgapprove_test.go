@@ -105,7 +105,7 @@ func (h *harness) approver() *Approver {
 	c.Via = approval.ViaTelegram
 	a, err := New(Options{
 		Admin: c, Bot: h.tg.Client(), Chat: owner, StatePath: h.state, Location: time.UTC,
-		OnFinished: func(r approval.Request) {
+		OnFinished: func(r approval.Request, _ int64) {
 			h.mu.Lock()
 			h.finished = append(h.finished, r)
 			h.mu.Unlock()
@@ -366,7 +366,7 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 			t.Fatalf("Telegram would refuse %q: %s", m.Text, msg)
 		}
 	}
-	wantCreate := "Request 1 needs your approval\nfile_create on container /root/hello.txt\nFrom keeper, expires " +
+	wantCreate := "🔒 Request 1 needs your approval\nfile_create on container /root/hello.txt\nFrom keeper, expires " +
 		time.Now().Add(time.Hour).UTC().Format("15:04") +
 		"\n\ncreate /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)\nContent:\nhello"
 	if sent[0].Text != wantCreate {
@@ -378,7 +378,7 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 		styles = append(styles, e.Type+"="+f.Slice(e))
 	}
 	exp := time.Now().Add(time.Hour).UTC().Format("15:04")
-	if got := strings.Join(styles, "|"); got != "bold=Request 1 needs your approval|code=file_create|code=/root/hello.txt|date_time="+exp+"|pre=hello" {
+	if got := strings.Join(styles, "|"); got != "bold=Request 1 needs your approval|date_time="+exp+"|pre=hello" {
 		t.Errorf("create styles %s", got)
 	}
 

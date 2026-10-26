@@ -272,15 +272,6 @@ func (c *Client) Draft(ctx context.Context, chat, draftID int64, t Text, canStop
 	return err
 }
 
-// React sets the bot's reaction on a message; an empty emoji removes it.
-func (c *Client) React(ctx context.Context, chat, message int64, emoji string) error {
-	reaction := []map[string]string{}
-	if emoji != "" {
-		reaction = append(reaction, map[string]string{"type": "emoji", "emoji": emoji})
-	}
-	return c.call(ctx, "setMessageReaction", map[string]any{"chat_id": chat, "message_id": message, "reaction": reaction}, nil)
-}
-
 // SetDescription sets what the bot's profile and empty chat say: the
 // description (up to 512 characters) and the short description (120).
 func (c *Client) SetDescription(ctx context.Context, description, short string) error {

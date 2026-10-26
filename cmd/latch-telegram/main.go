@@ -191,6 +191,7 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			IndexPath: filepath.Join(cfg.StateDir, "sessions.json"),
 			Name:      a.Name,
 			Timeout:   time.Duration(a.Timeout),
+			Location:  b.loc,
 			Logger:    log,
 		})
 		if err != nil {
@@ -210,8 +211,8 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 	}
 	if a := cfg.Agent; a != nil {
 		opts.AgentName = a.Name
-		opts.OnFinished = func(r approval.Request) {
-			b.chat.Notify(outcome(r), fmt.Sprintf("Sent %s the result of request %d.", a.Name, r.ID))
+		opts.OnFinished = func(r approval.Request, message int64) {
+			b.chat.Notify(outcome(r), fmt.Sprintf("Sent %s the result of request %d.", a.Name, r.ID), message)
 		}
 	}
 	var err error

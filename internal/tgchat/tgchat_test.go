@@ -102,8 +102,8 @@ func TestMessagesRunInTheActiveSession(t *testing.T) {
 	h := newHarness(t, time.Minute)
 	h.send("is caddy healthy?")
 	m := h.waitText("answer to is caddy healthy?")
-	if !strings.HasPrefix(m.Text, "keeper answer") || len(m.Entities) == 0 || m.Entities[0].Type != "bold" || m.Formatted().Slice(m.Entities[0]) != "keeper" {
-		t.Errorf("no bold agent label: %q %+v", m.Text, m.Entities)
+	if m.Text != "answer to is caddy healthy?" {
+		t.Errorf("answer %q", m.Text)
 	}
 	h.send("and jellyfin?")
 	h.waitText("answer to and jellyfin?")
@@ -152,9 +152,8 @@ func TestStop(t *testing.T) {
 	h.run.block = true
 	h.send("long job")
 	tgtest.WaitFor(t, "the run to start", func() bool { return len(h.run.Calls()) == 1 })
-	queued := h.tg.MessageID(owner, "queued one") // id only; deliver it by hand
-	h.chat.HandleText(context.Background(), "queued one", queued)
-	tgtest.WaitFor(t, "the seen reaction", func() bool { return h.tg.Reaction(queued) == "👀" })
+	h.send("queued one")
+	tgtest.WaitFor(t, "the message to queue", func() bool { return len(h.chat.queue) == 1 })
 	h.send("/stop")
 	h.waitText("Stopping keeper (dropped 1 waiting)")
 	h.waitText("Stopped.")
@@ -193,11 +192,11 @@ func TestAnswersAreCleanedAndSplit(t *testing.T) {
 	h.send("hi")
 	tgtest.WaitFor(t, "three parts", func() bool { return len(h.tg.Sent()) >= 3 })
 	sent := h.tg.Sent()
-	if !strings.HasPrefix(sent[0].Text, "keeper red evil\n") {
+	if !strings.HasPrefix(sent[0].Text, "red evil\n") {
 		t.Errorf("not cleaned: %q", sent[0].Text[:30])
 	}
 	for _, m := range sent {
-		if !strings.HasPrefix(m.Text, "keeper ") || tgapi.TextLen(m.Text) > tgapi.MaxText || tgtest.CheckEntities(m.Text, m.Entities) != "" {
+		if tgapi.TextLen(m.Text) > tgapi.MaxText || tgtest.CheckEntities(m.Text, m.Entities) != "" {
 			t.Errorf("bad part: %d %q", tgapi.TextLen(m.Text), m.Text[:20])
 		}
 	}
@@ -205,12 +204,14 @@ func TestAnswersAreCleanedAndSplit(t *testing.T) {
 
 func TestNotify(t *testing.T) {
 	h := newHarness(t, time.Minute)
-	h.chat.Notify("ignored: no conversation yet", "note")
+	h.chat.Notify("ignored: no conversation yet", "note", 0)
 	h.send("restart caddy please")
 	h.waitText("answer to restart caddy please")
-	h.chat.Notify("Latch: request 3 was approved and finished: done.", "Sent keeper the result of request 3.")
+	h.chat.Notify("Latch: request 3 was approved and finished: done.", "Sent keeper the result of request 3.", 77)
 	h.waitText("Sent keeper the result of request 3.")
-	h.waitText("answer to Latch: request 3")
+	if m := h.waitText("answer to Latch: request 3"); m.ReplyTo != 77 {
+		t.Errorf("follow-up does not reply to the request message: %+v", m)
+	}
 	c := h.run.Calls()
 	if len(c) != 2 || c[1].session != c[0].session {
 		t.Fatalf("calls %+v", c)
@@ -328,7 +329,6 @@ func TestLiveDraftsAndReply(t *testing.T) {
 	if m.ReplyTo != id {
 		t.Errorf("answer is not a reply: %+v", m)
 	}
-	tgtest.WaitFor(t, "the seen reaction to go", func() bool { return h.tg.Reaction(id) == "" })
 	var texts []string
 	for _, d := range h.tg.Drafts() {
 		if !d.CanStop {
@@ -340,7 +340,7 @@ func TestLiveDraftsAndReply(t *testing.T) {
 		texts = append(texts, d.Text)
 	}
 	got := strings.Join(texts, "|")
-	if !strings.HasPrefix(got, "|") || !strings.Contains(got, "Checking docker_status...") || !strings.Contains(got, "keeper Caddy is up") {
+	if !strings.HasPrefix(got, "Thinking...|") || !strings.Contains(got, "Checking docker_status...") || !strings.Contains(got, "|Caddy is up") {
 		t.Errorf("drafts %q", got)
 	}
 }

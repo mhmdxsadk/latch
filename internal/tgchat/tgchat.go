@@ -5,9 +5,10 @@
 // only keeps an index of sessions (id, title, start time) so the owner can
 // switch between them without ever seeing an id. Turns run one at a time, in
 // order. Agent answers are untrusted text: they are cleaned of control
-// characters, their Markdown becomes formatting this package computes (never
-// links), and every message of an answer starts with the agent's name in
-// bold. A message that does not start that way comes from Latch.
+// characters and their Markdown becomes formatting this package computes
+// (never links). Answers reply to the owner's message. Latch marks its own
+// messages with tgapi.Mark, which is removed from agent text, so an agent
+// cannot pose as Latch.
 package tgchat
 
 import (
@@ -39,7 +40,6 @@ type Bot interface {
 	Typing(ctx context.Context, chat int64) error
 	Reply(ctx context.Context, chat, replyTo int64, t tgapi.Text) (tgapi.Message, error)
 	Draft(ctx context.Context, chat, draftID int64, t tgapi.Text, canStop bool) error
-	React(ctx context.Context, chat, message int64, emoji string) error
 }
 
 // Defaults for Options.
@@ -69,8 +69,10 @@ type Options struct {
 	// IndexPath is a root-only file holding the session index.
 	IndexPath string
 	// Name labels the agent's answers, for example "keeper".
-	Name     string
-	Timeout  time.Duration
+	Name    string
+	Timeout time.Duration
+	// Location is the owner's time zone for conversation names.
+	Location *time.Location
 	MaxQueue int
 	Now      func() time.Time
 	Logger   *slog.Logger
@@ -122,6 +124,9 @@ func New(o Options) (*Chat, error) {
 	}
 	if o.Now == nil {
 		o.Now = time.Now
+	}
+	if o.Location == nil {
+		o.Location = time.Local
 	}
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.DiscardHandler)
@@ -182,9 +187,10 @@ func (c *Chat) HandleText(ctx context.Context, text string, messageID int64) {
 
 // Notify sends text to the agent in the active session as an automatic
 // message, for example the outcome of a request the owner decided, and shows
-// the owner note instead of the whole text. It never blocks; when the queue
-// is full the message is dropped and logged.
-func (c *Chat) Notify(text, note string) {
+// the owner note instead of the whole text. The agent's answer replies to
+// message replyTo (the request's message; 0 for none). It never blocks;
+// when the queue is full the message is dropped and logged.
+func (c *Chat) Notify(text, note string, replyTo int64) {
 	c.mu.Lock()
 	id := c.index.Active
 	c.mu.Unlock()
@@ -192,7 +198,7 @@ func (c *Chat) Notify(text, note string) {
 		return // no conversation yet: nobody to tell
 	}
 	select {
-	case c.queue <- job{session: id, text: text, note: note}:
+	case c.queue <- job{session: id, text: text, note: note, messageID: replyTo}:
 	default:
 		c.o.Logger.Warn("queue full; dropped an automatic message")
 	}
@@ -209,7 +215,7 @@ func (c *Chat) HandlePress(ctx context.Context, cb tgapi.CallbackQuery) bool {
 	answer, label := "That conversation is no longer in the list.", ""
 	if i >= 0 {
 		c.index.Active = id
-		label = c.index.Sessions[i].label()
+		label = c.index.Sessions[i].label(c.o.Location)
 		answer = "Switched to: " + label
 		if err := c.saveLocked(); err != nil {
 			c.o.Logger.Warn("saving the session index failed", "err", err)
@@ -238,7 +244,7 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 		if err != nil {
 			c.o.Logger.Warn("saving the session index failed", "err", err)
 		}
-		c.say(ctx, "New conversation: "+s.label())
+		c.say(ctx, "New conversation: "+s.label(c.o.Location))
 	case "rename":
 		if strings.TrimSpace(arg) == "" {
 			c.say(ctx, "Usage: /rename name")
@@ -252,7 +258,7 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 		if err != nil {
 			c.o.Logger.Warn("saving the session index failed", "err", err)
 		}
-		c.say(ctx, "Renamed to: "+s.label())
+		c.say(ctx, "Renamed to: "+s.label(c.o.Location))
 	case "sessions":
 		c.mu.Lock()
 		list := slices.Clone(c.index.Sessions)
@@ -265,7 +271,7 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 		slices.Reverse(list) // newest first
 		var kb tgapi.Keyboard
 		for _, s := range list[:min(len(list), shownSessions)] {
-			text := s.label()
+			text := s.label(c.o.Location)
 			if s.ID == active {
 				text = "* " + text
 			}
@@ -305,18 +311,10 @@ func (c *Chat) handleCommand(ctx context.Context, cmd, arg string) {
 func (c *Chat) enqueue(ctx context.Context, j job) {
 	select {
 	case c.queue <- j:
-		// 👀 says "seen"; it goes away once the answer is there.
-		if j.messageID != 0 {
-			if err := c.o.Bot.React(ctx, c.o.Chat, j.messageID, seenReaction); err != nil {
-				c.o.Logger.Debug("reacting failed", "err", err)
-			}
-		}
 	default:
 		c.say(ctx, "Too many messages waiting. Wait for an answer or use /stop.")
 	}
 }
-
-const seenReaction = "👀"
 
 // StopDraft stops the running turn when id is its live preview, after the
 // owner pressed Stop under it. It reports whether it stopped something.
@@ -359,9 +357,6 @@ func (c *Chat) turn(parent context.Context, j job) {
 
 	if parent.Err() != nil {
 		return
-	}
-	if j.messageID != 0 {
-		defer func() { _ = c.o.Bot.React(parent, c.o.Chat, j.messageID, "") }()
 	}
 	select {
 	case <-stopped:
@@ -426,7 +421,8 @@ func (lv *live) stop() {
 func (lv *live) loop() {
 	defer close(lv.stopped)
 	c := lv.c
-	drafts := c.o.Bot.Draft(lv.ctx, c.o.Chat, lv.id, tgapi.Text{}, true) == nil
+	// Not an empty draft: some apps show that as a dot, not "Thinking...".
+	drafts := c.o.Bot.Draft(lv.ctx, c.o.Chat, lv.id, c.preview(Progress{}), true) == nil
 	if !drafts {
 		c.o.Logger.Debug("drafts unavailable; showing typing instead")
 		_ = c.o.Bot.Typing(lv.ctx, c.o.Chat)
@@ -465,12 +461,12 @@ func (lv *live) loop() {
 func (c *Chat) preview(p Progress) tgapi.Text {
 	var b tgapi.Builder
 	if strings.TrimSpace(p.Text) == "" {
-		if p.Status == "" {
-			return tgapi.Text{} // Telegram shows "Thinking..."
+		status := "Thinking"
+		if p.Status != "" {
+			status = p.Status
 		}
-		return b.Italic(p.Status + "...").Done()
+		return b.Italic(status + "...").Done()
 	}
-	b.Bold(c.o.Name).Plain(" ")
 	body := Markdown(p.Text)
 	if body.Len() > tgapi.MaxText-b.Len()-8 {
 		body = tgapi.SplitText(body, tgapi.MaxText-b.Len()-8)[0]
@@ -478,26 +474,14 @@ func (c *Chat) preview(p Progress) tgapi.Text {
 	return b.Text(body).Done()
 }
 
-// answer sends the agent's answer, formatted and split, each part starting
-// with the agent's name in bold.
+// answer sends the agent's answer, formatted and split.
 func (c *Chat) answer(ctx context.Context, out string, replyTo int64) {
 	body := Markdown(out)
 	if strings.TrimSpace(body.S) == "" {
-		body = tgapi.Plain("(no answer)")
+		body = note("(no answer)")
 	}
-	head := c.o.Name + " "
-	for _, part := range tgapi.SplitText(body, tgapi.MaxText-tgapi.TextLen(head)-1) {
-		var b tgapi.Builder
-		b.Bold(c.o.Name)
-		// Blocks read better on a line of their own.
-		if strings.HasPrefix(part.S, "• ") || (len(part.Entities) > 0 && part.Entities[0].Offset == 0 &&
-			(part.Entities[0].Type == "pre" || part.Entities[0].Type == "blockquote")) {
-			b.Plain("\n")
-		} else {
-			b.Plain(" ")
-		}
-		b.Text(part)
-		if err := c.send(ctx, replyTo, b.Done()); err != nil {
+	for _, part := range tgapi.SplitText(body, tgapi.MaxText) {
+		if err := c.send(ctx, replyTo, part); err != nil {
 			c.o.Logger.Warn("sending an answer failed", "err", err)
 			return
 		}
@@ -559,12 +543,12 @@ func (c *Chat) saveLocked() error {
 	return tgapprove.WriteFile(c.o.IndexPath, b)
 }
 
-func (s session) label() string {
+func (s session) label(loc *time.Location) string {
 	t := s.Title
 	if t == "" {
 		t = "untitled"
 	}
-	return t + " (" + s.Started.Local().Format("Jan 2 15:04") + ")"
+	return t + " (" + s.Started.In(loc).Format("Jan 2 15:04") + ")"
 }
 
 // title makes a short one-line title from text.
