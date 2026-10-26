@@ -267,17 +267,13 @@ they run by itself. Automatic restarts get a short notice.
 If you configure an agent, the same chat also talks to it. Each message runs
 one agent turn as the agent's own account. While it works you see what it is
 checking, then its answer as it is written, with a Stop button; the finished
-answer arrives as a reply to your message. `/new` clears the chat and
-starts a fresh conversation, `/sessions` goes back to an earlier one and
-shows its messages again, `/rename` names the current one and `/stop` stops a
-running answer. Only the most recent conversations are kept (5 by default,
-`agent.keep_sessions`): older ones are deleted, together with the Docker
-Agent database each conversation has in the agent's home
-(`~/.cagent/latch-sessions`). Clearing deletes the messages on screen,
-including yours, but not requests still waiting for your decision; Telegram
-only lets bots delete messages from the last 48 hours. Each conversation's
-messages are kept in a root-only file in the bridge's state folder, so
-resuming can show them again. After you approve or deny a request,
+answer arrives as a reply to your message. There is one conversation at a
+time, and it continues until you send `/new`, which clears the chat, deletes
+the Docker Agent database the conversation has in the agent's home
+(`~/.cagent/latch-sessions`) and starts over. `/stop` stops a running
+answer. Clearing deletes the messages on screen, including yours, but not
+requests still waiting for your decision; Telegram only lets bots delete
+messages from the last 48 hours. After you approve or deny a request,
 the agent is told how it ended so it can check the fix.
 
 Times show in your own time zone, and long diffs and logs stay collapsed
@@ -285,8 +281,8 @@ until you tap them.
 
 With `agent.checks`, the agent also checks the server on its own (every 6
 hours by default, or now with `/check`). You only hear from it when it finds
-something new: its report opens a new conversation, so your reply continues
-there. Checks never change anything, not even a restart: they run in
+something new: its report becomes the current conversation, so your reply
+continues there. Checks never change anything, not even a restart: they run in
 Docker Agent's restricted mode with a config that has no allow list for
 Latch's change tools, and the bridge refuses to run checks with one that
 does. Fixes happen only when you ask for them.

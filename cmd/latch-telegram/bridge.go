@@ -113,9 +113,6 @@ func (b *bridge) dispatch(ctx context.Context, u tgapi.Update) {
 		if b.approvals.HandlePress(ctx, cb) {
 			return
 		}
-		if b.chat != nil && b.chat.HandlePress(ctx, cb) {
-			return
-		}
 		_ = b.bot.Answer(ctx, cb.ID, "This button no longer does anything.")
 	case u.Message != nil:
 		m := *u.Message

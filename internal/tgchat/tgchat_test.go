@@ -132,34 +132,17 @@ func TestMessagesRunInTheActiveSession(t *testing.T) {
 		t.Fatalf("calls %+v", calls)
 	}
 
-	h.send("/new disk check")
-	h.waitText("New conversation: disk check")
+	h.send("/new")
+	h.waitText("New conversation.")
 	h.send("how full is /srv?")
 	h.waitText("answer to how full is /srv?")
 	if c := h.run.Calls(); c[2].session == c[0].session {
 		t.Fatal("/new kept the old session")
 	}
 
-	h.send("/sessions")
-	list := h.waitText("Pick a conversation")
-	if len(list.Keyboard) != 2 || !strings.HasPrefix(list.Keyboard[0][0].Text, "* disk check") || !strings.HasPrefix(list.Keyboard[1][0].Text, "is caddy healthy?") {
-		t.Fatalf("keyboard %+v", list.Keyboard)
-	}
-	cb := tgapi.CallbackQuery{ID: "cb1", Data: list.Keyboard[1][0].Data, Message: &tgapi.Message{MessageID: list.ID}}
-	if !h.chat.HandlePress(context.Background(), cb) {
-		t.Fatal("press not handled")
-	}
-	h.send("back again")
-	h.waitText("answer to back again")
-	if c := h.run.Calls(); c[3].session != c[0].session {
-		t.Fatal("switch did not take")
-	}
-
-	h.send("/rename caddy and jellyfin")
-	h.waitText("Renamed to: caddy and jellyfin")
-	// The index survives a bridge restart.
+	// The conversation survives a bridge restart.
 	c := h.newChat(time.Minute)
-	if c.index.Active != h.run.Calls()[0].session || len(c.index.Sessions) != 2 || c.index.Sessions[0].Title != "caddy and jellyfin" {
+	if c.index.Conversation != h.run.Calls()[2].session {
 		t.Fatalf("index %+v", c.index)
 	}
 	if st, err := os.Stat(h.index); err != nil || st.Mode().Perm() != 0o600 {
@@ -239,21 +222,18 @@ func TestNotify(t *testing.T) {
 }
 
 func TestCommandParsing(t *testing.T) {
-	for _, tc := range []struct{ in, cmd, arg string }{
-		{"/new", "new", ""},
-		{"/new  my  name ", "new", "my  name"},
-		{"/Sessions@latch_bot", "sessions", ""},
+	for _, tc := range []struct{ in, cmd string }{
+		{"/new", "new"},
+		{"/new  my  name ", "new"},
+		{"/Stop@latch_bot", "stop"},
 	} {
-		cmd, arg, ok := command(tc.in)
-		if !ok || cmd != tc.cmd || arg != tc.arg {
-			t.Errorf("%q: %q %q %v", tc.in, cmd, arg, ok)
+		cmd, ok := command(tc.in)
+		if !ok || cmd != tc.cmd {
+			t.Errorf("%q: %q %v", tc.in, cmd, ok)
 		}
 	}
-	if _, _, ok := command("hello /new"); ok {
+	if _, ok := command("hello /new"); ok {
 		t.Error("text taken as command")
-	}
-	if got := title("  first\nline  of a much longer message that goes on and on "); got != "first line of a much longer message that..." {
-		t.Errorf("title %q", got)
 	}
 }
 
@@ -425,8 +405,8 @@ func TestChecks(t *testing.T) {
 
 	h.send("/check")
 	h.waitText("All clear.")
-	if n := len(h.chat.index.Sessions); n != 0 {
-		t.Fatalf("an all-clear check left a conversation: %d", n)
+	if id := h.chat.index.Conversation; id != "" {
+		t.Fatalf("an all-clear check left a conversation: %s", id)
 	}
 
 	checks.mu.Lock()
@@ -437,10 +417,10 @@ func TestChecks(t *testing.T) {
 	h.chat.queue <- job{check: true} // a scheduled one: silent unless it finds something
 	h.waitText("Jellyfin keeps restarting.")
 	h.chat.mu.Lock()
-	sessions, active, reported := h.chat.index.Sessions, h.chat.index.Active, h.chat.index.Reported
+	active, reported := h.chat.index.Conversation, h.chat.index.Reported
 	h.chat.mu.Unlock()
-	if len(sessions) != 1 || active != sessions[0].ID || !strings.HasPrefix(sessions[0].Title, "Check: Jellyfin keeps restarting.") {
-		t.Fatalf("sessions %+v active %s", sessions, active)
+	if active == "" {
+		t.Fatal("the finding is not the current conversation")
 	}
 	if len(reported) != 1 || reported[0].Headline != "Jellyfin keeps restarting. Its health check fails since 09:12." {
 		t.Errorf("reported %+v", reported)
@@ -448,7 +428,7 @@ func TestChecks(t *testing.T) {
 	// The owner's reply continues the check's conversation.
 	h.send("fix it")
 	h.waitText("answer to fix it")
-	if c := h.run.Calls(); c[len(c)-1].session != sessions[0].ID {
+	if c := h.run.Calls(); c[len(c)-1].session != active {
 		t.Errorf("reply went to %s, not the check's conversation", c[len(c)-1].session)
 	}
 	// The next check is told what was already reported.

@@ -2,7 +2,6 @@ package tgchat
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -11,9 +10,9 @@ import (
 // with CheckRunner, which must not be able to change anything (an agent
 // config without the change tools, run in restricted safety mode). When it
 // finds nothing new it answers allClear and the owner hears nothing. When it
-// finds a problem, its report opens a new conversation, which becomes the
-// active one so the owner's reply ("fix it") continues there. Fixes are only
-// ever made when the owner asks.
+// finds a problem, its report becomes the current conversation, so the owner's
+// reply ("fix it") continues there. Fixes are only ever made when the owner
+// asks.
 
 // allClear is the whole answer of a check that found nothing new.
 const allClear = "ALL_CLEAR"
@@ -47,7 +46,7 @@ func (c *Chat) checkLoop(ctx context.Context) {
 		err := c.saveLocked()
 		c.mu.Unlock()
 		if err != nil {
-			c.o.Logger.Warn("saving the session index failed", "err", err)
+			c.o.Logger.Warn("saving the chat state failed", "err", err)
 		}
 		select {
 		case c.queue <- job{check: true}:
@@ -76,11 +75,7 @@ func (c *Chat) check(ctx context.Context, manual bool) {
 	// A check runs in a conversation of its own with its own database, so
 	// one that finds nothing can be deleted without a trace.
 	id := newID()
-	own := c.o.SessionDir != ""
-	t := Turn{Session: id, Message: checkPrompt(recent)}
-	if own {
-		t.DB = filepath.Join(c.o.SessionDir, id+".db")
-	}
+	t := Turn{Session: id, Message: checkPrompt(recent), DB: c.dbFor(id)}
 	if manual {
 		_ = c.o.Bot.Typing(ctx, c.o.Chat)
 	}
@@ -102,25 +97,19 @@ func (c *Chat) check(ctx context.Context, manual bool) {
 		}
 		return
 	}
-	// A finding becomes the active conversation, so the owner's reply
-	// ("fix it") continues there. What is on the screen now stays on it:
-	// it moves to the new conversation, which /new clears with the rest.
-	headline := title(firstLine(answer))
+	// A finding becomes the current conversation, so the owner's reply
+	// ("fix it") continues there; the conversation it replaces is deleted.
+	// What is on the screen stays and goes with /new.
 	c.mu.Lock()
-	screen := c.screenLocked()
-	c.index.Sessions = append(c.index.Sessions, session{
-		ID: id, Title: "Check: " + headline, Started: now, LastUsed: now, Own: own, Messages: screen,
-	})
-	c.index.Active = id
+	old := c.index.Conversation
+	c.index.Conversation = id
 	c.index.Reported = append(c.index.Reported, report{At: now, Headline: textHead(firstLine(answer), 200)})
-	victims := c.pruneLocked()
 	err = c.saveLocked()
 	c.mu.Unlock()
 	if err != nil {
-		c.o.Logger.Warn("saving the session index failed", "err", err)
+		c.o.Logger.Warn("saving the chat state failed", "err", err)
 	}
-	c.discard(ctx, victims)
-	c.appendHistory(id, "agent", answer)
+	c.removeDB(ctx, c.dbFor(old))
 	c.answer(ctx, answer, 0)
 }
 

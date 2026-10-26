@@ -214,14 +214,8 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			sessionDir = ""
 		}
 		cancel()
-		historyDir := filepath.Join(cfg.StateDir, "history")
-		if err := os.MkdirAll(historyDir, 0o700); err != nil {
-			return nil, err
-		}
 		b.chat, err = tgchat.New(tgchat.Options{
 			SessionDir: sessionDir,
-			HistoryDir: historyDir,
-			Keep:       a.KeepSessions,
 			Remove: func(ctx context.Context, paths []string) error {
 				for _, p := range paths {
 					if filepath.Dir(p) != sessionDir || strings.Contains(p, "..") {

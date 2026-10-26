@@ -474,22 +474,3 @@ func TestGuardedRunnerVerifiesEveryRun(t *testing.T) {
 		t.Fatalf("%v %d", err, inner.calls)
 	}
 }
-
-func TestKeepSessionsConfig(t *testing.T) {
-	base := "owner_id: 1\nagent:\n  user: keeper\n  config: /home/keeper/keeper.yaml\n"
-	c, err := loadConfig(writeConfig(t, base))
-	if err != nil || c.Agent.KeepSessions != 5 {
-		t.Fatalf("default: %v %+v", err, c.Agent)
-	}
-	if c, err := loadConfig(writeConfig(t, base+"  keep_sessions: 12\n")); err != nil || c.Agent.KeepSessions != 12 {
-		t.Fatalf("12: %v", err)
-	}
-	for _, bad := range []string{"0", "-1", "51"} {
-		if bad == "0" {
-			continue // 0 means the default
-		}
-		if _, err := loadConfig(writeConfig(t, base+"  keep_sessions: "+bad+"\n")); err == nil || !strings.Contains(err.Error(), "keep_sessions") {
-			t.Errorf("keep_sessions %s: %v", bad, err)
-		}
-	}
-}

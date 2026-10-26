@@ -59,9 +59,6 @@ type AgentConfig struct {
 	Config  string   `yaml:"config"`
 	Args    []string `yaml:"args"`
 	Timeout Duration `yaml:"timeout"`
-	// KeepSessions is how many conversations are kept; older ones are
-	// deleted with their database. Default 5.
-	KeepSessions int `yaml:"keep_sessions"`
 	// Checks, when set, has the agent check the server on its own.
 	Checks *ChecksConfig `yaml:"checks"`
 }
@@ -151,9 +148,6 @@ func (c *Config) defaults() {
 		if a.Timeout == 0 {
 			a.Timeout = Duration(10 * time.Minute)
 		}
-		if a.KeepSessions == 0 {
-			a.KeepSessions = 5
-		}
 		if a.Checks != nil && a.Checks.Every == 0 {
 			a.Checks.Every = Duration(6 * time.Hour)
 		}
@@ -201,9 +195,6 @@ func (c *Config) validate(requireOwner bool) error {
 		}
 		if d := time.Duration(a.Timeout); d < 10*time.Second || d > maxTimeout {
 			add("agent.timeout: %s must be between 10s and 1h", d)
-		}
-		if a.KeepSessions < 1 || a.KeepSessions > 50 {
-			add("agent.keep_sessions: %d must be between 1 and 50", a.KeepSessions)
 		}
 		if ch := a.Checks; ch != nil {
 			if d := time.Duration(ch.Every); d < 30*time.Minute || d > 7*24*time.Hour {
