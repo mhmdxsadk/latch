@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.13.0](https://github.com/mhmdxsadk/latch/compare/v0.12.0...v0.13.0) (2026-10-26)
+
+
+### Features
+
+* **telegram:** add latch-telegram pair to link the owner's account ([8331951](https://github.com/mhmdxsadk/latch/commit/8331951458c264e4c5c059c566e71fe2f7ccbbec))
+* **telegram:** format messages for reading on a phone ([0ea8a6c](https://github.com/mhmdxsadk/latch/commit/0ea8a6c56b9b8a7f07832fd05af341cb03f2da72))
+* **tgapprove:** local times, colored buttons and collapsed diffs ([a153bb6](https://github.com/mhmdxsadk/latch/commit/a153bb6bce10f29defc22601160c0a0bd2b3fb4b))
+* **tgchat:** stream agent answers live with a stop button ([c52fe58](https://github.com/mhmdxsadk/latch/commit/c52fe58e9f4cf78eece5428754700c7d455ca56c))
+
 ## [0.12.0](https://github.com/mhmdxsadk/latch/compare/v0.11.1...v0.12.0) (2026-10-25)
 
 
