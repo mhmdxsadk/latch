@@ -464,8 +464,12 @@ func (c *Chat) welcome() string {
 	if h := c.o.Host; h != "" {
 		where = "the " + strings.ToUpper(h[:1]) + h[1:] + " server"
 	}
-	return "Ask me anything about " + where + ", or tell me what to fix. Changes wait until you tap Approve.\n\n" +
-		"/new clears the chat and starts over · /stop stops an answer"
+	var b strings.Builder
+	b.WriteString("Ask me anything about " + where + ", or tell me what to fix. Changes wait until you tap Approve.\n\nCommands:")
+	for _, cmd := range Commands {
+		b.WriteString("\n/" + cmd.Command + " - " + cmd.Description)
+	}
+	return b.String()
 }
 
 // plain sends text without the italics of a note.

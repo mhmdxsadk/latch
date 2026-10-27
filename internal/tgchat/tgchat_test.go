@@ -402,7 +402,7 @@ func TestWelcome(t *testing.T) {
 	h.chat.o.Host = "lisbon"
 	h.send("/start")
 	m := h.waitText("Ask me anything about the Lisbon server, or tell me what to fix.")
-	if len(m.Entities) != 0 || !strings.Contains(m.Text, "/new clears the chat and starts over") {
+	if len(m.Entities) != 0 || !strings.Contains(m.Text, "Commands:\n/new - Clear the chat and start a new conversation\n/stop - ") || strings.Contains(m.Text, "·") {
 		t.Errorf("%q %+v", m.Text, m.Entities)
 	}
 }
