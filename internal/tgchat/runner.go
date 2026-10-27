@@ -10,7 +10,6 @@ import (
 	"io"
 	"os/exec"
 	"os/user"
-	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -243,8 +242,6 @@ type event struct {
 		} `json:"function"`
 	} `json:"tool_call"`
 }
-
-var toolName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 
 func (e *events) handle(line []byte) {
 	var ev event
