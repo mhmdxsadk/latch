@@ -213,7 +213,7 @@ type Progress struct {
 	// Text is the entry agent's answer so far (Markdown), empty while it
 	// works with tools.
 	Text string
-	// Status says what it is doing, like "Checking docker_status".
+	// Status is workingStatus while the agent works without text to show.
 	Status string
 }
 
@@ -262,7 +262,7 @@ func (e *events) handle(line []byte) {
 		}
 	case "agent_choice":
 		if ev.AgentName != e.root {
-			e.setStatus("Asking " + cleanName(ev.AgentName))
+			e.setStatus(workingStatus)
 			return
 		}
 		if ev.MessageID != e.message {
@@ -279,21 +279,17 @@ func (e *events) handle(line []byte) {
 		e.status = ""
 		e.report()
 	case "tool_call":
-		name := ev.ToolCall.Function.Name
-		if !toolName.MatchString(name) {
-			name = "a tool"
-		}
-		who := ""
-		if ev.AgentName != "" && ev.AgentName != e.root {
-			who = cleanName(ev.AgentName) + ": "
-		}
-		e.setStatus(who + "Checking " + name)
+		e.setStatus(workingStatus)
 	case "error":
 		if e.errText == "" {
 			e.errText = lastLines(textsafe.Head(ev.Error, 500), 3)
 		}
 	}
 }
+
+// workingStatus is all the owner sees of the agent's tool calls and helpers:
+// what it runs is noise on a phone.
+const workingStatus = "Working"
 
 func (e *events) setStatus(s string) {
 	if s == e.status {
@@ -310,13 +306,6 @@ func (e *events) report() {
 	if e.progress != nil {
 		e.progress(Progress{Text: e.answer.String(), Status: e.status})
 	}
-}
-
-func cleanName(s string) string {
-	if toolName.MatchString(s) {
-		return s
-	}
-	return "another agent"
 }
 
 // readLines calls fn for each line of r, skipping lines over maxEventLine.

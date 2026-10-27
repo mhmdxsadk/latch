@@ -300,7 +300,7 @@ END
 		}
 		seen = append(seen, p.Status+"|"+p.Text)
 	}
-	want := "|Let me check.,Checking docker_status|,Asking researcher|,|All ,|All **good**."
+	want := "|Let me check.,Working|,|All ,|All **good**."
 	if got := strings.Join(seen, ","); got != want {
 		t.Errorf("progress\n got  %s\n want %s", got, want)
 	}
@@ -331,7 +331,7 @@ END
 
 func TestLiveDraftsAndAnswer(t *testing.T) {
 	h := newHarness(t, time.Minute)
-	h.run.steps = []Progress{{Status: "Checking docker_status"}, {Text: "Caddy is **up**"}}
+	h.run.steps = []Progress{{Status: "Working"}, {Text: "Caddy is **up**"}}
 	id := h.tg.MessageID(owner, "is caddy up?")
 	h.chat.HandleText(context.Background(), "is caddy up?", id)
 	m := h.waitText("answer to is caddy up?")
@@ -349,14 +349,14 @@ func TestLiveDraftsAndAnswer(t *testing.T) {
 		texts = append(texts, d.Text)
 	}
 	got := strings.Join(texts, "|")
-	if !strings.HasPrefix(got, "Checking docker_status...|") || !strings.Contains(got, "|Caddy is up") {
+	if !strings.HasPrefix(got, "Working...|") || !strings.Contains(got, "|Caddy is up") {
 		t.Errorf("drafts %q", got)
 	}
 }
 
 func TestStopButton(t *testing.T) {
 	h := newHarness(t, time.Minute)
-	h.run.steps = []Progress{{Status: "Checking docker_logs"}}
+	h.run.steps = []Progress{{Status: "Working"}}
 	h.run.block = true
 	h.send("long job")
 	tgtest.WaitFor(t, "a draft", func() bool { return len(h.tg.Drafts()) > 0 })
