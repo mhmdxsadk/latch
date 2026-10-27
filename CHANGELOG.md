@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.18.2](https://github.com/mhmdxsadk/latch/compare/v0.18.1...v0.18.2) (2026-10-27)
+
+
+### Features
+
+* **tgchat:** animated dots while the agent works ([3e88b14](https://github.com/mhmdxsadk/latch/commit/3e88b143e5e0e8eab870a290f43e705e0f594ca8))
+
+
+### Miscellaneous Chores
+
+* release 0.18.2 ([acd29d6](https://github.com/mhmdxsadk/latch/commit/acd29d62000bb60dddf314320aeabe6e2d466fd5))
+
 ## [0.18.1](https://github.com/mhmdxsadk/latch/compare/v0.18.0...v0.18.1) (2026-10-27)
 
 
