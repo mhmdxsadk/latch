@@ -2,6 +2,7 @@ package tgchat
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 )
@@ -83,7 +84,12 @@ func (c *Chat) check(ctx context.Context, manual bool) {
 	if err != nil {
 		c.removeDB(ctx, t.DB)
 		c.o.Logger.Warn("check failed", "err", err)
-		if manual {
+		var re *RunError
+		switch {
+		case !manual:
+		case errors.As(err, &re) && re.UsageLimit():
+			c.say(ctx, usageLimitText(c.o.Name))
+		default:
 			c.say(ctx, "The check could not run; see the latch-telegram log.")
 		}
 		return

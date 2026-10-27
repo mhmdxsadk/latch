@@ -359,6 +359,13 @@ func (e *RunError) Error() string {
 	return fmt.Sprintf("exit status %d: %s", e.Code, e.Stderr)
 }
 
+// UsageLimit reports whether the agent's model refused the run because the
+// account's usage limit is used up (HTTP 429), which clears on its own.
+func (e *RunError) UsageLimit() bool {
+	s := strings.ToLower(e.Stderr)
+	return strings.Contains(s, "usage limit") || strings.Contains(s, "http 429")
+}
+
 func lastLines(s string, n int) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	if len(lines) > n {

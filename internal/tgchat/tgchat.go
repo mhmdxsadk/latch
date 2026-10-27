@@ -326,6 +326,9 @@ func (c *Chat) turn(parent context.Context, j job) {
 	case errors.Is(err, context.DeadlineExceeded):
 		c.sayTo(parent, j.messageID, fmt.Sprintf("%s did not finish within %s and was stopped.", c.o.Name, c.o.Timeout))
 		return
+	case errors.As(err, &re) && re.UsageLimit():
+		c.sayTo(parent, j.messageID, usageLimitText(c.o.Name))
+		return
 	case errors.As(err, &re):
 		c.sayTo(parent, j.messageID, fmt.Sprintf("%s failed (%s).", c.o.Name, re.Error()))
 		return
@@ -335,6 +338,12 @@ func (c *Chat) turn(parent context.Context, j job) {
 		return
 	}
 	c.answer(parent, out, j.messageID)
+}
+
+// usageLimitText is what the owner reads when the model's usage limit is
+// used up: no error text, and nothing to fix.
+func usageLimitText(name string) string {
+	return "The usage limit is reached, so " + name + " cannot answer right now. Try again after it resets."
 }
 
 // live shows a turn as it happens: a draft with a Stop button that grows
