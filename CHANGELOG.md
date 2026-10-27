@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/mhmdxsadk/latch/compare/v0.17.0...v0.18.0) (2026-10-27)
+
+
+### Features
+
+* **tgchat:** help opens with the bot description, one command per paragraph ([ac0c8c7](https://github.com/mhmdxsadk/latch/commit/ac0c8c7337e0975bcd7e59a81d4eb0a392bad455))
+
 ## [0.17.0](https://github.com/mhmdxsadk/latch/compare/v0.16.1...v0.17.0) (2026-10-27)
 
 
