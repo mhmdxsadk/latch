@@ -33,18 +33,21 @@ type bridge struct {
 }
 
 // description is what the bot's profile and empty chat say.
-func (b *bridge) description() (long, short string) {
+func (b *bridge) description() (long, short string) { return describe(b.host, b.chat != nil) }
+
+// describe words the long and short description for a host (its short name,
+// or empty) with or without the chat.
+func describe(host string, chat bool) (long, short string) {
 	server := "server"
-	if h := b.host; h != "" {
-		server = strings.ToUpper(h[:1]) + h[1:] + " server"
+	if host != "" {
+		server = strings.ToUpper(host[:1]) + host[1:] + " server"
 	}
-	label := strings.ToUpper(server[:1]) + server[1:]
-	if b.chat != nil {
+	if chat {
 		engineer := "On-call engineer for the " + server + "."
 		return engineer + " Monitors containers and services, looks into incidents, and handles requested changes.", engineer
 	}
 	return "Approval requests for changes to the " + server + ".",
-		label + " approvals."
+		strings.ToUpper(server[:1]) + server[1:] + " approvals."
 }
 
 func (b *bridge) commands() []tgapi.Command {

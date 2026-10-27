@@ -400,10 +400,20 @@ func TestQuickAnswerHasNoDraft(t *testing.T) {
 func TestWelcome(t *testing.T) {
 	h := newHarness(t, time.Minute)
 	h.chat.o.Host = "lisbon"
+	h.chat.o.Intro = "On-call engineer for the Lisbon server. Monitors containers."
 	h.send("/start")
-	m := h.waitText("Ask me anything about the Lisbon server, or tell me what to fix.")
-	if len(m.Entities) != 0 || !strings.Contains(m.Text, "Commands:\n/new - Clear the chat and start a new conversation\n/stop - ") || strings.Contains(m.Text, "·") {
+	m := h.waitText("On-call engineer for the Lisbon server. Monitors containers.")
+	want := "On-call engineer for the Lisbon server. Monitors containers.\n\nCommands:\n\n" +
+		"/new - Clears the chat and starts a new conversation\n\n" +
+		"/stop - Stop the running answer and drop waiting messages\n\n" +
+		"/check - Checks the server's current state\n\n" +
+		"/help - Shows this message"
+	if len(m.Entities) != 0 || m.Text != want {
 		t.Errorf("%q %+v", m.Text, m.Entities)
+	}
+	h.chat.o.Intro = ""
+	if got := h.chat.welcome(); !strings.HasPrefix(got, "On-call engineer for the Lisbon server.\n\nCommands:") {
+		t.Errorf("default intro: %q", got)
 	}
 }
 

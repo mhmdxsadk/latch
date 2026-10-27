@@ -214,6 +214,7 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			sessionDir = ""
 		}
 		cancel()
+		intro, _ := describe(b.host, true)
 		b.chat, err = tgchat.New(tgchat.Options{
 			SessionDir: sessionDir,
 			Remove: func(ctx context.Context, paths []string) error {
@@ -236,7 +237,8 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			Name:      a.Name,
 			Timeout:   time.Duration(a.Timeout),
 			Location:  b.loc,
-			Host:      hostname(),
+			Host:      b.host,
+			Intro:     intro,
 			Logger:    log,
 		})
 		if err != nil {

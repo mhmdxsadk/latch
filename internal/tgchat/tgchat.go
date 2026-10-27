@@ -52,10 +52,10 @@ const (
 
 // Commands is the bot's command menu.
 var Commands = []tgapi.Command{
-	{Command: "new", Description: "Clear the chat and start a new conversation"},
+	{Command: "new", Description: "Clears the chat and starts a new conversation"},
 	{Command: "stop", Description: "Stop the running answer and drop waiting messages"},
-	{Command: "check", Description: "Check the server now"},
-	{Command: "help", Description: "What this bot does"},
+	{Command: "check", Description: "Checks the server's current state"},
+	{Command: "help", Description: "Shows this message"},
 }
 
 // Options configure a Chat.
@@ -72,6 +72,8 @@ type Options struct {
 	Location *time.Location
 	// Host names the server in the welcome text.
 	Host string
+	// Intro opens the welcome text; empty means a one-line default.
+	Intro string
 	// CheckRunner runs scheduled checks every CheckEvery (0: none). It must
 	// not be able to change anything.
 	CheckRunner Runner
@@ -458,16 +460,21 @@ func (c *Chat) say(ctx context.Context, text string) {
 	}
 }
 
-// welcome is the /start and /help text.
+// welcome is the /start and /help text: what the bot is, then each command
+// on its own line with a blank line between.
 func (c *Chat) welcome() string {
-	where := "this server"
-	if h := c.o.Host; h != "" {
-		where = "the " + strings.ToUpper(h[:1]) + h[1:] + " server"
+	intro := c.o.Intro
+	if intro == "" {
+		where := "this server"
+		if h := c.o.Host; h != "" {
+			where = "the " + strings.ToUpper(h[:1]) + h[1:] + " server"
+		}
+		intro = "On-call engineer for " + where + "."
 	}
 	var b strings.Builder
-	b.WriteString("Ask me anything about " + where + ", or tell me what to fix. Changes wait until you tap Approve.\n\nCommands:")
+	b.WriteString(intro + "\n\nCommands:")
 	for _, cmd := range Commands {
-		b.WriteString("\n/" + cmd.Command + " - " + cmd.Description)
+		b.WriteString("\n\n/" + cmd.Command + " - " + cmd.Description)
 	}
 	return b.String()
 }
