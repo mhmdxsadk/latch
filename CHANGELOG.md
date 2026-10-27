@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.17.0](https://github.com/mhmdxsadk/latch/compare/v0.16.1...v0.17.0) (2026-10-27)
+
+
+### Features
+
+* **tgchat:** list the commands in the welcome text ([f767ad8](https://github.com/mhmdxsadk/latch/commit/f767ad8770af26f8118d9c209570ece886550581))
+
+
+### Bug Fixes
+
+* **telegram:** bot description says what you do with it ([654bdec](https://github.com/mhmdxsadk/latch/commit/654bdec0e446cca22f8521d04abbb76a1475f8b0))
+* **telegram:** long description is the on-call engineer line ([272c2ba](https://github.com/mhmdxsadk/latch/commit/272c2bafc9fea271636878f8ad386174d6841981))
+* **telegram:** longer bot description ([56299e8](https://github.com/mhmdxsadk/latch/commit/56299e8b4f64c31ebfcdb60b867a18b992889847))
+* **telegram:** short description is the on-call engineer line ([ae09d29](https://github.com/mhmdxsadk/latch/commit/ae09d29c977b5c24a3c9a471738fb47193aec6d5))
+* **telegram:** shorter bot description ([750f037](https://github.com/mhmdxsadk/latch/commit/750f037521f850efc10e4f6d7c86f8928cf98825))
+* **tgchat:** neutral wording, no first or third person ([870e98c](https://github.com/mhmdxsadk/latch/commit/870e98c7df89eafb233dd7314151fbcafcd28d3a))
+* **tgchat:** say so when the usage limit is reached ([ac1bb43](https://github.com/mhmdxsadk/latch/commit/ac1bb43253b4f3d5552ff48e3376c8ef60a80ecc))
+* **tgchat:** the bot speaks in the first person ([93d6e25](https://github.com/mhmdxsadk/latch/commit/93d6e2583bb4b31ddc8ab6cc3bf5b8ad21426bff))
+
 ## [0.16.1](https://github.com/mhmdxsadk/latch/compare/v0.16.0...v0.16.1) (2026-10-26)
 
 
