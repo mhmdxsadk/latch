@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.1](https://github.com/mhmdxsadk/latch/compare/v0.18.0...v0.18.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **tgchat:** answer without replying to the owner's message ([659ce06](https://github.com/mhmdxsadk/latch/commit/659ce06bcea447feec84654d4ae439f0c1a6da08))
+* **tgchat:** generic Working status instead of tool names ([5f928ea](https://github.com/mhmdxsadk/latch/commit/5f928ea79be965bdeeeef4e588f524660965347a))
+
 ## [0.18.0](https://github.com/mhmdxsadk/latch/compare/v0.17.0...v0.18.0) (2026-10-27)
 
 
