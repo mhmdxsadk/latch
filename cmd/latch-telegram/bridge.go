@@ -29,16 +29,22 @@ type bridge struct {
 	log       *slog.Logger
 	now       func() time.Time
 	loc       *time.Location
+	host      string // the server's short name, for the bot's description
 }
 
 // description is what the bot's profile and empty chat say.
 func (b *bridge) description() (long, short string) {
-	if b.chat != nil {
-		return "The agent that looks after your server. It investigates problems, reports what it finds and makes fixes when asked. Every change waits for the owner's approval.",
-			"Looks into problems on your server and fixes them when asked."
+	server := "server"
+	if h := b.host; h != "" {
+		server = strings.ToUpper(h[:1]) + h[1:] + " server"
 	}
-	return "Approval requests for the changes your server's agent wants to make.",
-		"Approval requests from your server's agent."
+	label := strings.ToUpper(server[:1]) + server[1:]
+	if b.chat != nil {
+		return "Ask what is wrong with the " + server + ", ask for a fix, and approve or deny changes here.",
+			label + ": ask, fix, approve."
+	}
+	return "Approve or deny changes to the " + server + " here.",
+		label + ": approve changes."
 }
 
 func (b *bridge) commands() []tgapi.Command {

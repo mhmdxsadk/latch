@@ -402,6 +402,10 @@ func TestStopPressOnlyFromOwner(t *testing.T) {
 	if long, short := b.description(); long == "" || len(short) > 120 || len(long) > 512 {
 		t.Errorf("description %q %q", long, short)
 	}
+	b.host = "lisbon"
+	if long, short := b.description(); !strings.Contains(long, "wrong with the Lisbon server,") || short != "Lisbon server: ask, fix, approve." {
+		t.Errorf("description %q %q", long, short)
+	}
 }
 
 func TestCheckReadOnly(t *testing.T) {

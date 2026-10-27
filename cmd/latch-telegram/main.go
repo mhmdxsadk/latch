@@ -168,7 +168,7 @@ func cmdServe(args []string, stderr io.Writer) int {
 
 // newBridge wires the approvals and, when configured, the chat.
 func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error) {
-	b := &bridge{bot: bot, owner: cfg.OwnerID, log: log, now: time.Now, loc: time.Local}
+	b := &bridge{bot: bot, owner: cfg.OwnerID, log: log, now: time.Now, loc: time.Local, host: hostname()}
 	if cfg.TimeZone != "" {
 		loc, err := time.LoadLocation(cfg.TimeZone)
 		if err != nil {
