@@ -40,11 +40,11 @@ func (b *bridge) description() (long, short string) {
 	}
 	label := strings.ToUpper(server[:1]) + server[1:]
 	if b.chat != nil {
-		return "Ask what is wrong with the " + server + ", ask for a fix, and approve or deny changes here.",
-			label + ": ask, fix, approve."
+		return "On-call engineer for the " + server + ". Checks health, finds the cause of problems and fixes them on request.",
+			label + " management."
 	}
-	return "Approve or deny changes to the " + server + " here.",
-		label + ": approve changes."
+	return "Approval requests for changes to the " + server + ".",
+		label + " approvals."
 }
 
 func (b *bridge) commands() []tgapi.Command {
