@@ -395,6 +395,7 @@ func (lv *live) loop() {
 	tick := time.NewTicker(draftEvery)
 	defer tick.Stop()
 	drafts, shown := true, false
+	frame := 0
 	last := time.Now()
 	for {
 		select {
@@ -414,10 +415,13 @@ func (lv *live) loop() {
 			}
 			continue
 		}
-		if !dirty && shown && time.Since(last) < draftRefresh {
+		waiting := strings.TrimSpace(p.Text) == ""
+		if waiting {
+			frame++ // the dots move on every update
+		} else if !dirty && shown && time.Since(last) < draftRefresh {
 			continue
 		}
-		if err := c.o.Bot.Draft(lv.ctx, c.o.Chat, lv.id, c.preview(p), true); err != nil {
+		if err := c.o.Bot.Draft(lv.ctx, c.o.Chat, lv.id, c.preview(p, frame), true); err != nil {
 			c.o.Logger.Debug("drafts unavailable; showing typing instead", "err", err)
 			drafts = false
 			continue
@@ -426,11 +430,12 @@ func (lv *live) loop() {
 	}
 }
 
-// preview is the draft for p: the answer so far, or what the agent is doing.
-func (c *Chat) preview(p Progress) tgapi.Text {
+// preview is the draft for p: the answer so far, or while there is none the
+// status with dots that count up and start over, so it does not look stuck.
+func (c *Chat) preview(p Progress, frame int) tgapi.Text {
 	var b tgapi.Builder
 	if strings.TrimSpace(p.Text) == "" {
-		return b.Italic(p.Status + "...").Done()
+		return b.Plain(p.Status + strings.Repeat(".", frame%3+1)).Done()
 	}
 	body := Markdown(p.Text)
 	if body.Len() > tgapi.MaxText-b.Len()-8 {

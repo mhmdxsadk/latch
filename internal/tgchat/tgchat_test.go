@@ -349,8 +349,26 @@ func TestLiveDraftsAndAnswer(t *testing.T) {
 		texts = append(texts, d.Text)
 	}
 	got := strings.Join(texts, "|")
-	if !strings.HasPrefix(got, "Working...|") || !strings.Contains(got, "|Caddy is up") {
+	if !strings.HasPrefix(got, "Working.") || !strings.Contains(got, "|Caddy is up") {
 		t.Errorf("drafts %q", got)
+	}
+}
+
+func TestWaitingDotsMove(t *testing.T) {
+	h := newHarness(t, time.Minute)
+	h.run.steps = []Progress{{Status: "Working"}}
+	h.run.block = true
+	h.send("long job")
+	tgtest.WaitFor(t, "three drafts", func() bool { return len(h.tg.Drafts()) >= 3 })
+	seen := map[string]bool{}
+	for _, d := range h.tg.Drafts() {
+		if len(d.Entities) != 0 || !strings.HasPrefix(d.Text, "Working.") {
+			t.Errorf("draft %q %+v", d.Text, d.Entities)
+		}
+		seen[d.Text] = true
+	}
+	if len(seen) < 3 {
+		t.Errorf("dots do not move: %v", seen)
 	}
 }
 
