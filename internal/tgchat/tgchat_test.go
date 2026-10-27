@@ -158,7 +158,7 @@ func TestStop(t *testing.T) {
 	h.send("queued one")
 	tgtest.WaitFor(t, "the message to queue", func() bool { return len(h.chat.queue) == 1 })
 	h.send("/stop")
-	h.waitText("Stopping keeper (dropped 1 waiting)")
+	h.waitText("Stopping (dropped 1 waiting)")
 	h.waitText("Stopped.")
 	h.send("/stop")
 	h.waitText("Nothing running")
@@ -177,21 +177,21 @@ func TestTimeoutAndFailure(t *testing.T) {
 	h.run.reply = func(string) (string, error) { return "", &RunError{Code: 2, Stderr: "no model"} }
 	h.run.mu.Unlock()
 	h.send("again")
-	h.waitText("keeper failed (exit status 2: no model).")
+	h.waitText("I failed (exit status 2: no model).")
 	h.run.mu.Lock()
 	h.run.reply = func(string) (string, error) {
 		return "", &RunError{Code: 1, Stderr: "Error: model failed: error receiving from stream: HTTP 429: The usage limit has been reached"}
 	}
 	h.run.mu.Unlock()
 	h.send("limited")
-	if m := h.waitText("The usage limit is reached, so keeper cannot answer right now"); strings.Contains(m.Text, "429") || strings.Contains(m.Text, "failed") {
+	if m := h.waitText("I have reached my usage limit and cannot answer right now"); strings.Contains(m.Text, "429") || strings.Contains(m.Text, "failed") {
 		t.Errorf("error text shown: %q", m.Text)
 	}
 	h.run.mu.Lock()
 	h.run.reply = func(string) (string, error) { return "", errors.New("fork/exec: secret detail") }
 	h.run.mu.Unlock()
 	h.send("third")
-	m := h.waitText("Could not start keeper")
+	m := h.waitText("I could not start")
 	if strings.Contains(m.Text, "secret detail") {
 		t.Error("internal error text shown")
 	}

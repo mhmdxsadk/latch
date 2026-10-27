@@ -88,9 +88,9 @@ func (c *Chat) check(ctx context.Context, manual bool) {
 		switch {
 		case !manual:
 		case errors.As(err, &re) && re.UsageLimit():
-			c.say(ctx, usageLimitText(c.o.Name))
+			c.say(ctx, usageLimitText)
 		default:
-			c.say(ctx, "The check could not run; see the latch-telegram log.")
+			c.say(ctx, "I could not run the check; see the latch-telegram log.")
 		}
 		return
 	}

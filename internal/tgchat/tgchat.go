@@ -247,7 +247,7 @@ func (c *Chat) handleCommand(ctx context.Context, cmd string, messageID int64) {
 	case "stop":
 		dropped, running := c.stopRunning()
 		if running {
-			c.say(ctx, fmt.Sprintf("Stopping %s (dropped %d waiting).", c.o.Name, dropped))
+			c.say(ctx, fmt.Sprintf("Stopping (dropped %d waiting).", dropped))
 		} else {
 			c.say(ctx, fmt.Sprintf("Nothing running (dropped %d waiting).", dropped))
 		}
@@ -324,17 +324,17 @@ func (c *Chat) turn(parent context.Context, j job) {
 	var re *RunError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		c.sayTo(parent, j.messageID, fmt.Sprintf("%s did not finish within %s and was stopped.", c.o.Name, c.o.Timeout))
+		c.sayTo(parent, j.messageID, fmt.Sprintf("I did not finish within %s and was stopped.", c.o.Timeout))
 		return
 	case errors.As(err, &re) && re.UsageLimit():
-		c.sayTo(parent, j.messageID, usageLimitText(c.o.Name))
+		c.sayTo(parent, j.messageID, usageLimitText)
 		return
 	case errors.As(err, &re):
-		c.sayTo(parent, j.messageID, fmt.Sprintf("%s failed (%s).", c.o.Name, re.Error()))
+		c.sayTo(parent, j.messageID, fmt.Sprintf("I failed (%s).", re.Error()))
 		return
 	case err != nil:
 		c.o.Logger.Warn("agent run failed", "err", err)
-		c.sayTo(parent, j.messageID, "Could not start "+c.o.Name+"; see the latch-telegram log.")
+		c.sayTo(parent, j.messageID, "I could not start; see the latch-telegram log.")
 		return
 	}
 	c.answer(parent, out, j.messageID)
@@ -342,9 +342,7 @@ func (c *Chat) turn(parent context.Context, j job) {
 
 // usageLimitText is what the owner reads when the model's usage limit is
 // used up: no error text, and nothing to fix.
-func usageLimitText(name string) string {
-	return "The usage limit is reached, so " + name + " cannot answer right now. Try again after it resets."
-}
+const usageLimitText = "I have reached my usage limit and cannot answer right now. Try again after it resets."
 
 // live shows a turn as it happens: a draft with a Stop button that grows
 // with the answer, or the typing indicator when drafts do not work.
