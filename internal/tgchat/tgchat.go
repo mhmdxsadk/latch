@@ -324,17 +324,17 @@ func (c *Chat) turn(parent context.Context, j job) {
 	var re *RunError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		c.sayTo(parent, j.messageID, fmt.Sprintf("I did not finish within %s and was stopped.", c.o.Timeout))
+		c.sayTo(parent, j.messageID, fmt.Sprintf("Stopped after %s without an answer.", c.o.Timeout))
 		return
 	case errors.As(err, &re) && re.UsageLimit():
 		c.sayTo(parent, j.messageID, usageLimitText)
 		return
 	case errors.As(err, &re):
-		c.sayTo(parent, j.messageID, fmt.Sprintf("I failed (%s).", re.Error()))
+		c.sayTo(parent, j.messageID, fmt.Sprintf("Error: %s.", re.Error()))
 		return
 	case err != nil:
 		c.o.Logger.Warn("agent run failed", "err", err)
-		c.sayTo(parent, j.messageID, "I could not start; see the latch-telegram log.")
+		c.sayTo(parent, j.messageID, "Could not start; see the latch-telegram log.")
 		return
 	}
 	c.answer(parent, out, j.messageID)
@@ -342,7 +342,7 @@ func (c *Chat) turn(parent context.Context, j job) {
 
 // usageLimitText is what the owner reads when the model's usage limit is
 // used up: no error text, and nothing to fix.
-const usageLimitText = "I have reached my usage limit and cannot answer right now. Try again after it resets."
+const usageLimitText = "Usage limit reached. Try again after it resets."
 
 // live shows a turn as it happens: a draft with a Stop button that grows
 // with the answer, or the typing indicator when drafts do not work.

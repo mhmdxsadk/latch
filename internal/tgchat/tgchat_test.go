@@ -171,27 +171,27 @@ func TestTimeoutAndFailure(t *testing.T) {
 	h := newHarness(t, 50*time.Millisecond)
 	h.run.block = true
 	h.send("slow")
-	h.waitText("did not finish within 50ms")
+	h.waitText("Stopped after 50ms without an answer")
 	h.run.mu.Lock()
 	h.run.block = false
 	h.run.reply = func(string) (string, error) { return "", &RunError{Code: 2, Stderr: "no model"} }
 	h.run.mu.Unlock()
 	h.send("again")
-	h.waitText("I failed (exit status 2: no model).")
+	h.waitText("Error: exit status 2: no model.")
 	h.run.mu.Lock()
 	h.run.reply = func(string) (string, error) {
 		return "", &RunError{Code: 1, Stderr: "Error: model failed: error receiving from stream: HTTP 429: The usage limit has been reached"}
 	}
 	h.run.mu.Unlock()
 	h.send("limited")
-	if m := h.waitText("I have reached my usage limit and cannot answer right now"); strings.Contains(m.Text, "429") || strings.Contains(m.Text, "failed") {
+	if m := h.waitText("Usage limit reached. Try again after it resets."); strings.Contains(m.Text, "429") || strings.Contains(m.Text, "failed") {
 		t.Errorf("error text shown: %q", m.Text)
 	}
 	h.run.mu.Lock()
 	h.run.reply = func(string) (string, error) { return "", errors.New("fork/exec: secret detail") }
 	h.run.mu.Unlock()
 	h.send("third")
-	m := h.waitText("I could not start")
+	m := h.waitText("Could not start")
 	if strings.Contains(m.Text, "secret detail") {
 		t.Error("internal error text shown")
 	}
