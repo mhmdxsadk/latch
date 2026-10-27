@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.3](https://github.com/mhmdxsadk/latch/compare/v0.18.2...v0.18.3) (2026-10-27)
+
+
+### Bug Fixes
+
+* **tgchat:** typing indicator until the answer streams, no status text ([af71beb](https://github.com/mhmdxsadk/latch/commit/af71bebfb08df6b64e1f074f7b3d9d5b67d9edf5))
+
 ## [0.18.2](https://github.com/mhmdxsadk/latch/compare/v0.18.1...v0.18.2) (2026-10-27)
 
 
