@@ -329,14 +329,14 @@ END
 	}
 }
 
-func TestLiveDraftsAndReply(t *testing.T) {
+func TestLiveDraftsAndAnswer(t *testing.T) {
 	h := newHarness(t, time.Minute)
 	h.run.steps = []Progress{{Status: "Checking docker_status"}, {Text: "Caddy is **up**"}}
 	id := h.tg.MessageID(owner, "is caddy up?")
 	h.chat.HandleText(context.Background(), "is caddy up?", id)
 	m := h.waitText("answer to is caddy up?")
-	if m.ReplyTo != id {
-		t.Errorf("answer is not a reply: %+v", m)
+	if m.ReplyTo != 0 {
+		t.Errorf("answer replies to the owner's message: %+v", m)
 	}
 	var texts []string
 	for _, d := range h.tg.Drafts() {

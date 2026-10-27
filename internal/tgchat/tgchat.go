@@ -108,8 +108,8 @@ type job struct {
 	session string
 	text    string
 	note    string // shown to the owner for a message the bridge sends
-	// messageID is the owner's message, answered as a reply; 0 for
-	// messages the bridge sends.
+	// messageID is the message the answer replies to: the request's message
+	// for the outcome of a decision, 0 otherwise.
 	messageID int64
 	// check is a scheduled check; manual when the owner asked for it.
 	check, manual bool
@@ -187,7 +187,8 @@ func (c *Chat) Run(ctx context.Context) {
 }
 
 // HandleText handles a message from the owner: a command, or a message for
-// the agent. messageID is the owner's message, which the answer replies to.
+// the agent. messageID is the owner's message, only noted for /new to clear;
+// the answer is a plain message, not a reply to it.
 func (c *Chat) HandleText(ctx context.Context, text string, messageID int64) {
 	if cmd, ok := command(text); ok {
 		c.handleCommand(ctx, cmd, messageID)
@@ -205,7 +206,7 @@ func (c *Chat) HandleText(ctx context.Context, text string, messageID int64) {
 	if err != nil {
 		c.o.Logger.Warn("saving the chat state failed", "err", err)
 	}
-	c.enqueue(ctx, job{session: id, text: text, messageID: messageID})
+	c.enqueue(ctx, job{session: id, text: text})
 }
 
 // Notify sends text to the agent in the current conversation as an automatic
