@@ -41,7 +41,7 @@ func (b *bridge) description() (long, short string) {
 	label := strings.ToUpper(server[:1]) + server[1:]
 	if b.chat != nil {
 		engineer := "On-call engineer for the " + server + "."
-		return engineer, engineer
+		return engineer + " Monitors containers and services, looks into incidents, and handles requested changes.", engineer
 	}
 	return "Approval requests for changes to the " + server + ".",
 		label + " approvals."

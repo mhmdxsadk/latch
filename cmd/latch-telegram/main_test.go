@@ -403,7 +403,7 @@ func TestStopPressOnlyFromOwner(t *testing.T) {
 		t.Errorf("description %q %q", long, short)
 	}
 	b.host = "lisbon"
-	if long, short := b.description(); long != "On-call engineer for the Lisbon server." || short != long {
+	if long, short := b.description(); long != "On-call engineer for the Lisbon server. Monitors containers and services, looks into incidents, and handles requested changes." || short != "On-call engineer for the Lisbon server." {
 		t.Errorf("description %q %q", long, short)
 	}
 }
