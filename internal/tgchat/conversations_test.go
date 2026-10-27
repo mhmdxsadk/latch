@@ -239,9 +239,7 @@ func TestAFindingReplacesTheConversationAndKeepsTheScreen(t *testing.T) {
 	// /new clears everything on screen: the first chat and the finding.
 	h.say("/new")
 	h.waitText("New conversation.")
-	if v := h.visibleTexts(); len(v) != 1 {
-		t.Errorf("screen after /new: %q", v)
-	}
+	tgtest.WaitFor(t, "only the new conversation on screen", func() bool { return len(h.visibleTexts()) == 1 })
 }
 
 // screen, conversation and busy read the chat's state for the tests.

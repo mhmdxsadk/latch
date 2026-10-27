@@ -209,11 +209,10 @@ func (r *ExecRunner) Run(ctx context.Context, t Turn, progress func(Progress)) (
 
 // Progress is the live state of a turn.
 type Progress struct {
-	// Text is the entry agent's answer so far (Markdown), empty while it
-	// works with tools.
+	// Text is the entry agent's answer so far (Markdown); empty until the
+	// agent starts writing. Tool calls and helpers are not shown: what the
+	// agent runs is noise on a phone.
 	Text string
-	// Status is workingStatus while the agent works without text to show.
-	Status string
 }
 
 // events follows Docker Agent's event stream for one turn.
@@ -225,7 +224,6 @@ type events struct {
 	message string // id of the entry agent's current message
 	answer  strings.Builder
 	cut     bool
-	status  string
 	errText string
 }
 
@@ -259,8 +257,7 @@ func (e *events) handle(line []byte) {
 		}
 	case "agent_choice":
 		if ev.AgentName != e.root {
-			e.setStatus(workingStatus)
-			return
+			return // a helper agent's words are not the answer
 		}
 		if ev.MessageID != e.message {
 			// A new message: the answer is the last one, like --last.
@@ -273,10 +270,7 @@ func (e *events) handle(line []byte) {
 			return
 		}
 		e.answer.WriteString(ev.Content)
-		e.status = ""
 		e.report()
-	case "tool_call":
-		e.setStatus(workingStatus)
 	case "error":
 		if e.errText == "" {
 			e.errText = lastLines(textsafe.Head(ev.Error, 500), 3)
@@ -284,24 +278,9 @@ func (e *events) handle(line []byte) {
 	}
 }
 
-// workingStatus is all the owner sees of the agent's tool calls and helpers:
-// what it runs is noise on a phone.
-const workingStatus = "Working"
-
-func (e *events) setStatus(s string) {
-	if s == e.status {
-		return
-	}
-	e.status = s
-	// Work after some text started (more tool calls before the final
-	// message) shows the status again.
-	e.answer.Reset()
-	e.report()
-}
-
 func (e *events) report() {
 	if e.progress != nil {
-		e.progress(Progress{Text: e.answer.String(), Status: e.status})
+		e.progress(Progress{Text: e.answer.String()})
 	}
 }
 

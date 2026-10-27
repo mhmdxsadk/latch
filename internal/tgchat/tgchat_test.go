@@ -295,12 +295,12 @@ END
 	}
 	var seen []string
 	for _, p := range steps {
-		if strings.Contains(p.Text+p.Status, "SECRET") {
+		if strings.Contains(p.Text, "SECRET") {
 			t.Fatalf("tool output reached the preview: %+v", p)
 		}
-		seen = append(seen, p.Status+"|"+p.Text)
+		seen = append(seen, p.Text)
 	}
-	want := "|Let me check.,Working|,|All ,|All **good**."
+	want := "Let me check.,All ,All **good**."
 	if got := strings.Join(seen, ","); got != want {
 		t.Errorf("progress\n got  %s\n want %s", got, want)
 	}
@@ -331,7 +331,7 @@ END
 
 func TestLiveDraftsAndAnswer(t *testing.T) {
 	h := newHarness(t, time.Minute)
-	h.run.steps = []Progress{{Status: "Working"}, {Text: "Caddy is **up**"}}
+	h.run.steps = []Progress{{Text: "Caddy is **up**"}}
 	id := h.tg.MessageID(owner, "is caddy up?")
 	h.chat.HandleText(context.Background(), "is caddy up?", id)
 	m := h.waitText("answer to is caddy up?")
@@ -349,32 +349,25 @@ func TestLiveDraftsAndAnswer(t *testing.T) {
 		texts = append(texts, d.Text)
 	}
 	got := strings.Join(texts, "|")
-	if !strings.HasPrefix(got, "Working.") || !strings.Contains(got, "|Caddy is up") {
+	if !strings.HasPrefix(got, "Caddy is up") {
 		t.Errorf("drafts %q", got)
 	}
 }
 
-func TestWaitingDotsMove(t *testing.T) {
+func TestWaitingShowsTypingOnly(t *testing.T) {
 	h := newHarness(t, time.Minute)
-	h.run.steps = []Progress{{Status: "Working"}}
 	h.run.block = true
 	h.send("long job")
-	tgtest.WaitFor(t, "three drafts", func() bool { return len(h.tg.Drafts()) >= 3 })
-	seen := map[string]bool{}
-	for _, d := range h.tg.Drafts() {
-		if len(d.Entities) != 0 || !strings.HasPrefix(d.Text, "Working.") {
-			t.Errorf("draft %q %+v", d.Text, d.Entities)
-		}
-		seen[d.Text] = true
-	}
-	if len(seen) < 3 {
-		t.Errorf("dots do not move: %v", seen)
+	tgtest.WaitFor(t, "typing", func() bool { return h.tg.Typing() > 0 })
+	time.Sleep(2 * draftEvery)
+	if d := h.tg.Drafts(); len(d) != 0 {
+		t.Errorf("a draft before any answer text: %+v", d)
 	}
 }
 
 func TestStopButton(t *testing.T) {
 	h := newHarness(t, time.Minute)
-	h.run.steps = []Progress{{Status: "Working"}}
+	h.run.steps = []Progress{{Text: "Looking at it"}}
 	h.run.block = true
 	h.send("long job")
 	tgtest.WaitFor(t, "a draft", func() bool { return len(h.tg.Drafts()) > 0 })

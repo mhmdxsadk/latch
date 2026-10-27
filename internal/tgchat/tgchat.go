@@ -395,7 +395,6 @@ func (lv *live) loop() {
 	tick := time.NewTicker(draftEvery)
 	defer tick.Stop()
 	drafts, shown := true, false
-	frame := 0
 	last := time.Now()
 	for {
 		select {
@@ -407,21 +406,17 @@ func (lv *live) loop() {
 		p, dirty := lv.p, lv.dirty
 		lv.dirty = false
 		lv.mu.Unlock()
-		empty := strings.TrimSpace(p.Text) == "" && p.Status == ""
-		if !drafts || empty {
+		if !drafts || strings.TrimSpace(p.Text) == "" {
 			if time.Since(last) >= 4*time.Second {
 				_ = c.o.Bot.Typing(lv.ctx, c.o.Chat)
 				last = time.Now()
 			}
 			continue
 		}
-		waiting := strings.TrimSpace(p.Text) == ""
-		if waiting {
-			frame++ // the dots move on every update
-		} else if !dirty && shown && time.Since(last) < draftRefresh {
+		if !dirty && shown && time.Since(last) < draftRefresh {
 			continue
 		}
-		if err := c.o.Bot.Draft(lv.ctx, c.o.Chat, lv.id, c.preview(p, frame), true); err != nil {
+		if err := c.o.Bot.Draft(lv.ctx, c.o.Chat, lv.id, c.preview(p), true); err != nil {
 			c.o.Logger.Debug("drafts unavailable; showing typing instead", "err", err)
 			drafts = false
 			continue
@@ -430,13 +425,9 @@ func (lv *live) loop() {
 	}
 }
 
-// preview is the draft for p: the answer so far, or while there is none the
-// status with dots that count up and start over, so it does not look stuck.
-func (c *Chat) preview(p Progress, frame int) tgapi.Text {
+// preview is the draft for p: the answer so far.
+func (c *Chat) preview(p Progress) tgapi.Text {
 	var b tgapi.Builder
-	if strings.TrimSpace(p.Text) == "" {
-		return b.Plain(p.Status + strings.Repeat(".", frame%3+1)).Done()
-	}
 	body := Markdown(p.Text)
 	if body.Len() > tgapi.MaxText-b.Len()-8 {
 		body = tgapi.SplitText(body, tgapi.MaxText-b.Len()-8)[0]
