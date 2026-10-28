@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.2](https://github.com/mhmdxsadk/latch/compare/v0.20.1...v0.20.2) (2026-10-28)
+
+
+### Bug Fixes
+
+* **tgapprove:** show a request once and keep its message ([9a51046](https://github.com/mhmdxsadk/latch/commit/9a510466741db0bd32ee8b7ae03322a10a8d57e8))
+
 ## [0.20.1](https://github.com/mhmdxsadk/latch/compare/v0.20.0...v0.20.1) (2026-10-28)
 
 
