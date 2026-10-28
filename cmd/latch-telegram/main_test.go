@@ -247,7 +247,7 @@ func photoBridge(t *testing.T) (*bridge, *tgtest.Server, chan string, func() [][
 	var saved [][]byte
 	c, err := tgchat.New(tgchat.Options{
 		Bot: tg.Client(), Chat: owner, Runner: echo{got}, IndexPath: filepath.Join(dir, "s2.json"), Name: "keeper",
-		SaveImage: func(data []byte, ext string) (string, error) {
+		SaveImage: func(_ context.Context, data []byte, ext string) (string, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			saved = append(saved, data)

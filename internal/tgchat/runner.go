@@ -85,7 +85,12 @@ func LookupAccount(name string) (Account, error) {
 // home as the working directory. The caller builds name and args; nothing
 // from the agent or from Telegram reaches them.
 func (a Account) Run(ctx context.Context, name string, args ...string) error {
+	return a.run(ctx, nil, name, args...)
+}
+
+func (a Account) run(ctx context.Context, stdin io.Reader, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed tools and paths built by the bridge
+	cmd.Stdin = stdin
 	cmd.Dir = "/"
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: a.UID, Gid: a.GID, Groups: a.Groups}}
@@ -101,6 +106,14 @@ func (a Account) Run(ctx context.Context, name string, args ...string) error {
 // MakeDir creates dir (and parents) readable by the account only.
 func (a Account) MakeDir(ctx context.Context, dir string) error {
 	return a.Run(ctx, "/bin/mkdir", "-p", "-m", "700", "--", dir)
+}
+
+// WriteFile creates path as the account with data, readable by the account
+// only. It fails when path already exists. The bridge cannot write in the
+// agent's private home itself (its service has no CAP_DAC_OVERRIDE).
+func (a Account) WriteFile(ctx context.Context, path string, data []byte) error {
+	// noclobber (set -C) makes the redirection fail on an existing file.
+	return a.run(ctx, bytes.NewReader(data), "/bin/sh", "-c", `set -C; umask 077; cat > "$1"`, "sh", path)
 }
 
 // Remove deletes files as the account that owns them; missing ones are fine.

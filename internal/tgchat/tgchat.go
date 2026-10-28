@@ -90,7 +90,7 @@ type Options struct {
 	Remove func(ctx context.Context, paths []string) error
 	// SaveImage writes a photo where the agent can read it and returns its
 	// path (nil: photos are refused). The chat removes it with Remove.
-	SaveImage func(data []byte, ext string) (string, error)
+	SaveImage func(ctx context.Context, data []byte, ext string) (string, error)
 	// Finished returns the chat messages of requests already decided, for
 	// /new to delete too; requests still waiting are never in it.
 	Finished func() []int64
@@ -264,7 +264,7 @@ func (c *Chat) HandleImages(ctx context.Context, caption string, images [][]byte
 	}
 	var paths []string
 	for i, data := range images {
-		path, err := c.o.SaveImage(data, exts[i])
+		path, err := c.o.SaveImage(ctx, data, exts[i])
 		if err != nil {
 			c.discard(paths)
 			c.o.Logger.Warn("saving a photo failed", "err", err)

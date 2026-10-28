@@ -234,7 +234,7 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 				}
 				return acct.Remove(ctx, paths...)
 			},
-			SaveImage: func(data []byte, ext string) (string, error) {
+			SaveImage: func(ctx context.Context, data []byte, ext string) (string, error) {
 				if sessionDir == "" {
 					return "", errors.New("no session folder")
 				}
@@ -243,17 +243,11 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 					return "", err
 				}
 				p := filepath.Join(sessionDir, "photo-"+hex.EncodeToString(r[:])+ext)
-				// The bridge is root and the folder is the agent's: create the
-				// file new (never through a link the agent planted), then give
-				// it to the agent so it can read it.
-				f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // p is built here from a random name
-				if err != nil {
-					return "", err
-				}
-				_, werr := f.Write(data)
-				cerr := f.Chown(int(acct.UID), int(acct.GID))
-				if err := errors.Join(werr, cerr, f.Close()); err != nil {
-					_ = os.Remove(p)
+				// The bridge cannot write in the agent's private home, so
+				// the agent's own account creates the file.
+				wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				defer cancel()
+				if err := acct.WriteFile(wctx, p, data); err != nil {
 					return "", err
 				}
 				return p, nil

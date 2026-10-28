@@ -17,9 +17,13 @@ func TestAccountFileHelpers(t *testing.T) {
 	if err != nil {
 		t.Skip("no nobody account")
 	}
-	dir := filepath.Join(t.TempDir(), "a", "b")
-	if err := os.Chmod(filepath.Dir(filepath.Dir(dir)), 0o755); err != nil {
-		t.Fatal(err)
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "a", "b")
+	// The account must be able to walk down to tmp and create dir in it.
+	for d, mode := range map[string]os.FileMode{filepath.Dir(tmp): 0o755, tmp: 0o777} {
+		if err := os.Chmod(d, mode); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ctx := context.Background()
 	if err := me.MakeDir(ctx, dir); err != nil {
@@ -29,7 +33,17 @@ func TestAccountFileHelpers(t *testing.T) {
 	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := me.Remove(ctx, f, f+"-wal"); err != nil {
+	photo := filepath.Join(dir, "photo-1.jpg")
+	if err := me.WriteFile(ctx, photo, []byte("pixels")); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(photo); err != nil || string(b) != "pixels" {
+		t.Fatalf("photo %q, %v", b, err)
+	}
+	if err := me.WriteFile(ctx, photo, []byte("other")); err == nil {
+		t.Fatal("overwrote an existing file")
+	}
+	if err := me.Remove(ctx, f, f+"-wal", photo); err != nil {
 		t.Fatal(err)
 	}
 }

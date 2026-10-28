@@ -270,7 +270,7 @@ func newPhotoHarness(t *testing.T) (*convHarness, *[]string) {
 	files := &store{}
 	h := newHarnessWith(t, time.Minute, func(o *Options) {
 		o.SessionDir, o.Remove = sessionDir, files.remove
-		o.SaveImage = func(data []byte, ext string) (string, error) {
+		o.SaveImage = func(_ context.Context, data []byte, ext string) (string, error) {
 			p := sessionDir + "/photo-" + string(rune('a'+len(saved))) + ext
 			saved = append(saved, p)
 			return p, nil
