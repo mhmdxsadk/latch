@@ -73,6 +73,25 @@ func (h *convHarness) ask(text string) int64 {
 	return id
 }
 
+// waitAllNoted waits until the chat has noted every message the bot has on
+// screen, so a command that clears the screen does not miss one still being
+// noted.
+func (h *convHarness) waitAllNoted() {
+	h.t.Helper()
+	tgtest.WaitFor(h.t, "every message on screen to be noted", func() bool {
+		noted := map[int64]bool{}
+		for _, id := range h.chat.screen() {
+			noted[id] = true
+		}
+		for _, m := range h.tg.Visible() {
+			if !noted[m.ID] {
+				return false
+			}
+		}
+		return true
+	})
+}
+
 func (h *convHarness) visibleTexts() []string {
 	var out []string
 	for _, m := range h.tg.Visible() {
@@ -238,7 +257,9 @@ func TestAFindingReplacesTheConversationAndKeepsTheScreen(t *testing.T) {
 	if len(h.chat.screen()) < before {
 		t.Error("the screen was forgotten")
 	}
-	// /new clears everything on screen: the first chat and the finding.
+	// /new clears everything on screen: the first chat and the finding. The
+	// finding is on the server a moment before the chat has noted it.
+	h.waitAllNoted()
 	h.say("/new")
 	h.waitText("New conversation.")
 	tgtest.WaitFor(t, "only the new conversation on screen", func() bool { return len(h.visibleTexts()) == 1 })
