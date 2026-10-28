@@ -59,6 +59,9 @@ type AgentConfig struct {
 	Config  string   `yaml:"config"`
 	Args    []string `yaml:"args"`
 	Timeout Duration `yaml:"timeout"`
+	// Images turns on photos: the agent's model must read images, or Docker
+	// Agent drops them without a word.
+	Images bool `yaml:"images"`
 	// Checks, when set, has the agent check the server on its own.
 	Checks *ChecksConfig `yaml:"checks"`
 }

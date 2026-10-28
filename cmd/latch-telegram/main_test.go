@@ -10,7 +10,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -233,37 +235,152 @@ func TestOddMessages(t *testing.T) {
 	}
 }
 
-func TestPhotoReachesTheAgent(t *testing.T) {
+var testJPEG = []byte{0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 'J', 'F', 'I', 'F', 0}
+
+// photoBridge is a bridge whose chat saves photos, and the bytes of the ones
+// it saved.
+func photoBridge(t *testing.T) (*bridge, *tgtest.Server, chan string, func() [][]byte) {
+	t.Helper()
 	b, tg, got := newTestBridge(t, true)
 	dir := t.TempDir()
-	var saved []byte
+	var mu sync.Mutex
+	var saved [][]byte
 	c, err := tgchat.New(tgchat.Options{
 		Bot: tg.Client(), Chat: owner, Runner: echo{got}, IndexPath: filepath.Join(dir, "s2.json"), Name: "keeper",
-		SaveImage: func(data []byte, ext string) (string, error) { saved = data; return filepath.Join(dir, "p"+ext), nil },
+		SaveImage: func(data []byte, ext string) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			saved = append(saved, data)
+			return filepath.Join(dir, "p"+ext), nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 	go c.Run(ctx)
-	b.chat = c
-
-	jpeg := []byte{0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 'J', 'F', 'I', 'F', 0}
-	// Updates come from the fake server as they would from Telegram.
-	tg.Photo(owner, "what is this?", jpeg)
-	ups, err := tg.Client().Updates(ctx, 0)
-	if err != nil || len(ups) != 1 {
-		t.Fatalf("updates %v, %v", ups, err)
+	b.chat, b.images, b.albumDelay = c, true, 50*time.Millisecond
+	return b, tg, got, func() [][]byte {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([][]byte(nil), saved...)
 	}
-	b.dispatch(ctx, ups[0])
+}
+
+func photoUpdate(fileID, group, caption string) tgapi.Update {
+	return tgapi.Update{Message: &tgapi.Message{
+		From: &tgapi.User{ID: owner}, Chat: tgapi.Chat{ID: owner, Type: "private"}, Date: time.Now().Unix(),
+		Caption: caption, MediaGroupID: group,
+		Photo: []tgapi.PhotoSize{{FileID: fileID, Width: 1280, Height: 853}},
+	}}
+}
+
+func waitMessage(t *testing.T, got chan string) string {
+	t.Helper()
 	select {
 	case m := <-got:
-		if m != "what is this?" || string(saved) != string(jpeg) {
-			t.Fatalf("message %q, saved %q", m, saved)
-		}
+		return m
 	case <-time.After(5 * time.Second):
-		t.Fatal("the photo did not reach the agent")
+		t.Fatal("the message did not reach the agent")
+		return ""
+	}
+}
+
+func TestPhotoReachesTheAgent(t *testing.T) {
+	b, tg, got, saved := photoBridge(t)
+	tg.AddFile("f1", testJPEG)
+	b.dispatch(context.Background(), photoUpdate("f1", "", "what is this?"))
+	if m := waitMessage(t, got); m != "what is this?" {
+		t.Fatalf("message %q", m)
+	}
+	if s := saved(); len(s) != 1 || string(s[0]) != string(testJPEG) {
+		t.Fatalf("saved %q", s)
+	}
+}
+
+func TestAlbumIsOneMessage(t *testing.T) {
+	b, tg, got, saved := photoBridge(t)
+	ctx := context.Background()
+	for _, id := range []string{"a", "b", "c"} {
+		tg.AddFile(id, testJPEG)
+	}
+	b.dispatch(ctx, photoUpdate("a", "g1", ""))
+	b.dispatch(ctx, photoUpdate("b", "g1", "compare these"))
+	b.dispatch(ctx, photoUpdate("c", "g1", ""))
+	if m := waitMessage(t, got); m != "compare these" {
+		t.Fatalf("message %q", m)
+	}
+	if s := saved(); len(s) != 3 {
+		t.Fatalf("saved %d photos", len(s))
+	}
+	select {
+	case m := <-got:
+		t.Fatalf("second message %q", m)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestImageFilesAreRead(t *testing.T) {
+	b, tg, got, saved := photoBridge(t)
+	ctx := context.Background()
+	tg.AddFile("doc", testJPEG)
+	file := func(mime string) tgapi.Update {
+		return tgapi.Update{Message: &tgapi.Message{
+			From: &tgapi.User{ID: owner}, Chat: tgapi.Chat{ID: owner, Type: "private"}, Date: time.Now().Unix(),
+			Caption: "see file", Document: &tgapi.Document{FileID: "doc", MimeType: mime},
+		}}
+	}
+	b.dispatch(ctx, file("application/pdf"))
+	tgtest.WaitFor(t, "a refusal", func() bool { return len(tg.Sent()) == 1 })
+	if !strings.Contains(tg.Sent()[0].Text, "JPEG or PNG files") || len(saved()) != 0 {
+		t.Fatalf("%+v, saved %d", tg.Sent(), len(saved()))
+	}
+	b.dispatch(ctx, file("image/jpeg"))
+	if m := waitMessage(t, got); m != "see file" || len(saved()) != 1 {
+		t.Fatalf("message %q, saved %d", m, len(saved()))
+	}
+}
+
+func TestPhotosOffByDefault(t *testing.T) {
+	b, tg, got, saved := photoBridge(t)
+	b.images = false
+	tg.AddFile("f1", testJPEG)
+	b.dispatch(context.Background(), photoUpdate("f1", "", "hi"))
+	tgtest.WaitFor(t, "a refusal", func() bool { return len(tg.Sent()) == 1 })
+	if !strings.Contains(tg.Sent()[0].Text, "agent.images") || len(saved()) != 0 || len(got) != 0 {
+		t.Fatalf("%+v", tg.Sent())
+	}
+}
+
+func TestMissingPhotoIsReported(t *testing.T) {
+	b, tg, got, _ := photoBridge(t)
+	b.dispatch(context.Background(), photoUpdate("never-uploaded", "", "hi"))
+	tgtest.WaitFor(t, "a notice", func() bool { return len(tg.Sent()) == 1 })
+	if !strings.Contains(tg.Sent()[0].Text, "Could not download") || len(got) != 0 {
+		t.Fatalf("%+v", tg.Sent())
+	}
+}
+
+func TestSweepPhotos(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"photo-aa.jpg", "photo-bb.png", "abc.db", "photo-dir"} {
+		if n == "photo-dir" {
+			os.Mkdir(filepath.Join(dir, n), 0o700)
+			continue
+		}
+		os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o600)
+	}
+	var removed []string
+	err := sweepPhotos(context.Background(), dir, func(_ context.Context, paths ...string) error {
+		for _, p := range paths {
+			removed = append(removed, filepath.Base(p))
+		}
+		return nil
+	})
+	slices.Sort(removed)
+	if err != nil || !slices.Equal(removed, []string{"photo-aa.jpg", "photo-bb.png"}) {
+		t.Fatalf("removed %v, %v", removed, err)
 	}
 }
 

@@ -55,6 +55,10 @@ type Message struct {
 	// Photo lists the sizes of a photo; Caption is the text sent with it.
 	Photo   []PhotoSize `json:"photo,omitempty"`
 	Caption string      `json:"caption,omitempty"`
+	// Document is a file sent as a file. MediaGroupID is shared by the
+	// photos or files of one album.
+	Document     *Document `json:"document,omitempty"`
+	MediaGroupID string    `json:"media_group_id,omitempty"`
 	// Entities is the formatting Telegram stored for Text.
 	Entities []Entity `json:"entities,omitempty"`
 	// ForwardOrigin is set on forwarded messages, which are ignored.
@@ -66,6 +70,13 @@ type PhotoSize struct {
 	FileID   string `json:"file_id"`
 	Width    int    `json:"width"`
 	Height   int    `json:"height"`
+	FileSize int64  `json:"file_size,omitempty"`
+}
+
+// Document is a file sent as a file.
+type Document struct {
+	FileID   string `json:"file_id"`
+	MimeType string `json:"mime_type,omitempty"`
 	FileSize int64  `json:"file_size,omitempty"`
 }
 

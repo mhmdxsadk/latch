@@ -185,6 +185,7 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			return nil, err
 		}
 		agentUID = &acct.UID
+		b.images = a.Images
 		var checks tgchat.Runner
 		var every time.Duration
 		if ch := a.Checks; ch != nil {
@@ -214,6 +215,12 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 		if err := acct.MakeDir(mctx, sessionDir); err != nil {
 			log.Warn("conversations share the agent's default database; their folder could not be made", "err", err)
 			sessionDir = ""
+		}
+		if sessionDir != "" {
+			// Photos left by a turn that never finished.
+			if err := sweepPhotos(mctx, sessionDir, acct.Remove); err != nil {
+				log.Warn("removing old photos failed", "err", err)
+			}
 		}
 		cancel()
 		intro, _ := describe(b.host, true)
@@ -343,4 +350,23 @@ func splitLines(s string) []string {
 		}
 	}
 	return out
+}
+
+// sweepPhotos deletes the photo files in dir that an earlier run left behind.
+// Nothing can be using them at startup.
+func sweepPhotos(ctx context.Context, dir string, remove func(context.Context, ...string) error) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var old []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), "photo-") {
+			old = append(old, filepath.Join(dir, e.Name()))
+		}
+	}
+	if len(old) == 0 {
+		return nil
+	}
+	return remove(ctx, old...)
 }

@@ -48,6 +48,10 @@ agent:
   args: [--safety, restricted]
   # A turn that takes longer is stopped.
   timeout: 10m
+  # Photos (and JPEG or PNG files) you send go to the agent with your
+  # message. Turn this on only if the agent's model reads images; otherwise
+  # Docker Agent quietly ignores them.
+  # images: true
   # Scheduled checks: the agent sweeps the server on its own and messages
   # you, only when it finds something new. Checks never change anything:
   # they run with --safety restricted and this config, a copy of the agent

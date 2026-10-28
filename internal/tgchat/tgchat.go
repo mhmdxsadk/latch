@@ -237,10 +237,11 @@ func (c *Chat) Notify(text, note string, replyTo int64) {
 	}
 }
 
-// HandleImage handles a photo from the owner: a message for the agent with
-// the photo attached. caption is the text sent with it ("" for none).
-func (c *Chat) HandleImage(ctx context.Context, caption string, data []byte, messageID int64) {
-	c.track(messageID)
+// HandleImages handles photos from the owner: one message for the agent with
+// them attached. caption is the text sent with them ("" for none);
+// messageIDs are the owner's messages, noted for /new to clear.
+func (c *Chat) HandleImages(ctx context.Context, caption string, images [][]byte, messageIDs []int64) {
+	c.track(messageIDs...)
 	if c.o.SaveImage == nil {
 		c.say(ctx, "Photos are not available; the agent's conversation folder is not set up.")
 		return
@@ -249,36 +250,43 @@ func (c *Chat) HandleImage(ctx context.Context, caption string, data []byte, mes
 		c.say(ctx, "That caption is too long; keep it under 8 KB.")
 		return
 	}
-	var ext string
-	switch http.DetectContentType(data) {
-	case "image/jpeg":
-		ext = ".jpg"
-	case "image/png":
-		ext = ".png"
-	default:
-		c.say(ctx, "Only JPEG and PNG photos are read.")
-		return
+	exts := make([]string, len(images))
+	for i, data := range images {
+		switch http.DetectContentType(data) {
+		case "image/jpeg":
+			exts[i] = ".jpg"
+		case "image/png":
+			exts[i] = ".png"
+		default:
+			c.say(ctx, "Only JPEG and PNG photos are read.")
+			return
+		}
 	}
-	path, err := c.o.SaveImage(data, ext)
-	if err != nil {
-		c.o.Logger.Warn("saving a photo failed", "err", err)
-		c.say(ctx, "Could not save the photo; see the latch-telegram log.")
-		return
+	var paths []string
+	for i, data := range images {
+		path, err := c.o.SaveImage(data, exts[i])
+		if err != nil {
+			c.discard(paths)
+			c.o.Logger.Warn("saving a photo failed", "err", err)
+			c.say(ctx, "Could not save the photo; see the latch-telegram log.")
+			return
+		}
+		paths = append(paths, path)
 	}
 	if strings.TrimSpace(caption) == "" {
 		caption = imageText
 	}
 	c.mu.Lock()
 	id := c.activeLocked()
-	err = c.saveLocked()
+	err := c.saveLocked()
 	c.mu.Unlock()
 	if err != nil {
 		c.o.Logger.Warn("saving the chat state failed", "err", err)
 	}
 	select {
-	case c.queue <- job{session: id, text: caption, images: []string{path}}:
+	case c.queue <- job{session: id, text: caption, images: paths}:
 	default:
-		c.discard([]string{path})
+		c.discard(paths)
 		c.say(ctx, "Too many messages waiting. Wait for an answer or use /stop.")
 	}
 }

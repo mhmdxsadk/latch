@@ -276,6 +276,13 @@ requests still waiting for your decision; Telegram only lets bots delete
 messages from the last 48 hours. After you approve or deny a request,
 the agent is told how it ended so it can check the fix.
 
+You can send photos too (or JPEG and PNG files), with a caption as your
+message; an album arrives as one message. Turn on `agent.images` only if the
+agent's model reads images: otherwise Docker Agent ignores them without a
+word. A photo is sent to the model provider and stays in the conversation's
+database until `/new` deletes it; Latch's hidden-value masking does not apply
+to pictures.
+
 Times show in your own time zone, and long diffs and logs stay collapsed
 until you tap them.
 

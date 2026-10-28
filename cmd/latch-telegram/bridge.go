@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mhmdxsadk/latch/internal/approval"
@@ -19,6 +20,17 @@ import (
 // keeps messages sent while the bridge was down; old ones are not run.
 const staleAfter = 10 * time.Minute
 
+const (
+	// downloadTimeout bounds one photo download. Downloads happen in the
+	// polling loop, which must not stall behind one.
+	downloadTimeout = 20 * time.Second
+	// albumWait is how long after the last photo of an album the bridge waits
+	// for another before sending them together.
+	albumWait = 1500 * time.Millisecond
+	// maxAlbum is Telegram's own limit for an album.
+	maxAlbum = 10
+)
+
 // bridge reads Telegram updates and hands the owner's to the approvals or
 // the chat. Everything from anyone else is dropped here, in one place.
 type bridge struct {
@@ -30,6 +42,19 @@ type bridge struct {
 	now       func() time.Time
 	loc       *time.Location
 	host      string // the server's short name, for the bot's description
+	images    bool   // the agent's model reads photos (agent.images)
+
+	mu         sync.Mutex
+	albums     map[string]*album
+	albumDelay time.Duration // albumWait, shorter in tests
+}
+
+// album is the photos of one Telegram album received so far.
+type album struct {
+	caption string
+	images  [][]byte
+	ids     []int64
+	timer   *time.Timer
 }
 
 // description is what the bot's profile and empty chat say.
@@ -136,13 +161,13 @@ func (b *bridge) dispatch(ctx context.Context, u tgapi.Update) {
 		switch {
 		case len(m.ForwardOrigin) > 0:
 			b.say(ctx, "Forwarded messages are ignored. Type the message yourself.")
-		case m.Text == "" && len(m.Photo) == 0:
-			b.say(ctx, "Only text messages and photos are read.")
+		case m.Text == "" && len(m.Photo) == 0 && !isImageFile(m.Document):
+			b.say(ctx, "Only text messages, photos and JPEG or PNG files are read.")
 		case m.Date > 0 && b.now().Sub(time.Unix(m.Date, 0)) > staleAfter:
 			b.say(ctx, fmt.Sprintf("Ignored a message sent at %s while the bridge was not running. Send it again if it still matters.",
 				time.Unix(m.Date, 0).In(b.location()).Format("15:04")))
-		case b.chat != nil && len(m.Photo) > 0:
-			b.photo(ctx, m)
+		case b.chat != nil && (len(m.Photo) > 0 || isImageFile(m.Document)):
+			b.picture(ctx, m)
 		case b.chat != nil:
 			b.chat.HandleText(ctx, m.Text, m.MessageID)
 		default:
@@ -151,21 +176,79 @@ func (b *bridge) dispatch(ctx context.Context, u tgapi.Update) {
 	}
 }
 
-// photo downloads the largest size of m's photo and hands it to the chat.
-func (b *bridge) photo(ctx context.Context, m tgapi.Message) {
-	best := m.Photo[0]
-	for _, p := range m.Photo[1:] {
-		if p.Width*p.Height > best.Width*best.Height {
-			best = p
-		}
+// isImageFile reports whether d is a file the chat reads as a photo.
+func isImageFile(d *tgapi.Document) bool {
+	return d != nil && (d.MimeType == "image/jpeg" || d.MimeType == "image/png")
+}
+
+// picture downloads the photo (its largest size) or image file in m and hands
+// it to the chat, alone or with the rest of its album.
+func (b *bridge) picture(ctx context.Context, m tgapi.Message) {
+	if !b.images {
+		b.say(ctx, "Photos are turned off (agent.images in telegram.yaml).")
+		return
 	}
-	data, err := b.bot.Download(ctx, best.FileID, tgchat.MaxImage)
+	fileID := ""
+	if m.Document != nil {
+		fileID = m.Document.FileID
+	} else {
+		best := m.Photo[0]
+		for _, p := range m.Photo[1:] {
+			if p.Width*p.Height > best.Width*best.Height {
+				best = p
+			}
+		}
+		fileID = best.FileID
+	}
+	dctx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	data, err := b.bot.Download(dctx, fileID, tgchat.MaxImage)
+	cancel()
 	if err != nil {
 		b.log.Warn("downloading a photo failed", "err", err)
 		b.say(ctx, "Could not download the photo.")
 		return
 	}
-	b.chat.HandleImage(ctx, m.Caption, data, m.MessageID)
+	if m.MediaGroupID == "" {
+		b.chat.HandleImages(ctx, m.Caption, [][]byte{data}, []int64{m.MessageID})
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.albums == nil {
+		b.albums = map[string]*album{}
+	}
+	a := b.albums[m.MediaGroupID]
+	if a == nil {
+		a = &album{}
+		b.albums[m.MediaGroupID] = a
+	}
+	if len(a.images) < maxAlbum {
+		a.images = append(a.images, data)
+		a.ids = append(a.ids, m.MessageID)
+	}
+	if a.caption == "" {
+		a.caption = m.Caption
+	}
+	if a.timer != nil {
+		a.timer.Stop()
+	}
+	delay := b.albumDelay
+	if delay == 0 {
+		delay = albumWait
+	}
+	group := m.MediaGroupID
+	a.timer = time.AfterFunc(delay, func() { b.sendAlbum(ctx, group) })
+}
+
+// sendAlbum gives a finished album to the chat as one message.
+func (b *bridge) sendAlbum(ctx context.Context, group string) {
+	b.mu.Lock()
+	a := b.albums[group]
+	delete(b.albums, group)
+	b.mu.Unlock()
+	if a != nil {
+		b.chat.HandleImages(ctx, a.caption, a.images, a.ids)
+	}
 }
 
 func (b *bridge) location() *time.Location {
