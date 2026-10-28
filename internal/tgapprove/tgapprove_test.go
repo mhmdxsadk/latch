@@ -161,10 +161,9 @@ func TestAnnounceApproveAndUpdate(t *testing.T) {
 		t.Fatalf("sent %+v", sent)
 	}
 	m := sent[0]
-	for _, want := range []string{"uid 1000 wants to stop container jellyfin\nExpires ", "\nstop container jellyfin\npull: false"} {
-		if !strings.Contains(m.Text, want) {
-			t.Errorf("message lacks %q:\n%s", want, m.Text)
-		}
+	// What the head says is not said again, and there is no deadline line.
+	if want := "uid 1000 wants to stop container jellyfin\npull: false"; m.Text != want {
+		t.Errorf("message %q, want %q", m.Text, want)
 	}
 	if len(m.Keyboard) != 1 || len(m.Keyboard[0]) != 2 || m.Keyboard[0][0].Text != "Approve" || m.Keyboard[0][1].Text != "Deny" ||
 		m.Keyboard[0][0].Style != tgapi.StyleSuccess || m.Keyboard[0][1].Style != tgapi.StyleDanger {
@@ -379,9 +378,7 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 			t.Fatalf("Telegram would refuse %q: %s", m.Text, msg)
 		}
 	}
-	wantCreate := "keeper wants to create /root/hello.txt\nExpires " +
-		time.Now().Add(time.Hour).UTC().Format("15:04") +
-		"\ncreate /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)\nContent:\nhello"
+	wantCreate := "keeper wants to create /root/hello.txt\nContent: hello"
 	if sent[0].Text != wantCreate {
 		t.Errorf("create:\n%s\nwant:\n%s", sent[0].Text, wantCreate)
 	}
@@ -390,15 +387,14 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 	for _, e := range f.Entities {
 		styles = append(styles, e.Type+"="+f.Slice(e))
 	}
-	exp := time.Now().Add(time.Hour).UTC().Format("15:04")
 	// Short details are plain: no bold, no quote, no code block.
-	if got := strings.Join(styles, "|"); got != "date_time="+exp {
+	if got := strings.Join(styles, "|"); got != "" {
 		t.Errorf("create styles %s", got)
 	}
 
 	e := sent[1].Formatted()
-	if !strings.Contains(e.S, " example.com {\n-  respond 404\n+  respond 200\nthen restart container caddy and check it\nbackup: b1") ||
-		strings.Contains(e.S, "path:") || strings.Contains(e.S, "restart: container caddy") || strings.Contains(e.S, "+++ ") {
+	if !strings.Contains(e.S, " example.com {\n-  respond 404\n+  respond 200\nthen restart container caddy and check it") ||
+		strings.Contains(e.S, "path:") || strings.Contains(e.S, "restart: container caddy") || strings.Contains(e.S, "+++ ") || strings.Contains(e.S, "backup") {
 		t.Errorf("edit:\n%s", e.S)
 	}
 	for _, en := range e.Entities {
@@ -487,7 +483,7 @@ func TestFiledRequestIsTheWholeReply(t *testing.T) {
 	}
 	// It is shown right away, once, and never changes before the decision.
 	sent := h.tg.Sent()
-	if len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "uid 1000 wants to stop container jellyfin\nExpires ") {
+	if len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "uid 1000 wants to stop container jellyfin") {
 		t.Fatalf("%+v", sent)
 	}
 	h.poll()
@@ -612,5 +608,29 @@ func TestResultIsKeptWhereNobodyElseReportsIt(t *testing.T) {
 	h.poll()
 	if got := h.tg.Sent()[0].Text; got != "Done: stopped container db\nstopped\nstate exited" {
 		t.Errorf("approvals only: %q", got)
+	}
+}
+
+func TestOrdinaryFileDetailsAreHiddenButAnUnusualModeShows(t *testing.T) {
+	h := newHarness(t)
+	h.a.o.AgentName = "keeper"
+	uid := uint32(1000)
+	h.a.o.AgentUID = &uid
+	for _, c := range [][2]string{{"a", "0644"}, {"b", "0777"}} {
+		name, mode := c[0], c[1]
+		h.submit(fileAction{action: action{kind: "file_create", name: "/home/" + name, mode: approval.Always, runs: &h.runs,
+			details: []string{"create /home/" + name + " (mode " + mode + ", owner uid 0 gid 0, 5 bytes)", "content:", "  test"}},
+			params: []approval.Param{{Name: "path", Value: "/home/" + name}, {Name: "mode", Value: mode}}})
+	}
+	h.poll()
+	sent := h.tg.Sent()
+	if len(sent) != 2 {
+		t.Fatalf("%+v", sent)
+	}
+	if want := "keeper wants to create /home/a\nContent: test"; sent[0].Text != want {
+		t.Errorf("ordinary file: %q, want %q", sent[0].Text, want)
+	}
+	if want := "keeper wants to create /home/b\nContent: test\nmode: 0777"; sent[1].Text != want {
+		t.Errorf("unusual mode: %q, want %q", sent[1].Text, want)
 	}
 }

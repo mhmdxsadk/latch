@@ -508,8 +508,6 @@ func (a *Approver) pendingText(r approval.Request) (tgapi.Text, []tgapi.Text) {
 		b.Plain(" unless you deny it.")
 	} else {
 		b.Plain(a.who(r.RequestedBy.UID) + " wants to " + a.phrase(r, false))
-		b.Plain("\nExpires ")
-		b.Text(a.timeText(r.ExpiresAt))
 	}
 	return b.Done(), a.details(r)
 }
@@ -582,6 +580,13 @@ func (a *Approver) details(r approval.Request) []tgapi.Text {
 	for i, d := range r.Details {
 		lines[i] = clean(d)
 	}
+	phrase := a.phrase(r, false)
+	// The first line of Latch's description says what the head already says
+	// ("create /x (mode 0644, owner uid 0 gid 0, 5 bytes)"); the file
+	// system detail is for the server console.
+	if len(lines) > 0 && strings.HasPrefix(lines[0], phrase) {
+		lines = lines[1:]
+	}
 	var out []tgapi.Text
 	for i := 0; i < len(lines); i++ {
 		l := lines[i]
@@ -600,17 +605,24 @@ func (a *Approver) details(r approval.Request) []tgapi.Text {
 			}
 			i--
 			var b tgapi.Builder
-			out = append(out, b.Plain("Content:\n").Text(block(body, "")).Done())
+			if len(body) == 1 {
+				out = append(out, b.Plain("Content: "+body[0]).Done())
+			} else {
+				out = append(out, b.Plain("Content:\n").Text(block(body, "")).Done())
+			}
 		default:
 			out = append(out, tgapi.Plain(l))
 		}
 	}
-	all := strings.Join(lines, "\n")
+	// Params the message already states are left out, and so are the
+	// ordinary file mode and the backup's name.
+	all := phrase + "\n" + strings.Join(lines, "\n")
 	for _, p := range r.Params {
-		if v := clean(p.Value); v != "" && strings.Contains(all, v) {
+		v := clean(p.Value)
+		if v == "" || strings.Contains(all, v) || p.Name == "backup" || (p.Name == "mode" && (v == "0644" || v == "0600")) {
 			continue
 		}
-		out = append(out, tgapi.Plain(clean(p.Name)+": "+clean(p.Value)))
+		out = append(out, tgapi.Plain(clean(p.Name)+": "+v))
 	}
 	return out
 }
