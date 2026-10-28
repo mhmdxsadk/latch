@@ -58,6 +58,9 @@ const (
 	noticeWindow = 10 * time.Minute
 	// keepFinished is how many finished requests the state file remembers.
 	keepFinished = 500
+	// collapseAfter is how many lines of file content or result a message
+	// may show as plain text before it becomes a code block.
+	collapseAfter = 6
 )
 
 // Options configure an Approver.
@@ -632,8 +635,7 @@ func (a *Approver) details(r approval.Request) []tgapi.Text {
 			}
 			i--
 			var b tgapi.Builder
-			b.Plain("Content:\n").Pre(strings.Join(body, "\n"), "")
-			out = append(out, b.Done())
+			out = append(out, b.Plain("Content:\n").Text(block(body, "")).Done())
 		default:
 			out = append(out, tgapi.Plain(l))
 		}
@@ -648,12 +650,24 @@ func (a *Approver) details(r approval.Request) []tgapi.Text {
 	return out
 }
 
+// block is lines as code when there are many, as plain text when few
+// (a boxed one-liner only adds a copy button nobody wants).
+func block(lines []string, language string) tgapi.Text {
+	text := strings.Join(lines, "\n")
+	if len(lines) <= collapseAfter {
+		return tgapi.Plain(text)
+	}
+	var b tgapi.Builder
+	return b.Pre(text, language).Done()
+}
+
 func isDiffLine(l string) bool {
 	return l == "" || strings.HasPrefix(l, "@@") || l[0] == ' ' || l[0] == '-' || l[0] == '+' || strings.HasPrefix(l, "... ")
 }
 
 // outcome is the message for a request that is no longer pending: what
-// happened in one line, the result folded away.
+// happened in one line, and the result folded away unless the agent reports
+// it.
 func (a *Approver) outcome(r approval.Request) tgapi.Text {
 	var b tgapi.Builder
 	what := a.phrase(r, false)
@@ -670,6 +684,12 @@ func (a *Approver) outcome(r approval.Request) tgapi.Text {
 		b.Bold("Expired: " + what).Plain(" (nobody decided)")
 	default:
 		b.Bold("Approved, working on it: " + what)
+	}
+	if r.Status == approval.StatusDone && a.o.OnFinished != nil {
+		// The agent is told and checks the result itself; Latch's own line
+		// ("created ... (mode 0644)") would only repeat it. A failure keeps
+		// its result: the reason is the point.
+		return b.Done()
 	}
 	return fit(a.withResult(b.Done(), r))
 }
@@ -698,8 +718,7 @@ func (a *Approver) withResult(head tgapi.Text, r approval.Request) tgapi.Text {
 		for i, d := range r.Result.Details {
 			lines[i] = clean(d)
 		}
-		var b tgapi.Builder
-		body = append(body, b.Pre(strings.Join(lines, "\n"), "").Done())
+		body = append(body, block(lines, ""))
 	}
 	return join(head, body)
 }

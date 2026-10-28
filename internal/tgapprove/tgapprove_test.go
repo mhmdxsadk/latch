@@ -183,7 +183,8 @@ func TestAnnounceApproveAndUpdate(t *testing.T) {
 	}
 	h.poll()
 	m = h.tg.Sent()[0]
-	if m.Text != "Done: stopped container jellyfin\nstopped\nstate exited" || m.Keyboard != nil {
+	// The agent reports the result, so Latch's own line is not repeated.
+	if m.Text != "Done: stopped container jellyfin" || m.Keyboard != nil {
 		t.Fatalf("after approval: %q %+v", m.Text, m.Keyboard)
 	}
 	got, _ := h.store.Get(r.ID)
@@ -379,7 +380,7 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 	}
 	exp := time.Now().Add(time.Hour).UTC().Format("15:04")
 	if got := strings.Join(styles, "|"); got != "bold=keeper wants to create /root/hello.txt|date_time="+exp+
-		"|expandable_blockquote=create /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)\nContent:\nhello|pre=hello" {
+		"|expandable_blockquote=create /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)\nContent:\nhello" {
 		t.Errorf("create styles %s", got)
 	}
 
@@ -550,5 +551,44 @@ func TestEmptyAnswerLeavesTheRequestAlone(t *testing.T) {
 	h.poll()
 	if sent := h.tg.Visible(); len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "uid 1000 wants") {
 		t.Fatalf("%+v", sent)
+	}
+}
+
+func TestShortContentIsPlainAndLongContentIsCode(t *testing.T) {
+	h := newHarness(t)
+	body := []string{"create /root/a (mode 0644, owner uid 0 gid 0, 40 bytes)", "content:"}
+	for i := range 8 {
+		body = append(body, fmt.Sprintf("  line %d", i))
+	}
+	h.submit(fileAction{action: action{kind: "file_create", name: "/root/a", mode: approval.Always, runs: &h.runs, details: body}})
+	h.poll()
+	m := h.tg.Sent()[0]
+	if msg := tgtest.CheckEntities(m.Text, m.Entities); msg != "" {
+		t.Fatal(msg)
+	}
+	f := m.Formatted()
+	var code string
+	for _, e := range f.Entities {
+		if e.Type == "pre" {
+			code = f.Slice(e)
+		}
+	}
+	if !strings.HasPrefix(code, "line 0\nline 1") || !strings.HasSuffix(code, "line 7") {
+		t.Errorf("long content is not a code block: %q", code)
+	}
+}
+
+func TestResultIsKeptWhereNobodyElseReportsIt(t *testing.T) {
+	h := newHarness(t)
+	h.submit(h.stop("db"))
+	h.poll()
+	m := h.tg.Sent()[0]
+	h.press(m, m.Keyboard[0][0].Data)
+
+	// Without an agent to report the result, the message keeps it.
+	h.a.o.OnFinished = nil
+	h.poll()
+	if got := h.tg.Sent()[0].Text; got != "Done: stopped container db\nstopped\nstate exited" {
+		t.Errorf("approvals only: %q", got)
 	}
 }
