@@ -472,9 +472,14 @@ func TestAnswerJoinsTheRequestItFiled(t *testing.T) {
 				t.Fatal("answer not taken")
 			}
 			h.poll()
-			sent := h.tg.Sent()
+			sent := h.tg.Visible()
 			if len(sent) != 1 {
 				t.Fatalf("want one message, got %+v", sent)
+			}
+			// The answer arrives as a new message (that is what clears the
+			// turn's live preview), and the one it replaces is deleted.
+			if announced && len(h.tg.Sent()) != 2 {
+				t.Fatalf("the announced request was not replaced: %+v", h.tg.Sent())
 			}
 			m := sent[0]
 			want := "Jellyfin is stuck, so I would stop it.\n\nuid 1000 wants to stop container jellyfin"
@@ -486,7 +491,7 @@ func TestAnswerJoinsTheRequestItFiled(t *testing.T) {
 				t.Fatalf("answer %q (request %d)", got, r.ID)
 			}
 			h.poll()
-			m = h.tg.Sent()[0]
+			m = h.tg.Visible()[0]
 			if !strings.HasPrefix(m.Text, "Done: stopped container jellyfin") || strings.Contains(m.Text, "I would stop it") || m.Keyboard != nil {
 				t.Fatalf("after approval: %q %+v", m.Text, m.Keyboard)
 			}
@@ -494,14 +499,14 @@ func TestAnswerJoinsTheRequestItFiled(t *testing.T) {
 			if !h.a.Follow(context.Background(), m.ID, answerText("Jellyfin is stopped, as asked.")) {
 				t.Fatal("follow-up not taken")
 			}
-			sent = h.tg.Sent()
+			sent = h.tg.Visible()
 			if len(sent) != 1 || !strings.HasSuffix(sent[0].Text, "\n\nJellyfin is stopped, as asked.") {
 				t.Fatalf("after follow-up: %+v", sent)
 			}
 			// A restart keeps what is shown; a poll changes nothing.
 			h.a = h.approver()
 			h.poll()
-			if got := h.tg.Sent()[0].Text; got != sent[0].Text {
+			if got := h.tg.Visible()[0].Text; got != sent[0].Text {
 				t.Errorf("poll changed the message: %q", got)
 			}
 		})
@@ -529,7 +534,7 @@ func TestAnswerStaysSeparateWhenItCannotJoin(t *testing.T) {
 	}
 	// A request still waiting takes no follow-up.
 	h.poll()
-	m := h.tg.Sent()[1]
+	m := h.tg.Visible()[1]
 	if h.a.Follow(ctx, m.ID, answerText("done")) {
 		t.Error("followed up on a request that is still waiting")
 	}
@@ -543,7 +548,7 @@ func TestEmptyAnswerLeavesTheRequestAlone(t *testing.T) {
 		t.Fatal("an empty answer should not be sent as a message of its own")
 	}
 	h.poll()
-	if sent := h.tg.Sent(); len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "uid 1000 wants") {
+	if sent := h.tg.Visible(); len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "uid 1000 wants") {
 		t.Fatalf("%+v", sent)
 	}
 }

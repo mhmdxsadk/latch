@@ -47,6 +47,7 @@ type Bot interface {
 	Send(ctx context.Context, chat int64, t tgapi.Text, kb tgapi.Keyboard) (tgapi.Message, error)
 	Edit(ctx context.Context, chat, message int64, t tgapi.Text, kb tgapi.Keyboard) error
 	Answer(ctx context.Context, callbackID, text string) error
+	DeleteMessages(ctx context.Context, chat int64, ids []int64) error
 }
 
 // Defaults for Options.
@@ -439,14 +440,30 @@ func (a *Approver) Attach(ctx context.Context, since time.Time, lead tgapi.Text)
 	}
 	s.Lead = &lead
 	text, kb := a.render(*r, s)
-	if err := a.o.Bot.Edit(ctx, a.o.Chat, s.Message, text, kb); err != nil {
+	if err := a.replaceLocked(ctx, s, text, kb); err != nil {
 		a.o.Logger.Warn("updating a request message failed", "id", r.ID, "err", err)
 		s.Lead = nil
 		return false
 	}
-	s.Text = hashText(text)
 	_ = a.saveLocked()
 	return true
+}
+
+// replaceLocked shows text as a new message and deletes the old one. The
+// turn's live preview only goes away when a message arrives; an edit would
+// leave it on screen for a while next to the message that now holds the
+// answer.
+func (a *Approver) replaceLocked(ctx context.Context, s *shown, text tgapi.Text, kb tgapi.Keyboard) error {
+	m, err := a.o.Bot.Send(ctx, a.o.Chat, text, kb)
+	if err != nil {
+		return err
+	}
+	old := s.Message
+	s.Message, s.Text = m.MessageID, hashText(text)
+	if err := a.o.Bot.DeleteMessages(ctx, a.o.Chat, []int64{old}); err != nil {
+		a.o.Logger.Warn("deleting the old request message failed", "message", old, "err", err)
+	}
+	return nil
 }
 
 // Follow adds the agent's answer to a decision under the outcome in the
@@ -468,12 +485,11 @@ func (a *Approver) Follow(ctx context.Context, message int64, tail tgapi.Text) b
 		}
 		s.Tail = &tail
 		text, _ := a.render(r, s)
-		if err := a.o.Bot.Edit(ctx, a.o.Chat, s.Message, text, nil); err != nil {
+		if err := a.replaceLocked(ctx, s, text, nil); err != nil {
 			a.o.Logger.Warn("updating a request message failed", "id", id, "err", err)
 			s.Tail = nil
 			return false
 		}
-		s.Text = hashText(text)
 		_ = a.saveLocked()
 		return true
 	}
