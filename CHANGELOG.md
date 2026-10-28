@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.20.1](https://github.com/mhmdxsadk/latch/compare/v0.20.0...v0.20.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **latch-telegram:** call it a pairing code ([9777b73](https://github.com/mhmdxsadk/latch/commit/9777b737148d478861ac960df553140b370234fb))
+* **telegram:** speak as the agent only, never as Latch ([bc8093a](https://github.com/mhmdxsadk/latch/commit/bc8093a8a5280fc460ba356823150ff535fe4d9a))
+* **tgapprove:** quieter request and outcome messages ([82ae352](https://github.com/mhmdxsadk/latch/commit/82ae3522fa724b621a909da7715193d9eaf3b8d6))
+* **tgchat:** clear the live preview when an answer joins a request ([bf1fb56](https://github.com/mhmdxsadk/latch/commit/bf1fb56c8b29b48ba39468d8f041e84efd9ddba2))
+
 ## [0.20.0](https://github.com/mhmdxsadk/latch/compare/v0.19.1...v0.20.0) (2026-10-28)
 
 
