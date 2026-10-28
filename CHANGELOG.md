@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.19.0](https://github.com/mhmdxsadk/latch/compare/v0.18.3...v0.19.0) (2026-10-28)
+
+
+### Features
+
+* **tgchat:** photo albums, image files and agent.images ([9b378de](https://github.com/mhmdxsadk/latch/commit/9b378de7675bae2b113ad9d55bb4b2b239b097be))
+* **tgchat:** read photos from the owner ([0f10f5d](https://github.com/mhmdxsadk/latch/commit/0f10f5dd89850331e61c20b19af2353be8631030))
+
 ## [0.18.3](https://github.com/mhmdxsadk/latch/compare/v0.18.2...v0.18.3) (2026-10-27)
 
 
