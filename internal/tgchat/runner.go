@@ -24,6 +24,8 @@ type Turn struct {
 	Session string
 	DB      string
 	Message string
+	// Images are files attached to the message.
+	Images []string
 }
 
 // Runner runs one agent turn and returns its final answer, reporting
@@ -143,6 +145,9 @@ func (r *ExecRunner) Run(ctx context.Context, t Turn, progress func(Progress)) (
 	args := []string{"run", r.Config, "--exec", "--json", "--session", t.Session}
 	if t.DB != "" {
 		args = append(args, "--session-db", t.DB)
+	}
+	for _, img := range t.Images {
+		args = append(args, "--attach", img)
 	}
 	args = append(args, r.ExtraArgs...)
 	args = append(args, "-")

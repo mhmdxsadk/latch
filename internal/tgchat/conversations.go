@@ -62,8 +62,9 @@ func (c *Chat) stopRunning() (dropped int, running bool) {
 drain:
 	for {
 		select {
-		case <-c.queue:
+		case j := <-c.queue:
 			dropped++
+			c.discard(j.images)
 		default:
 			break drain
 		}

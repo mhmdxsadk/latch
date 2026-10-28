@@ -9,6 +9,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -224,6 +226,30 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 					}
 				}
 				return acct.Remove(ctx, paths...)
+			},
+			SaveImage: func(data []byte, ext string) (string, error) {
+				if sessionDir == "" {
+					return "", errors.New("no session folder")
+				}
+				var r [12]byte
+				if _, err := rand.Read(r[:]); err != nil {
+					return "", err
+				}
+				p := filepath.Join(sessionDir, "photo-"+hex.EncodeToString(r[:])+ext)
+				// The bridge is root and the folder is the agent's: create the
+				// file new (never through a link the agent planted), then give
+				// it to the agent so it can read it.
+				f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // p is built here from a random name
+				if err != nil {
+					return "", err
+				}
+				_, werr := f.Write(data)
+				cerr := f.Chown(int(acct.UID), int(acct.GID))
+				if err := errors.Join(werr, cerr, f.Close()); err != nil {
+					_ = os.Remove(p)
+					return "", err
+				}
+				return p, nil
 			},
 			Finished:    func() []int64 { return b.approvals.FinishedMessages() },
 			CheckRunner: checks,

@@ -135,3 +135,24 @@ func TestSplitTextCarriesFormatting(t *testing.T) {
 		t.Errorf("last %+v", last)
 	}
 }
+
+func TestDownload(t *testing.T) {
+	srv := tgtest.New(t)
+	srv.AddFile("f1", []byte("pixels"))
+	c := srv.Client()
+	ctx := context.Background()
+	b, err := c.Download(ctx, "f1", 100)
+	if err != nil || string(b) != "pixels" {
+		t.Fatalf("got %q, %v", b, err)
+	}
+	if _, err := c.Download(ctx, "f1", 3); err == nil {
+		t.Error("a file over the limit was downloaded")
+	}
+	if _, err := c.Download(ctx, "nope", 100); err == nil {
+		t.Error("a missing file was downloaded")
+	}
+	c = tgapi.New("http://127.0.0.1:1", "999:secret-token-value")
+	if _, err := c.Download(ctx, "f1", 100); err == nil || strings.Contains(err.Error(), "secret-token-value") {
+		t.Errorf("err = %v", err)
+	}
+}

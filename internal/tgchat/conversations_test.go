@@ -260,3 +260,76 @@ func (c *Chat) busy() bool {
 	defer c.mu.Unlock()
 	return c.cancel != nil
 }
+
+// jpeg is enough of a JPEG for content sniffing.
+var jpeg = []byte{0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 'J', 'F', 'I', 'F', 0}
+
+func newPhotoHarness(t *testing.T) (*convHarness, *[]string) {
+	t.Helper()
+	var saved []string
+	files := &store{}
+	h := newHarnessWith(t, time.Minute, func(o *Options) {
+		o.SessionDir, o.Remove = sessionDir, files.remove
+		o.SaveImage = func(data []byte, ext string) (string, error) {
+			p := sessionDir + "/photo-" + string(rune('a'+len(saved))) + ext
+			saved = append(saved, p)
+			return p, nil
+		}
+	})
+	return &convHarness{harness: h, files: files}, &saved
+}
+
+func TestPhotoIsAttached(t *testing.T) {
+	h, saved := newPhotoHarness(t)
+	h.chat.HandleImage(context.Background(), "what is this?", jpeg, 7)
+	h.waitText("answer to what is this?")
+	calls := h.run.Calls()
+	if len(calls) != 1 || len(calls[0].images) != 1 || calls[0].images[0] != (*saved)[0] {
+		t.Fatalf("calls %+v, saved %v", calls, *saved)
+	}
+	tgtest.WaitFor(t, "the photo to be deleted", func() bool {
+		h.files.mu.Lock()
+		defer h.files.mu.Unlock()
+		return len(h.files.removed) == 1 && h.files.removed[0] == (*saved)[0]
+	})
+}
+
+func TestPhotoWithoutCaptionGetsDefaultText(t *testing.T) {
+	h, _ := newPhotoHarness(t)
+	h.chat.HandleImage(context.Background(), "  ", jpeg, 7)
+	h.waitText("answer to [User attached one or more files without additional text.")
+}
+
+func TestPhotoRefusals(t *testing.T) {
+	h, saved := newPhotoHarness(t)
+	h.chat.HandleImage(context.Background(), "x", []byte("<html>not an image</html>"), 7)
+	h.waitText("Only JPEG and PNG")
+	h.chat.HandleImage(context.Background(), strings.Repeat("x", maxMessage+1), jpeg, 8)
+	h.waitText("caption is too long")
+	if len(*saved) != 0 || len(h.run.Calls()) != 0 {
+		t.Fatalf("saved %v, calls %v", *saved, h.run.Calls())
+	}
+
+	plain := newHarness(t, time.Minute) // no SaveImage
+	plain.chat.HandleImage(context.Background(), "x", jpeg, 9)
+	plain.waitText("Photos are not available")
+}
+
+func TestStopDeletesWaitingPhotos(t *testing.T) {
+	h, saved := newPhotoHarness(t)
+	h.run.gate = make(chan struct{})
+	h.chat.HandleImage(context.Background(), "first", jpeg, 1)
+	tgtest.WaitFor(t, "the first turn to start", func() bool { return len(h.run.Calls()) == 1 })
+	h.chat.HandleImage(context.Background(), "second", jpeg, 2)
+	h.chat.HandleText(context.Background(), "/stop", 3)
+	h.waitText("dropped 1 waiting")
+	close(h.run.gate)
+	tgtest.WaitFor(t, "both photos to be deleted", func() bool {
+		h.files.mu.Lock()
+		defer h.files.mu.Unlock()
+		return len(h.files.removed) == 2
+	})
+	if len(*saved) != 2 {
+		t.Fatalf("saved %v", *saved)
+	}
+}

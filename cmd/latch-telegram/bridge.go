@@ -136,17 +136,36 @@ func (b *bridge) dispatch(ctx context.Context, u tgapi.Update) {
 		switch {
 		case len(m.ForwardOrigin) > 0:
 			b.say(ctx, "Forwarded messages are ignored. Type the message yourself.")
-		case m.Text == "":
-			b.say(ctx, "Only text messages are read.")
+		case m.Text == "" && len(m.Photo) == 0:
+			b.say(ctx, "Only text messages and photos are read.")
 		case m.Date > 0 && b.now().Sub(time.Unix(m.Date, 0)) > staleAfter:
 			b.say(ctx, fmt.Sprintf("Ignored a message sent at %s while the bridge was not running. Send it again if it still matters.",
 				time.Unix(m.Date, 0).In(b.location()).Format("15:04")))
+		case b.chat != nil && len(m.Photo) > 0:
+			b.photo(ctx, m)
 		case b.chat != nil:
 			b.chat.HandleText(ctx, m.Text, m.MessageID)
 		default:
 			b.say(ctx, "This bot handles approvals only; chatting with the agent is not set up (agent in telegram.yaml).")
 		}
 	}
+}
+
+// photo downloads the largest size of m's photo and hands it to the chat.
+func (b *bridge) photo(ctx context.Context, m tgapi.Message) {
+	best := m.Photo[0]
+	for _, p := range m.Photo[1:] {
+		if p.Width*p.Height > best.Width*best.Height {
+			best = p
+		}
+	}
+	data, err := b.bot.Download(ctx, best.FileID, tgchat.MaxImage)
+	if err != nil {
+		b.log.Warn("downloading a photo failed", "err", err)
+		b.say(ctx, "Could not download the photo.")
+		return
+	}
+	b.chat.HandleImage(ctx, m.Caption, data, m.MessageID)
 }
 
 func (b *bridge) location() *time.Location {

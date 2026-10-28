@@ -53,6 +53,7 @@ type Server struct {
 	deleted            map[int64]bool
 	tooOld             map[int64]bool
 	deleteCalls        int // successful deleteMessages calls
+	files              map[string][]byte
 }
 
 // Draft is one sendMessageDraft call.
@@ -129,10 +130,38 @@ func (s *Server) MessageID(user int64, text string) int64 {
 	return id
 }
 
+// Photo queues a photo from user with the given caption ("" for none) and
+// returns the message id. The photo's bytes are data, downloadable by the
+// returned file id.
+func (s *Server) Photo(user int64, caption string, data []byte) (messageID int64, fileID string) {
+	s.mu.Lock()
+	messageID = s.nextID
+	s.nextID++
+	fileID = "file" + strconv.Itoa(len(s.files)+1)
+	s.files[fileID] = data
+	s.mu.Unlock()
+	s.push(tgapi.Update{Message: &tgapi.Message{
+		MessageID: messageID, From: &tgapi.User{ID: user}, Chat: tgapi.Chat{ID: user, Type: "private"}, Date: time.Now().Unix(),
+		Caption: caption,
+		Photo: []tgapi.PhotoSize{
+			{FileID: fileID + "-small", Width: 90, Height: 60},
+			{FileID: fileID, Width: 1280, Height: 853, FileSize: int64(len(data))},
+		},
+	}})
+	return messageID, fileID
+}
+
+// AddFile makes data downloadable as file id.
+func (s *Server) AddFile(id string, data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.files[id] = data
+}
+
 // New starts a fake server; it stops when the test ends.
 func New(t *testing.T) *Server {
 	t.Helper()
-	s := &Server{nextID: 100, nextUpd: 1, wake: make(chan struct{}, 1), answers: map[string]string{}, deleted: map[int64]bool{}, tooOld: map[int64]bool{}}
+	s := &Server{nextID: 100, nextUpd: 1, wake: make(chan struct{}, 1), answers: map[string]string{}, deleted: map[int64]bool{}, tooOld: map[int64]bool{}, files: map[string][]byte{}}
 	srv := httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(srv.Close)
 	s.URL = srv.URL
@@ -225,6 +254,17 @@ func WaitFor(t *testing.T, what string, cond func() bool) {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	if id, ok := strings.CutPrefix(r.URL.Path, "/file/bot"+Token+"/photos/"); ok {
+		s.mu.Lock()
+		data, found := s.files[id]
+		s.mu.Unlock()
+		if !found {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(data)
+		return
+	}
 	method, ok := strings.CutPrefix(r.URL.Path, "/bot"+Token+"/")
 	if !ok {
 		reply(w, false, nil, 401, "Unauthorized")
@@ -249,6 +289,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			MessageID int64 `json:"message_id"`
 		} `json:"reply_parameters"`
 		MessageIDs       []int64 `json:"message_ids"`
+		FileID           string  `json:"file_id"`
 		Description      *string `json:"description"`
 		ShortDescription *string `json:"short_description"`
 	}
@@ -279,6 +320,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	switch method {
 	case "getMe":
 		reply(w, true, tgapi.User{ID: 123, IsBot: true}, 0, "")
+	case "getFile":
+		fileID := strings.TrimSuffix(body.FileID, "-small")
+		s.mu.Lock()
+		data, found := s.files[fileID]
+		s.mu.Unlock()
+		if !found {
+			reply(w, false, nil, 400, "Bad Request: wrong file_id")
+			return
+		}
+		reply(w, true, map[string]any{"file_id": body.FileID, "file_size": len(data), "file_path": "photos/" + fileID}, 0, "")
 	case "getUpdates":
 		s.getUpdates(w, r, body.Offset, time.Duration(body.Timeout)*time.Second)
 	case "sendMessage":

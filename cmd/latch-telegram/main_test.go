@@ -233,6 +233,40 @@ func TestOddMessages(t *testing.T) {
 	}
 }
 
+func TestPhotoReachesTheAgent(t *testing.T) {
+	b, tg, got := newTestBridge(t, true)
+	dir := t.TempDir()
+	var saved []byte
+	c, err := tgchat.New(tgchat.Options{
+		Bot: tg.Client(), Chat: owner, Runner: echo{got}, IndexPath: filepath.Join(dir, "s2.json"), Name: "keeper",
+		SaveImage: func(data []byte, ext string) (string, error) { saved = data; return filepath.Join(dir, "p"+ext), nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.Run(ctx)
+	b.chat = c
+
+	jpeg := []byte{0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 'J', 'F', 'I', 'F', 0}
+	// Updates come from the fake server as they would from Telegram.
+	tg.Photo(owner, "what is this?", jpeg)
+	ups, err := tg.Client().Updates(ctx, 0)
+	if err != nil || len(ups) != 1 {
+		t.Fatalf("updates %v, %v", ups, err)
+	}
+	b.dispatch(ctx, ups[0])
+	select {
+	case m := <-got:
+		if m != "what is this?" || string(saved) != string(jpeg) {
+			t.Fatalf("message %q, saved %q", m, saved)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the photo did not reach the agent")
+	}
+}
+
 func TestApprovalsOnly(t *testing.T) {
 	b, tg, _ := newTestBridge(t, false)
 	b.dispatch(context.Background(), msg(owner, owner, "private", "hello"))

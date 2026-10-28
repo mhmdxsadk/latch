@@ -16,7 +16,10 @@ import (
 
 const owner = 4242
 
-type call struct{ session, message, db string }
+type call struct {
+	session, message, db string
+	images               []string
+}
 
 // fakeRunner answers with reply(message), or blocks until ctx ends when
 // block is set. steps are reported as progress first.
@@ -32,7 +35,7 @@ type fakeRunner struct {
 
 func (f *fakeRunner) Run(ctx context.Context, t Turn, progress func(Progress)) (string, error) {
 	f.mu.Lock()
-	f.calls = append(f.calls, call{t.Session, t.Message, t.DB})
+	f.calls = append(f.calls, call{t.Session, t.Message, t.DB, t.Images})
 	message := t.Message
 	block, reply, steps := f.block, f.reply, f.steps
 	f.mu.Unlock()

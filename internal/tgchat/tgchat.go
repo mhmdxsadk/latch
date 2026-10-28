@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -48,6 +49,10 @@ const (
 	DefaultMaxQueue = 10
 	DefaultName     = "agent"
 	maxMessage      = 8 << 10
+	// MaxImage bounds a photo the owner sends, in bytes.
+	MaxImage = 10 << 20
+	// imageText is the message for a photo sent without a caption.
+	imageText = "[User attached one or more files without additional text. Respond using the conversation context and the attached files.]"
 )
 
 // Commands is the bot's command menu.
@@ -83,6 +88,9 @@ type Options struct {
 	SessionDir string
 	// Remove deletes files in SessionDir, as the agent's account.
 	Remove func(ctx context.Context, paths []string) error
+	// SaveImage writes a photo where the agent can read it and returns its
+	// path (nil: photos are refused). The chat removes it with Remove.
+	SaveImage func(data []byte, ext string) (string, error)
 	// Finished returns the chat messages of requests already decided, for
 	// /new to delete too; requests still waiting are never in it.
 	Finished func() []int64
@@ -108,6 +116,7 @@ type job struct {
 	session string
 	text    string
 	note    string // shown to the owner for a message the bridge sends
+	images  []string
 	// messageID is the message the answer replies to: the request's message
 	// for the outcome of a decision, 0 otherwise.
 	messageID int64
@@ -228,6 +237,64 @@ func (c *Chat) Notify(text, note string, replyTo int64) {
 	}
 }
 
+// HandleImage handles a photo from the owner: a message for the agent with
+// the photo attached. caption is the text sent with it ("" for none).
+func (c *Chat) HandleImage(ctx context.Context, caption string, data []byte, messageID int64) {
+	c.track(messageID)
+	if c.o.SaveImage == nil {
+		c.say(ctx, "Photos are not available; the agent's conversation folder is not set up.")
+		return
+	}
+	if len(caption) > maxMessage {
+		c.say(ctx, "That caption is too long; keep it under 8 KB.")
+		return
+	}
+	var ext string
+	switch http.DetectContentType(data) {
+	case "image/jpeg":
+		ext = ".jpg"
+	case "image/png":
+		ext = ".png"
+	default:
+		c.say(ctx, "Only JPEG and PNG photos are read.")
+		return
+	}
+	path, err := c.o.SaveImage(data, ext)
+	if err != nil {
+		c.o.Logger.Warn("saving a photo failed", "err", err)
+		c.say(ctx, "Could not save the photo; see the latch-telegram log.")
+		return
+	}
+	if strings.TrimSpace(caption) == "" {
+		caption = imageText
+	}
+	c.mu.Lock()
+	id := c.activeLocked()
+	err = c.saveLocked()
+	c.mu.Unlock()
+	if err != nil {
+		c.o.Logger.Warn("saving the chat state failed", "err", err)
+	}
+	select {
+	case c.queue <- job{session: id, text: caption, images: []string{path}}:
+	default:
+		c.discard([]string{path})
+		c.say(ctx, "Too many messages waiting. Wait for an answer or use /stop.")
+	}
+}
+
+// discard deletes photo files that will not be used any more.
+func (c *Chat) discard(paths []string) {
+	if len(paths) == 0 || c.o.Remove == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := c.o.Remove(ctx, paths); err != nil {
+		c.o.Logger.Warn("removing a photo failed", "err", err)
+	}
+}
+
 func (c *Chat) handleCommand(ctx context.Context, cmd string, messageID int64) {
 	if cmd != "new" {
 		c.track(messageID) // /new deletes its own message with the rest
@@ -281,6 +348,7 @@ func (c *Chat) StopDraft(id int64) bool {
 
 // turn runs one agent turn, shows it live and sends the answer.
 func (c *Chat) turn(parent context.Context, j job) {
+	defer c.discard(j.images)
 	if !c.isActive(j.session) {
 		return // the owner started over while this waited
 	}
@@ -303,7 +371,7 @@ func (c *Chat) turn(parent context.Context, j job) {
 	}
 
 	lv := c.startLive(parent, draftID)
-	out, err := c.o.Runner.Run(ctx, Turn{Session: j.session, Message: j.text, DB: c.dbFor(j.session)}, lv.update)
+	out, err := c.o.Runner.Run(ctx, Turn{Session: j.session, Message: j.text, Images: j.images, DB: c.dbFor(j.session)}, lv.update)
 	lv.stop()
 	c.mu.Lock()
 	c.cancel, c.draft = nil, 0 // idle again before any message goes out

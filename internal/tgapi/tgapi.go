@@ -52,10 +52,21 @@ type Message struct {
 	Chat      Chat   `json:"chat"`
 	Date      int64  `json:"date,omitempty"` // Unix time it was sent
 	Text      string `json:"text,omitempty"`
+	// Photo lists the sizes of a photo; Caption is the text sent with it.
+	Photo   []PhotoSize `json:"photo,omitempty"`
+	Caption string      `json:"caption,omitempty"`
 	// Entities is the formatting Telegram stored for Text.
 	Entities []Entity `json:"entities,omitempty"`
 	// ForwardOrigin is set on forwarded messages, which are ignored.
 	ForwardOrigin json.RawMessage `json:"forward_origin,omitempty"`
+}
+
+// PhotoSize is one size of a photo. FileSize may be 0 when Telegram omits it.
+type PhotoSize struct {
+	FileID   string `json:"file_id"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	FileSize int64  `json:"file_size,omitempty"`
 }
 
 // CallbackQuery is a press on an inline button.
@@ -320,6 +331,49 @@ func (c *Client) Me(ctx context.Context) (User, error) {
 	var u User
 	err := c.call(ctx, "getMe", map[string]any{}, &u)
 	return u, err
+}
+
+// Download fetches the file fileID and returns its bytes. A file over max
+// bytes is an error, and nothing past max is read.
+func (c *Client) Download(ctx context.Context, fileID string, max int64) ([]byte, error) {
+	var f struct {
+		FilePath string `json:"file_path"`
+		FileSize int64  `json:"file_size"`
+	}
+	if err := c.call(ctx, "getFile", map[string]any{"file_id": fileID}, &f); err != nil {
+		return nil, err
+	}
+	if f.FileSize > max {
+		return nil, fmt.Errorf("telegram download: file is %d bytes, over the %d limit", f.FileSize, max)
+	}
+	if f.FilePath == "" || strings.ContainsAny(f.FilePath, "?#") || strings.Contains(f.FilePath, "..") {
+		return nil, errors.New("telegram download: bad file path")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/file/bot"+c.token+"/"+f.FilePath, nil)
+	if err != nil {
+		return nil, errors.New("telegram download: bad request")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		// Keep only the cause: *url.Error carries the URL and the token.
+		var ue interface{ Unwrap() error }
+		if errors.As(err, &ue) && ue.Unwrap() != nil {
+			err = ue.Unwrap()
+		}
+		return nil, fmt.Errorf("telegram download: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("telegram download: status %d", resp.StatusCode)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
+	if err != nil {
+		return nil, fmt.Errorf("telegram download: %w", err)
+	}
+	if int64(len(b)) > max {
+		return nil, fmt.Errorf("telegram download: file is over the %d limit", max)
+	}
+	return b, nil
 }
 
 type response struct {
