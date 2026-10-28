@@ -252,7 +252,13 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 				}
 				return p, nil
 			},
-			Finished:    func() []int64 { return b.approvals.FinishedMessages() },
+			Finished: func() []int64 { return b.approvals.FinishedMessages() },
+			Attach: func(ctx context.Context, since time.Time, t tgapi.Text) bool {
+				return b.approvals.Attach(ctx, since, t)
+			},
+			Follow: func(ctx context.Context, message int64, t tgapi.Text) bool {
+				return b.approvals.Follow(ctx, message, t)
+			},
 			CheckRunner: checks,
 			CheckEvery:  every,
 			Bot:         bot,

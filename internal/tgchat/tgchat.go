@@ -7,10 +7,12 @@
 // database. Turns run one at a time, in order. Agent answers are untrusted
 // text: they are cleaned of control characters and their Markdown becomes
 // formatting this package computes
-// (never links). Answers reply to the owner's message. An agent cannot
-// pose as Latch where it matters: a request waiting for a decision always
-// has buttons, which agent text never gets, and its outcome is an edit of
-// that same message.
+// (never links). An answer that comes with a request the turn filed is part
+// of the request's message, and the answer to its outcome is added to that
+// same message, so a change is one message on a small screen. An agent
+// cannot pose as Latch where it matters: a request waiting for a decision
+// always has buttons, which agent text never gets, and agent text is never
+// bold, so the bold line stating what would run is always Latch's.
 package tgchat
 
 import (
@@ -94,6 +96,12 @@ type Options struct {
 	// Finished returns the chat messages of requests already decided, for
 	// /new to delete too; requests still waiting are never in it.
 	Finished func() []int64
+	// Attach offers the answer of the turn that started at since to a request
+	// that turn filed, so both are one message; true means it took the answer.
+	// Follow does the same for the answer to a decision, under the outcome in
+	// the request's message. Both may be nil.
+	Attach   func(ctx context.Context, since time.Time, answer tgapi.Text) bool
+	Follow   func(ctx context.Context, message int64, answer tgapi.Text) bool
 	MaxQueue int
 	Now      func() time.Time
 	Logger   *slog.Logger
@@ -378,6 +386,7 @@ func (c *Chat) turn(parent context.Context, j job) {
 		c.say(parent, j.note)
 	}
 
+	started := c.o.Now()
 	lv := c.startLive(parent, draftID)
 	out, err := c.o.Runner.Run(ctx, Turn{Session: j.session, Message: j.text, Images: j.images, DB: c.dbFor(j.session)}, lv.update)
 	lv.stop()
@@ -416,7 +425,21 @@ func (c *Chat) turn(parent context.Context, j job) {
 		c.sayTo(parent, j.messageID, "Could not start; see the latch-telegram log.")
 		return
 	}
-	c.answer(parent, out, j.messageID)
+	c.deliver(parent, out, j, started)
+}
+
+// deliver shows the agent's answer. A request the turn filed carries it in
+// its own message, and the answer to a decision goes into the decided
+// request's message; only otherwise is it a message of its own.
+func (c *Chat) deliver(ctx context.Context, out string, j job, started time.Time) {
+	body := Markdown(out)
+	if c.o.Attach != nil && c.o.Attach(ctx, started, body) {
+		return
+	}
+	if j.messageID != 0 && c.o.Follow != nil && strings.TrimSpace(body.S) != "" && c.o.Follow(ctx, j.messageID, body) {
+		return
+	}
+	c.answer(ctx, out, j.messageID)
 }
 
 // usageLimitText is what the owner reads when the model's usage limit is

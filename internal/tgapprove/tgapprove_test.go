@@ -453,3 +453,97 @@ func TestFinishedMessagesLeaveWaitingRequestsAlone(t *testing.T) {
 		t.Errorf("after restart: %v", got)
 	}
 }
+
+func answerText(s string) tgapi.Text {
+	var b tgapi.Builder
+	return b.Plain(s).Done()
+}
+
+func TestAnswerJoinsTheRequestItFiled(t *testing.T) {
+	for _, announced := range []bool{false, true} {
+		t.Run(fmt.Sprintf("announced=%v", announced), func(t *testing.T) {
+			h := newHarness(t)
+			since := time.Now().Add(-time.Second)
+			r := h.submit(h.stop("jellyfin"))
+			if announced {
+				h.poll() // the approver was faster than the end of the turn
+			}
+			if !h.a.Attach(context.Background(), since, answerText("Jellyfin is stuck, so I would stop it.")) {
+				t.Fatal("answer not taken")
+			}
+			h.poll()
+			sent := h.tg.Sent()
+			if len(sent) != 1 {
+				t.Fatalf("want one message, got %+v", sent)
+			}
+			m := sent[0]
+			want := "Jellyfin is stuck, so I would stop it.\n\nuid 1000 wants to stop container jellyfin"
+			if !strings.HasPrefix(m.Text, want) || len(m.Keyboard) != 1 || len(m.Keyboard[0]) != 2 {
+				t.Fatalf("message %q %+v", m.Text, m.Keyboard)
+			}
+			// The agent's words are not part of what the buttons decide.
+			if got := h.press(m, m.Keyboard[0][0].Data); got != "Approved request 1." {
+				t.Fatalf("answer %q (request %d)", got, r.ID)
+			}
+			h.poll()
+			m = h.tg.Sent()[0]
+			if !strings.HasPrefix(m.Text, "Done: stopped container jellyfin") || strings.Contains(m.Text, "I would stop it") || m.Keyboard != nil {
+				t.Fatalf("after approval: %q %+v", m.Text, m.Keyboard)
+			}
+			// The agent's check of the result goes under the outcome.
+			if !h.a.Follow(context.Background(), m.ID, answerText("Jellyfin is stopped, as asked.")) {
+				t.Fatal("follow-up not taken")
+			}
+			sent = h.tg.Sent()
+			if len(sent) != 1 || !strings.HasSuffix(sent[0].Text, "\n\nJellyfin is stopped, as asked.") {
+				t.Fatalf("after follow-up: %+v", sent)
+			}
+			// A restart keeps what is shown; a poll changes nothing.
+			h.a = h.approver()
+			h.poll()
+			if got := h.tg.Sent()[0].Text; got != sent[0].Text {
+				t.Errorf("poll changed the message: %q", got)
+			}
+		})
+	}
+}
+
+func TestAnswerStaysSeparateWhenItCannotJoin(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	if h.a.Attach(ctx, time.Now().Add(-time.Second), answerText("hello")) {
+		t.Error("took an answer when no request was filed")
+	}
+	h.submit(h.stop("old"))
+	if h.a.Attach(ctx, time.Now().Add(time.Second), answerText("hello")) {
+		t.Error("took an answer for a request filed before the turn")
+	}
+	if h.a.Follow(ctx, 99, answerText("hello")) {
+		t.Error("followed up on a message that is not a request")
+	}
+	// An answer too long to share the message is not cut.
+	r := h.submit(h.stop("db"))
+	long := answerText(strings.Repeat("x", tgapi.MaxText-20))
+	if h.a.Attach(ctx, r.CreatedAt.Add(-time.Second), long) {
+		t.Error("took an answer that does not fit")
+	}
+	// A request still waiting takes no follow-up.
+	h.poll()
+	m := h.tg.Sent()[1]
+	if h.a.Follow(ctx, m.ID, answerText("done")) {
+		t.Error("followed up on a request that is still waiting")
+	}
+}
+
+func TestEmptyAnswerLeavesTheRequestAlone(t *testing.T) {
+	h := newHarness(t)
+	since := time.Now().Add(-time.Second)
+	h.submit(h.stop("jellyfin"))
+	if !h.a.Attach(context.Background(), since, tgapi.Text{}) {
+		t.Fatal("an empty answer should not be sent as a message of its own")
+	}
+	h.poll()
+	if sent := h.tg.Sent(); len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "uid 1000 wants") {
+		t.Fatalf("%+v", sent)
+	}
+}

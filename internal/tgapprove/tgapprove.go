@@ -100,6 +100,12 @@ type shown struct {
 	Message int64  `json:"message,omitempty"` // 0: never shown
 	Text    string `json:"text,omitempty"`    // hash of the shown text
 	Final   bool   `json:"final"`
+	// Lead is the agent's answer that filed the request, shown above it while
+	// it waits; Tail is the agent's answer to the outcome, shown under it.
+	// Both are agent text: formatting is computed here, never links, and bold
+	// is Latch's alone, so the request's own line cannot be imitated.
+	Lead *tgapi.Text `json:"lead,omitempty"`
+	Tail *tgapi.Text `json:"tail,omitempty"`
 }
 
 // New loads the state file (a missing file is an empty state).
@@ -198,7 +204,7 @@ func (a *Approver) updateLocked(ctx context.Context, r approval.Request) {
 	if !known {
 		switch {
 		case r.Status == approval.StatusPending:
-			text, kb := a.render(r)
+			text, kb := a.render(r, nil)
 			m, err := a.o.Bot.Send(ctx, a.o.Chat, text, kb)
 			if err != nil {
 				a.o.Logger.Warn("announcing a request failed", "id", r.ID, "err", err)
@@ -225,7 +231,7 @@ func (a *Approver) updateLocked(ctx context.Context, r approval.Request) {
 		}
 		return
 	}
-	text, kb := a.render(r)
+	text, kb := a.render(r, s)
 	if hashText(text) != s.Text {
 		if err := a.o.Bot.Edit(ctx, a.o.Chat, s.Message, text, kb); err != nil {
 			a.o.Logger.Warn("updating a request message failed", "id", r.ID, "err", err)
@@ -334,19 +340,32 @@ func (a *Approver) decide(ctx context.Context, approve bool, id int64, fp string
 	return fmt.Sprintf("%s request %d.", verb, id)
 }
 
-// render is the message for r and its buttons (nil when it is decided).
+// render is the message for r and its buttons (nil when it is decided). s is
+// what the chat already shows for r, if anything: the agent's words go with
+// the request in one message.
 //
 // Messages read like a colleague asking for a sign-off: one line saying
 // who wants to do what, the deadline, and the exact details folded away
 // until tapped.
-func (a *Approver) render(r approval.Request) (tgapi.Text, tgapi.Keyboard) {
+func (a *Approver) render(r approval.Request, s *shown) (tgapi.Text, tgapi.Keyboard) {
 	if r.Status != approval.StatusPending {
-		return a.outcome(r), nil
+		out := a.outcome(r)
+		if s != nil && s.Tail != nil {
+			if t, ok := stack(out, *s.Tail); ok {
+				out = t
+			}
+		}
+		return out, nil
 	}
 	head, body := a.pendingText(r)
 	fp := fingerprint(r)
 	deny := tgapi.Button{Text: "Deny", Data: data(false, r.ID, fp), Style: tgapi.StyleDanger}
 	if full := join(head, body); full.Len() <= tgapi.MaxText {
+		if s != nil && s.Lead != nil {
+			if t, ok := stack(*s.Lead, full); ok {
+				full = t
+			}
+		}
 		return full, tgapi.Keyboard{{{Text: "Approve", Data: data(true, r.ID, fp), Style: tgapi.StyleSuccess}, deny}}
 	}
 	// Too long to read here: offer the command to approve it on the server.
@@ -357,6 +376,108 @@ func (a *Approver) render(r approval.Request) (tgapi.Text, tgapi.Keyboard) {
 func (a *Approver) tooLong(r approval.Request) bool {
 	head, body := a.pendingText(r)
 	return join(head, body).Len() > tgapi.MaxText
+}
+
+// stack puts two texts in one message, a blank line apart. It reports false
+// when they do not fit together: agent text is never cut to make room.
+func stack(first, second tgapi.Text) (tgapi.Text, bool) {
+	if first.Len()+2+second.Len() > tgapi.MaxText {
+		return tgapi.Text{}, false
+	}
+	var b tgapi.Builder
+	return b.Text(first).Plain("\n\n").Text(second).Done(), true
+}
+
+// Attach gives the agent's answer to a request its turn filed: the answer
+// and the request become one message with the buttons under it. since is
+// when the turn started. It reports false when the turn filed nothing the
+// answer can join (nothing was changed; the caller sends the answer itself).
+// An empty answer still reports true when the turn filed a request, so the
+// request alone is the whole reply.
+func (a *Approver) Attach(ctx context.Context, since time.Time, lead tgapi.Text) bool {
+	pending, err := a.o.Admin.Pending(ctx)
+	if err != nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var r *approval.Request
+	for i, c := range pending {
+		if c.Status != approval.StatusPending || !c.NeedsApproval || c.RunsOnTimeout || c.CreatedAt.Before(since) ||
+			(a.o.AgentUID != nil && *a.o.AgentUID != c.RequestedBy.UID) {
+			continue
+		}
+		if r == nil || c.ID < r.ID {
+			r = &pending[i]
+		}
+	}
+	if r == nil || a.tooLong(*r) {
+		return false
+	}
+	s := a.state.Requests[r.ID]
+	if s != nil && (s.Final || s.Message == 0 || s.Lead != nil) {
+		return false
+	}
+	if strings.TrimSpace(lead.S) == "" {
+		return true
+	}
+	if _, ok := stack(lead, join(a.pendingText(*r))); !ok {
+		return false
+	}
+	if s == nil {
+		s = &shown{Lead: &lead}
+		text, kb := a.render(*r, s)
+		m, err := a.o.Bot.Send(ctx, a.o.Chat, text, kb)
+		if err != nil {
+			a.o.Logger.Warn("announcing a request failed", "id", r.ID, "err", err)
+			return false
+		}
+		s.Message, s.Text = m.MessageID, hashText(text)
+		a.state.Requests[r.ID] = s
+		_ = a.saveLocked()
+		return true
+	}
+	s.Lead = &lead
+	text, kb := a.render(*r, s)
+	if err := a.o.Bot.Edit(ctx, a.o.Chat, s.Message, text, kb); err != nil {
+		a.o.Logger.Warn("updating a request message failed", "id", r.ID, "err", err)
+		s.Lead = nil
+		return false
+	}
+	s.Text = hashText(text)
+	_ = a.saveLocked()
+	return true
+}
+
+// Follow adds the agent's answer to a decision under the outcome in the
+// request's own message instead of a message of its own. It reports false
+// when it did not fit or the message is gone; the caller sends the answer.
+func (a *Approver) Follow(ctx context.Context, message int64, tail tgapi.Text) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id, s := range a.state.Requests {
+		if s.Message != message || !s.Final || s.Tail != nil {
+			continue
+		}
+		r, err := a.o.Admin.Get(ctx, id)
+		if err != nil || r.Status == approval.StatusPending {
+			return false
+		}
+		if _, ok := stack(a.outcome(r), tail); !ok {
+			return false
+		}
+		s.Tail = &tail
+		text, _ := a.render(r, s)
+		if err := a.o.Bot.Edit(ctx, a.o.Chat, s.Message, text, nil); err != nil {
+			a.o.Logger.Warn("updating a request message failed", "id", id, "err", err)
+			s.Tail = nil
+			return false
+		}
+		s.Text = hashText(text)
+		_ = a.saveLocked()
+		return true
+	}
+	return false
 }
 
 // join puts a head and its details together, the details in one quote

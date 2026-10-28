@@ -473,3 +473,56 @@ func TestChecks(t *testing.T) {
 		t.Errorf("prompt:\n%s", last.message)
 	}
 }
+
+func TestAnswerJoinsRequestInsteadOfBeingSent(t *testing.T) {
+	var mu sync.Mutex
+	var attached, followed []string
+	var since time.Time
+	h := newHarnessWith(t, time.Minute, func(o *Options) {
+		o.Attach = func(_ context.Context, s time.Time, a tgapi.Text) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			since = s
+			if strings.Contains(a.S, "restart caddy") {
+				attached = append(attached, a.S)
+				return true
+			}
+			return false
+		}
+		o.Follow = func(_ context.Context, message int64, a tgapi.Text) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			followed = append(followed, a.S)
+			return message == 77
+		}
+	})
+	start := time.Now()
+	h.send("restart caddy please")
+	// The answer went to the request, so the next, plain one is the first message sent.
+	h.send("what time is it")
+	h.waitText("answer to what time is it")
+	mu.Lock()
+	if len(attached) != 1 || since.Before(start.Add(-time.Second)) || since.After(time.Now()) {
+		t.Errorf("attached %v since %v", attached, since)
+	}
+	mu.Unlock()
+	for _, m := range h.tg.Sent() {
+		if strings.Contains(m.Text, "restart caddy") {
+			t.Errorf("an answer taken by a request was also sent: %q", m.Text)
+		}
+	}
+
+	// The answer to a decision joins the decided request's message.
+	h.chat.Notify("Latch: request 3 was approved.", "", 77)
+	tgtest.WaitFor(t, "the follow-up", func() bool { mu.Lock(); defer mu.Unlock(); return len(followed) == 1 })
+	// When the request's message cannot take it, it is sent after all.
+	h.chat.Notify("Latch: request 4 was denied.", "", 78)
+	if m := h.waitText("answer to Latch: request 4"); m.ReplyTo != 78 {
+		t.Errorf("fallback does not reply to the request message: %+v", m)
+	}
+	for _, m := range h.tg.Sent() {
+		if strings.Contains(m.Text, "request 3") {
+			t.Errorf("a follow-up taken by the request was also sent: %q", m.Text)
+		}
+	}
+}
