@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -474,20 +475,17 @@ func TestChecks(t *testing.T) {
 	}
 }
 
-func TestAnswerJoinsRequestInsteadOfBeingSent(t *testing.T) {
+func TestTurnThatFiledARequestShowsNoAnswer(t *testing.T) {
+	var filed atomic.Bool
 	var mu sync.Mutex
-	var attached, followed []string
 	var since time.Time
+	var followed []string
 	h := newHarnessWith(t, time.Minute, func(o *Options) {
-		o.Attach = func(_ context.Context, s time.Time, a tgapi.Text) bool {
+		o.Filed = func(_ context.Context, s time.Time) bool {
 			mu.Lock()
-			defer mu.Unlock()
 			since = s
-			if strings.Contains(a.S, "restart caddy") {
-				attached = append(attached, a.S)
-				return true
-			}
-			return false
+			mu.Unlock()
+			return filed.Load()
 		}
 		o.Follow = func(_ context.Context, message int64, a tgapi.Text) bool {
 			mu.Lock()
@@ -497,27 +495,33 @@ func TestAnswerJoinsRequestInsteadOfBeingSent(t *testing.T) {
 		}
 	})
 	start := time.Now()
+	filed.Store(true)
 	h.send("restart caddy please")
-	// The answer went to the request, so the next, plain one is the first message sent.
+	tgtest.WaitFor(t, "the turn to end", func() bool { return len(h.run.Calls()) == 1 && !h.chat.busy() })
+	filed.Store(false)
 	h.send("what time is it")
 	h.waitText("answer to what time is it")
 	mu.Lock()
-	if len(attached) != 1 || since.Before(start.Add(-time.Second)) || since.After(time.Now()) {
-		t.Errorf("attached %v since %v", attached, since)
+	if since.Before(start.Add(-time.Second)) || since.After(time.Now()) {
+		t.Errorf("the turn's start was %v", since)
 	}
 	mu.Unlock()
 	for _, m := range h.tg.Sent() {
 		if strings.Contains(m.Text, "restart caddy") {
-			t.Errorf("an answer taken by a request was also sent: %q", m.Text)
+			t.Errorf("the answer of a turn that filed a request was shown: %q", m.Text)
 		}
 	}
 
-	// The answer to a decision joins the decided request's message.
-	h.chat.Notify("Latch: request 3 was approved.", "", 77)
+	// The answer to a decision goes into the request's message, and shows no
+	// live preview of its own (it would stay on screen next to it).
+	h.run.mu.Lock()
+	h.run.steps = []Progress{{Text: "the answer so far"}}
+	h.run.mu.Unlock()
+	h.chat.Notify("Automatic message: request 3 was approved.", "", 77)
 	tgtest.WaitFor(t, "the follow-up", func() bool { mu.Lock(); defer mu.Unlock(); return len(followed) == 1 })
-	// When the request's message cannot take it, it is sent after all.
-	h.chat.Notify("Latch: request 4 was denied.", "", 78)
-	if m := h.waitText("answer to Latch: request 4"); m.ReplyTo != 78 {
+	// When that message cannot take it, it is sent after all.
+	h.chat.Notify("Automatic message: request 4 was denied.", "", 78)
+	if m := h.waitText("answer to Automatic message: request 4"); m.ReplyTo != 78 {
 		t.Errorf("fallback does not reply to the request message: %+v", m)
 	}
 	for _, m := range h.tg.Sent() {
@@ -525,4 +529,20 @@ func TestAnswerJoinsRequestInsteadOfBeingSent(t *testing.T) {
 			t.Errorf("a follow-up taken by the request was also sent: %q", m.Text)
 		}
 	}
+	if d := h.tg.Drafts(); len(d) != 0 {
+		t.Errorf("a decision's follow-up showed a live preview: %+v", d)
+	}
+}
+
+func TestBusyWhileATurnRuns(t *testing.T) {
+	h := newHarness(t, time.Minute)
+	h.run.gate = make(chan struct{})
+	if h.chat.Busy() {
+		t.Fatal("busy before any turn")
+	}
+	h.send("hello")
+	tgtest.WaitFor(t, "the turn to start", func() bool { return h.chat.Busy() })
+	close(h.run.gate)
+	h.waitText("answer to hello")
+	tgtest.WaitFor(t, "the turn to end", func() bool { return !h.chat.Busy() })
 }

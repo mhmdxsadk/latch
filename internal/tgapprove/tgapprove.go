@@ -47,7 +47,6 @@ type Bot interface {
 	Send(ctx context.Context, chat int64, t tgapi.Text, kb tgapi.Keyboard) (tgapi.Message, error)
 	Edit(ctx context.Context, chat, message int64, t tgapi.Text, kb tgapi.Keyboard) error
 	Answer(ctx context.Context, callbackID, text string) error
-	DeleteMessages(ctx context.Context, chat int64, ids []int64) error
 }
 
 // Defaults for Options.
@@ -61,6 +60,13 @@ const (
 	// collapseAfter is how many lines of file content or result a message
 	// may show as plain text before it becomes a code block.
 	collapseAfter = 6
+	// foldAfter is how many lines of details a request shows before it folds
+	// them into a quote that opens when tapped: a small change is read in
+	// full before it is approved.
+	foldAfter = 12
+	// holdFor is the longest a new request waits for the agent's turn to
+	// end before it is shown anyway.
+	holdFor = 30 * time.Second
 )
 
 // Options configure an Approver.
@@ -80,6 +86,10 @@ type Options struct {
 	AgentName string
 	AgentUID  *uint32
 	Logger    *slog.Logger
+	// Hold, when it returns true, keeps a request that has just been filed
+	// from being shown yet: the agent is still answering, and the request
+	// is shown once, after it.
+	Hold func() bool
 	// OnFinished is called once when a request the owner was asked about
 	// ends, however it was decided. The chat bridge uses it to tell the
 	// agent the outcome. message is the request's chat message. It must
@@ -104,11 +114,8 @@ type shown struct {
 	Message int64  `json:"message,omitempty"` // 0: never shown
 	Text    string `json:"text,omitempty"`    // hash of the shown text
 	Final   bool   `json:"final"`
-	// Lead is the agent's answer that filed the request, shown above it while
-	// it waits; Tail is the agent's answer to the outcome, shown under it.
-	// Both are agent text: formatting is computed here, never links, and bold
-	// is Latch's alone, so the request's own line cannot be imitated.
-	Lead *tgapi.Text `json:"lead,omitempty"`
+	// Tail is the agent's answer to the outcome, shown under it. It is agent
+	// text: formatting is computed here, never links.
 	Tail *tgapi.Text `json:"tail,omitempty"`
 }
 
@@ -208,6 +215,9 @@ func (a *Approver) updateLocked(ctx context.Context, r approval.Request) {
 	if !known {
 		switch {
 		case r.Status == approval.StatusPending:
+			if a.o.Hold != nil && a.o.Hold() && a.o.Now().Sub(r.CreatedAt) < holdFor {
+				return // shown once the agent's turn has ended
+			}
 			text, kb := a.render(r, nil)
 			m, err := a.o.Bot.Send(ctx, a.o.Chat, text, kb)
 			if err != nil {
@@ -255,7 +265,7 @@ func (a *Approver) updateLocked(ctx context.Context, r approval.Request) {
 // pending requests in memory only, so a restart forgets them.
 func (a *Approver) goneLocked(ctx context.Context, id int64, s *shown) {
 	var b tgapi.Builder
-	b.Bold(fmt.Sprintf("Request %d is gone", id))
+	b.Plain(fmt.Sprintf("Request %d is gone", id))
 	b.Plain("\nThe request was lost (the service restarted). Nothing will run.")
 	text := b.Done()
 	if err := a.o.Bot.Edit(ctx, a.o.Chat, s.Message, text, nil); err != nil {
@@ -365,11 +375,6 @@ func (a *Approver) render(r approval.Request, s *shown) (tgapi.Text, tgapi.Keybo
 	fp := fingerprint(r)
 	deny := tgapi.Button{Text: "Deny", Data: data(false, r.ID, fp), Style: tgapi.StyleDanger}
 	if full := join(head, body); full.Len() <= tgapi.MaxText {
-		if s != nil && s.Lead != nil {
-			if t, ok := stack(*s.Lead, full); ok {
-				full = t
-			}
-		}
 		return full, tgapi.Keyboard{{{Text: "Approve", Data: data(true, r.ID, fp), Style: tgapi.StyleSuccess}, deny}}
 	}
 	// Too long to read here: offer the command to approve it on the server.
@@ -392,81 +397,27 @@ func stack(first, second tgapi.Text) (tgapi.Text, bool) {
 	return b.Text(first).Plain("\n\n").Text(second).Done(), true
 }
 
-// Attach gives the agent's answer to a request its turn filed: the answer
-// and the request become one message with the buttons under it. since is
-// when the turn started. It reports false when the turn filed nothing the
-// answer can join (nothing was changed; the caller sends the answer itself).
-// An empty answer still reports true when the turn filed a request, so the
-// request alone is the whole reply.
-func (a *Approver) Attach(ctx context.Context, since time.Time, lead tgapi.Text) bool {
+// Filed reports whether the agent's turn, which started at since, filed a
+// request that needs the owner. The request is the whole reply then, so the
+// chat drops the agent's words, and the request is shown right away.
+func (a *Approver) Filed(ctx context.Context, since time.Time) bool {
 	pending, err := a.o.Admin.Pending(ctx)
 	if err != nil {
 		return false
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	var r *approval.Request
-	for i, c := range pending {
-		if c.Status != approval.StatusPending || !c.NeedsApproval || c.RunsOnTimeout || c.CreatedAt.Before(since) ||
-			(a.o.AgentUID != nil && *a.o.AgentUID != c.RequestedBy.UID) {
-			continue
-		}
-		if r == nil || c.ID < r.ID {
-			r = &pending[i]
+	found := false
+	for _, r := range pending {
+		if r.Status == approval.StatusPending && r.NeedsApproval && !r.RunsOnTimeout && !r.CreatedAt.Before(since) &&
+			(a.o.AgentUID == nil || *a.o.AgentUID == r.RequestedBy.UID) {
+			found = true
 		}
 	}
-	if r == nil || a.tooLong(*r) {
-		return false
-	}
-	s := a.state.Requests[r.ID]
-	if s != nil && (s.Final || s.Message == 0 || s.Lead != nil) {
-		return false
-	}
-	if strings.TrimSpace(lead.S) == "" {
-		return true
-	}
-	if _, ok := stack(lead, join(a.pendingText(*r))); !ok {
-		return false
-	}
-	if s == nil {
-		s = &shown{Lead: &lead}
-		text, kb := a.render(*r, s)
-		m, err := a.o.Bot.Send(ctx, a.o.Chat, text, kb)
-		if err != nil {
-			a.o.Logger.Warn("announcing a request failed", "id", r.ID, "err", err)
-			return false
+	if found {
+		if err := a.Poll(ctx); err != nil {
+			a.o.Logger.Warn("checking requests failed", "err", err)
 		}
-		s.Message, s.Text = m.MessageID, hashText(text)
-		a.state.Requests[r.ID] = s
-		_ = a.saveLocked()
-		return true
 	}
-	s.Lead = &lead
-	text, kb := a.render(*r, s)
-	if err := a.replaceLocked(ctx, s, text, kb); err != nil {
-		a.o.Logger.Warn("updating a request message failed", "id", r.ID, "err", err)
-		s.Lead = nil
-		return false
-	}
-	_ = a.saveLocked()
-	return true
-}
-
-// replaceLocked shows text as a new message and deletes the old one. The
-// turn's live preview only goes away when a message arrives; an edit would
-// leave it on screen for a while next to the message that now holds the
-// answer.
-func (a *Approver) replaceLocked(ctx context.Context, s *shown, text tgapi.Text, kb tgapi.Keyboard) error {
-	m, err := a.o.Bot.Send(ctx, a.o.Chat, text, kb)
-	if err != nil {
-		return err
-	}
-	old := s.Message
-	s.Message, s.Text = m.MessageID, hashText(text)
-	if err := a.o.Bot.DeleteMessages(ctx, a.o.Chat, []int64{old}); err != nil {
-		a.o.Logger.Warn("deleting the old request message failed", "message", old, "err", err)
-	}
-	return nil
+	return found
 }
 
 // Follow adds the agent's answer to a decision under the outcome in the
@@ -488,19 +439,20 @@ func (a *Approver) Follow(ctx context.Context, message int64, tail tgapi.Text) b
 		}
 		s.Tail = &tail
 		text, _ := a.render(r, s)
-		if err := a.replaceLocked(ctx, s, text, nil); err != nil {
+		if err := a.o.Bot.Edit(ctx, a.o.Chat, s.Message, text, nil); err != nil {
 			a.o.Logger.Warn("updating a request message failed", "id", id, "err", err)
 			s.Tail = nil
 			return false
 		}
+		s.Text = hashText(text)
 		_ = a.saveLocked()
 		return true
 	}
 	return false
 }
 
-// join puts a head and its details together, the details in one quote
-// that opens when tapped.
+// join puts a head and its details together: short details as they are,
+// long ones in one quote that opens when tapped.
 func join(head tgapi.Text, body []tgapi.Text) tgapi.Text {
 	var b, d tgapi.Builder
 	for i, t := range body {
@@ -511,7 +463,13 @@ func join(head tgapi.Text, body []tgapi.Text) tgapi.Text {
 	}
 	b.Text(head)
 	if d.Len() > 0 {
-		b.Plain("\n").Quote(d.Done(), true)
+		details := d.Done()
+		b.Plain("\n")
+		if strings.Count(details.S, "\n") >= foldAfter {
+			b.Quote(details, true) // long: folded until tapped
+		} else {
+			b.Text(details)
+		}
 	}
 	return b.Done()
 }
@@ -520,7 +478,7 @@ func join(head tgapi.Text, body []tgapi.Text) tgapi.Text {
 // read and approve the rest.
 func (a *Approver) shortened(r approval.Request, head tgapi.Text, body []tgapi.Text) tgapi.Text {
 	var tail tgapi.Builder
-	tail.Italic("Too long to show in full here, so there is no Approve button. Read and approve it on the server.")
+	tail.Italic(fmt.Sprintf("Too long to show in full here, so there is no Approve button. Read and approve it on the server (request %d).", r.ID))
 	budget := tgapi.MaxText - head.Len() - tail.Len() - 40
 	var kept []tgapi.Text
 	used := 0
@@ -544,15 +502,14 @@ func (a *Approver) shortened(r approval.Request, head tgapi.Text, body []tgapi.T
 func (a *Approver) pendingText(r approval.Request) (tgapi.Text, []tgapi.Text) {
 	var b tgapi.Builder
 	if r.RunsOnTimeout {
-		b.Bold("A change did not come up. Undo it?")
+		b.Plain("A change did not come up. Undo it?")
 		b.Plain("\n" + a.voice() + " will " + a.phrase(r, false) + " by itself at ")
-		b.Text(a.timeText(r.ExpiresAt, false))
+		b.Text(a.timeText(r.ExpiresAt))
 		b.Plain(" unless you deny it.")
 	} else {
-		b.Bold(a.who(r.RequestedBy.UID) + " wants to " + a.phrase(r, false))
+		b.Plain(a.who(r.RequestedBy.UID) + " wants to " + a.phrase(r, false))
 		b.Plain("\nExpires ")
-		b.Text(a.timeText(r.ExpiresAt, false))
-		b.Plain(fmt.Sprintf(" · request %d", r.ID))
+		b.Text(a.timeText(r.ExpiresAt))
 	}
 	return b.Done(), a.details(r)
 }
@@ -635,8 +592,7 @@ func (a *Approver) details(r approval.Request) []tgapi.Text {
 				diff = append(diff, lines[i])
 			}
 			i--
-			var b tgapi.Builder
-			out = append(out, b.Pre(strings.Join(diff, "\n"), "diff").Done())
+			out = append(out, block(diff, "diff"))
 		case l == "content:":
 			var body []string
 			for i++; i < len(lines) && (strings.HasPrefix(lines[i], "  ") || lines[i] == ""); i++ {
@@ -682,17 +638,17 @@ func (a *Approver) outcome(r approval.Request) tgapi.Text {
 	what := a.phrase(r, false)
 	switch {
 	case r.Status == approval.StatusDone && r.DecidedBy == nil && r.RunsOnTimeout:
-		b.Bold("Done: " + a.phrase(r, true)).Plain(" (nobody decided in time)")
+		b.Plain("Done: " + a.phrase(r, true)).Plain(" (nobody decided in time)")
 	case r.Status == approval.StatusDone:
-		b.Bold("Done: " + a.phrase(r, true))
+		b.Plain("Done: " + a.phrase(r, true))
 	case r.Status == approval.StatusFailed:
-		b.Bold("Failed: " + what)
+		b.Plain("Failed: " + what)
 	case r.Status == approval.StatusDenied:
-		b.Bold("Denied: " + what)
+		b.Plain("Denied: " + what)
 	case r.Status == approval.StatusExpired:
-		b.Bold("Expired: " + what).Plain(" (nobody decided)")
+		b.Plain("Expired: " + what).Plain(" (nobody decided)")
 	default:
-		b.Bold("Approved, working on it: " + what)
+		b.Plain("Approved, working on it: " + what)
 	}
 	if r.Status == approval.StatusDone && a.o.OnFinished != nil {
 		// The agent is told and checks the result itself; Latch's own line
@@ -708,9 +664,9 @@ func (a *Approver) notice(r approval.Request) tgapi.Text {
 	var b tgapi.Builder
 	who := a.who(r.RequestedBy.UID)
 	if r.Status == approval.StatusDone {
-		b.Bold(who + " " + a.phrase(r, true))
+		b.Plain(who + " " + a.phrase(r, true))
 	} else {
-		b.Bold(who + " tried to " + a.phrase(r, false) + ", but it " + string(r.Status))
+		b.Plain(who + " tried to " + a.phrase(r, false) + ", but it " + string(r.Status))
 	}
 	return fit(a.withResult(b.Done(), r))
 }
@@ -748,17 +704,10 @@ func (a *Approver) clock(t time.Time) string {
 }
 
 // timeText is t as a time the reader's app shows in their own time zone;
-// the text under it (for apps that cannot) uses Location. bold keeps it
-// bold inside a bold title.
-func (a *Approver) timeText(t time.Time, bold bool) tgapi.Text {
+// the text under it (for apps that cannot) uses Location.
+func (a *Approver) timeText(t time.Time) tgapi.Text {
 	var b tgapi.Builder
-	b.Time(a.clock(t), t, "t")
-	if !bold {
-		return b.Done()
-	}
-	out := b.Done()
-	out.Entities = append([]tgapi.Entity{{Type: "bold", Offset: 0, Length: out.Len()}}, out.Entities...)
-	return out
+	return b.Time(a.clock(t), t, "t").Done()
 }
 
 func clean(s string) string { return textsafe.Line(s) }

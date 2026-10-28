@@ -161,7 +161,7 @@ func TestAnnounceApproveAndUpdate(t *testing.T) {
 		t.Fatalf("sent %+v", sent)
 	}
 	m := sent[0]
-	for _, want := range []string{"uid 1000 wants to stop container jellyfin\nExpires ", " · request 1\nstop container jellyfin\npull: false"} {
+	for _, want := range []string{"uid 1000 wants to stop container jellyfin\nExpires ", "\nstop container jellyfin\npull: false"} {
 		if !strings.Contains(m.Text, want) {
 			t.Errorf("message lacks %q:\n%s", want, m.Text)
 		}
@@ -381,7 +381,7 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 	}
 	wantCreate := "keeper wants to create /root/hello.txt\nExpires " +
 		time.Now().Add(time.Hour).UTC().Format("15:04") +
-		" · request 1\ncreate /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)\nContent:\nhello"
+		"\ncreate /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)\nContent:\nhello"
 	if sent[0].Text != wantCreate {
 		t.Errorf("create:\n%s\nwant:\n%s", sent[0].Text, wantCreate)
 	}
@@ -391,8 +391,8 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 		styles = append(styles, e.Type+"="+f.Slice(e))
 	}
 	exp := time.Now().Add(time.Hour).UTC().Format("15:04")
-	if got := strings.Join(styles, "|"); got != "bold=keeper wants to create /root/hello.txt|date_time="+exp+
-		"|expandable_blockquote=create /root/hello.txt (mode 0644, owner uid 0 gid 0, 6 bytes)\nContent:\nhello" {
+	// Short details are plain: no bold, no quote, no code block.
+	if got := strings.Join(styles, "|"); got != "date_time="+exp {
 		t.Errorf("create styles %s", got)
 	}
 
@@ -401,14 +401,10 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 		strings.Contains(e.S, "path:") || strings.Contains(e.S, "restart: container caddy") || strings.Contains(e.S, "+++ ") {
 		t.Errorf("edit:\n%s", e.S)
 	}
-	var diff *tgapi.Entity
-	for i := range e.Entities {
-		if e.Entities[i].Type == "pre" {
-			diff = &e.Entities[i]
+	for _, en := range e.Entities {
+		if en.Type == "pre" || en.Type == "expandable_blockquote" {
+			t.Errorf("a short diff is %s", en.Type)
 		}
-	}
-	if diff == nil || diff.Language != "diff" || !strings.HasPrefix(e.Slice(*diff), "@@ -1,2 +1,2 @@") {
-		t.Errorf("diff block %+v", diff)
 	}
 }
 
@@ -472,97 +468,111 @@ func answerText(s string) tgapi.Text {
 	return b.Plain(s).Done()
 }
 
-func TestAnswerJoinsTheRequestItFiled(t *testing.T) {
-	for _, announced := range []bool{false, true} {
-		t.Run(fmt.Sprintf("announced=%v", announced), func(t *testing.T) {
-			h := newHarness(t)
-			since := time.Now().Add(-time.Second)
-			r := h.submit(h.stop("jellyfin"))
-			if announced {
-				h.poll() // the approver was faster than the end of the turn
-			}
-			if !h.a.Attach(context.Background(), since, answerText("Jellyfin is stuck, so I would stop it.")) {
-				t.Fatal("answer not taken")
-			}
-			h.poll()
-			sent := h.tg.Visible()
-			if len(sent) != 1 {
-				t.Fatalf("want one message, got %+v", sent)
-			}
-			// The answer arrives as a new message (that is what clears the
-			// turn's live preview), and the one it replaces is deleted.
-			if announced && len(h.tg.Sent()) != 2 {
-				t.Fatalf("the announced request was not replaced: %+v", h.tg.Sent())
-			}
-			m := sent[0]
-			want := "Jellyfin is stuck, so I would stop it.\n\nuid 1000 wants to stop container jellyfin"
-			if !strings.HasPrefix(m.Text, want) || len(m.Keyboard) != 1 || len(m.Keyboard[0]) != 2 {
-				t.Fatalf("message %q %+v", m.Text, m.Keyboard)
-			}
-			// The agent's words are not part of what the buttons decide.
-			if got := h.press(m, m.Keyboard[0][0].Data); got != "Approved request 1." {
-				t.Fatalf("answer %q (request %d)", got, r.ID)
-			}
-			h.poll()
-			m = h.tg.Visible()[0]
-			if !strings.HasPrefix(m.Text, "Done: stopped container jellyfin") || strings.Contains(m.Text, "I would stop it") || m.Keyboard != nil {
-				t.Fatalf("after approval: %q %+v", m.Text, m.Keyboard)
-			}
-			// The agent's check of the result goes under the outcome.
-			if !h.a.Follow(context.Background(), m.ID, answerText("Jellyfin is stopped, as asked.")) {
-				t.Fatal("follow-up not taken")
-			}
-			sent = h.tg.Visible()
-			if len(sent) != 1 || !strings.HasSuffix(sent[0].Text, "\n\nJellyfin is stopped, as asked.") {
-				t.Fatalf("after follow-up: %+v", sent)
-			}
-			// A restart keeps what is shown; a poll changes nothing.
-			h.a = h.approver()
-			h.poll()
-			if got := h.tg.Visible()[0].Text; got != sent[0].Text {
-				t.Errorf("poll changed the message: %q", got)
-			}
-		})
-	}
-}
-
-func TestAnswerStaysSeparateWhenItCannotJoin(t *testing.T) {
+func TestFiledRequestIsTheWholeReply(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	if h.a.Attach(ctx, time.Now().Add(-time.Second), answerText("hello")) {
-		t.Error("took an answer when no request was filed")
+	since := time.Now().Add(-time.Second)
+	if h.a.Filed(ctx, since) {
+		t.Error("a turn that filed nothing reported a request")
 	}
-	h.submit(h.stop("old"))
-	if h.a.Attach(ctx, time.Now().Add(time.Second), answerText("hello")) {
-		t.Error("took an answer for a request filed before the turn")
+	h.submit(h.stop("jellyfin"))
+	if h.a.Filed(ctx, time.Now().Add(time.Second)) {
+		t.Error("a request filed before the turn counted")
 	}
-	if h.a.Follow(ctx, 99, answerText("hello")) {
-		t.Error("followed up on a message that is not a request")
+	if len(h.tg.Sent()) != 0 {
+		t.Fatalf("shown before the turn asked: %+v", h.tg.Sent())
 	}
-	// An answer too long to share the message is not cut.
-	r := h.submit(h.stop("db"))
-	long := answerText(strings.Repeat("x", tgapi.MaxText-20))
-	if h.a.Attach(ctx, r.CreatedAt.Add(-time.Second), long) {
-		t.Error("took an answer that does not fit")
+	if !h.a.Filed(ctx, since) {
+		t.Fatal("the request was not found")
 	}
-	// A request still waiting takes no follow-up.
+	// It is shown right away, once, and never changes before the decision.
+	sent := h.tg.Sent()
+	if len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "uid 1000 wants to stop container jellyfin\nExpires ") {
+		t.Fatalf("%+v", sent)
+	}
 	h.poll()
-	m := h.tg.Visible()[1]
-	if h.a.Follow(ctx, m.ID, answerText("done")) {
-		t.Error("followed up on a request that is still waiting")
+	h.a.Filed(ctx, since)
+	if got := h.tg.Sent(); len(got) != 1 || got[0].Text != sent[0].Text {
+		t.Errorf("the request changed or was shown twice: %+v", got)
+	}
+	// What was filed by someone else's account is not the agent's request.
+	uid := uint32(4000)
+	h.a.o.AgentUID = &uid
+	h.submit(h.stop("db"))
+	if h.a.Filed(ctx, since) && len(h.tg.Sent()) != 1 {
+		t.Errorf("another account's request was shown as the agent's: %+v", h.tg.Sent())
 	}
 }
 
-func TestEmptyAnswerLeavesTheRequestAlone(t *testing.T) {
+func TestRequestWaitsWhileTheAgentAnswers(t *testing.T) {
 	h := newHarness(t)
-	since := time.Now().Add(-time.Second)
+	var busy atomic.Bool
+	busy.Store(true)
+	h.a.o.Hold = busy.Load
 	h.submit(h.stop("jellyfin"))
-	if !h.a.Attach(context.Background(), since, tgapi.Text{}) {
-		t.Fatal("an empty answer should not be sent as a message of its own")
-	}
 	h.poll()
-	if sent := h.tg.Visible(); len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "uid 1000 wants") {
-		t.Fatalf("%+v", sent)
+	if n := len(h.tg.Sent()); n != 0 {
+		t.Fatalf("shown while the agent was still answering: %d", n)
+	}
+	busy.Store(false)
+	h.poll()
+	if n := len(h.tg.Sent()); n != 1 {
+		t.Fatalf("not shown after the turn: %d", n)
+	}
+	// A turn that never ends does not hide a request for good.
+	busy.Store(true)
+	h.submit(h.stop("db"))
+	h.a.o.Now = func() time.Time { return time.Now().Add(time.Minute) }
+	h.poll()
+	if n := len(h.tg.Sent()); n != 2 {
+		t.Fatalf("held for good: %d", n)
+	}
+}
+
+func TestDecisionKeepsTheMessageAndFollowUpJoinsIt(t *testing.T) {
+	h := newHarness(t)
+	h.submit(h.stop("jellyfin"))
+	h.poll()
+	m := h.tg.Sent()[0]
+	h.press(m, m.Keyboard[0][0].Data)
+	h.poll()
+	sent := h.tg.Sent()
+	if len(sent) != 1 || sent[0].ID != m.ID || sent[0].Deleted || sent[0].Text != "Done: stopped container jellyfin" || sent[0].Keyboard != nil {
+		t.Fatalf("the decided message is not the same one, edited: %+v", sent)
+	}
+	if !h.a.Follow(context.Background(), m.ID, answerText("Jellyfin is stopped, as asked.")) {
+		t.Fatal("follow-up not taken")
+	}
+	sent = h.tg.Sent()
+	if len(sent) != 1 || sent[0].ID != m.ID || sent[0].Deleted || sent[0].Text != "Done: stopped container jellyfin\n\nJellyfin is stopped, as asked." {
+		t.Fatalf("after follow-up: %+v", sent)
+	}
+	// A restart keeps what is shown; a poll changes nothing.
+	h.a = h.approver()
+	h.poll()
+	if got := h.tg.Sent()[0].Text; got != sent[0].Text {
+		t.Errorf("poll changed the message: %q", got)
+	}
+	if h.a.Follow(context.Background(), 99, answerText("x")) {
+		t.Error("followed up on a message that is not a request")
+	}
+}
+
+func TestNothingIsBold(t *testing.T) {
+	h := newHarness(t)
+	h.submit(h.stop("jellyfin"))
+	h.submit(h.stop("db"))
+	h.poll()
+	sent := h.tg.Sent()
+	h.press(sent[0], sent[0].Keyboard[0][0].Data)
+	h.press(sent[1], sent[1].Keyboard[0][1].Data)
+	h.poll()
+	for _, m := range h.tg.Sent() {
+		for _, e := range m.Formatted().Entities {
+			if e.Type == "bold" || e.Type == "pre" || e.Type == "expandable_blockquote" {
+				t.Errorf("%q has %s", m.Text, e.Type)
+			}
+		}
 	}
 }
 

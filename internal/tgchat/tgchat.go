@@ -7,12 +7,12 @@
 // database. Turns run one at a time, in order. Agent answers are untrusted
 // text: they are cleaned of control characters and their Markdown becomes
 // formatting this package computes
-// (never links). An answer that comes with a request the turn filed is part
-// of the request's message, and the answer to its outcome is added to that
-// same message, so a change is one message on a small screen. An agent
-// cannot pose as Latch where it matters: a request waiting for a decision
-// always has buttons, which agent text never gets, and agent text is never
-// bold, so the bold line stating what would run is always Latch's.
+// (never links). A turn that files a request shows the request alone, in one
+// message that is shown once and edited in place when it is decided; the
+// agent's answer to the decision is added under the outcome. An agent cannot
+// pose as Latch where it matters: a request waiting for a decision always
+// has buttons, which agent text never gets, and its words never sit next to
+// them.
 package tgchat
 
 import (
@@ -96,11 +96,12 @@ type Options struct {
 	// Finished returns the chat messages of requests already decided, for
 	// /new to delete too; requests still waiting are never in it.
 	Finished func() []int64
-	// Attach offers the answer of the turn that started at since to a request
-	// that turn filed, so both are one message; true means it took the answer.
-	// Follow does the same for the answer to a decision, under the outcome in
-	// the request's message. Both may be nil.
-	Attach   func(ctx context.Context, since time.Time, answer tgapi.Text) bool
+	// Filed reports whether the turn that started at since filed a request
+	// for the owner: the request is the whole reply then and the agent's
+	// words are not shown. Follow adds the agent's answer to a decision under
+	// the outcome in the request's own message and reports whether it did.
+	// Both may be nil.
+	Filed    func(ctx context.Context, since time.Time) bool
 	Follow   func(ctx context.Context, message int64, answer tgapi.Text) bool
 	MaxQueue int
 	Now      func() time.Time
@@ -387,7 +388,9 @@ func (c *Chat) turn(parent context.Context, j job) {
 	}
 
 	started := c.o.Now()
-	lv := c.startLive(parent, draftID)
+	// The answer to a decision is added to the request's message, so it has
+	// no live preview (one would stay on screen next to it).
+	lv := c.startLive(parent, draftID, j.messageID != 0)
 	out, err := c.o.Runner.Run(ctx, Turn{Session: j.session, Message: j.text, Images: j.images, DB: c.dbFor(j.session)}, lv.update)
 	lv.stop()
 	c.mu.Lock()
@@ -428,18 +431,27 @@ func (c *Chat) turn(parent context.Context, j job) {
 	c.deliver(parent, out, j, started)
 }
 
-// deliver shows the agent's answer. A request the turn filed carries it in
-// its own message, and the answer to a decision goes into the decided
-// request's message; only otherwise is it a message of its own.
+// deliver shows the agent's answer. When the turn filed a request, the
+// request is the reply and the answer is dropped; the answer to a decision
+// goes under the outcome in the decided request's message; only otherwise is
+// it a message of its own.
 func (c *Chat) deliver(ctx context.Context, out string, j job, started time.Time) {
-	body := Markdown(out)
-	if c.o.Attach != nil && c.o.Attach(ctx, started, body) {
+	if c.o.Filed != nil && c.o.Filed(ctx, started) {
+		c.o.Logger.Debug("dropped the answer of a turn that filed a request")
 		return
 	}
+	body := Markdown(out)
 	if j.messageID != 0 && c.o.Follow != nil && strings.TrimSpace(body.S) != "" && c.o.Follow(ctx, j.messageID, body) {
 		return
 	}
 	c.answer(ctx, out, j.messageID)
+}
+
+// Busy reports whether an agent turn is running.
+func (c *Chat) Busy() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cancel != nil
 }
 
 // usageLimitText is what the owner reads when the model's usage limit is
@@ -449,9 +461,10 @@ const usageLimitText = "Usage limit reached. Try again after it resets."
 // live shows a turn as it happens: a draft with a Stop button that grows
 // with the answer, or the typing indicator when drafts do not work.
 type live struct {
-	c   *Chat
-	ctx context.Context
-	id  int64
+	c          *Chat
+	ctx        context.Context
+	id         int64
+	typingOnly bool // only the typing indicator, never a draft
 
 	mu      sync.Mutex
 	p       Progress
@@ -467,8 +480,8 @@ const (
 	draftRefresh = 20 * time.Second
 )
 
-func (c *Chat) startLive(ctx context.Context, id int64) *live {
-	lv := &live{c: c, ctx: ctx, id: id, done: make(chan struct{}), stopped: make(chan struct{})}
+func (c *Chat) startLive(ctx context.Context, id int64, typingOnly bool) *live {
+	lv := &live{c: c, ctx: ctx, id: id, typingOnly: typingOnly, done: make(chan struct{}), stopped: make(chan struct{})}
 	go lv.loop()
 	return lv
 }
@@ -493,7 +506,7 @@ func (lv *live) loop() {
 	_ = c.o.Bot.Typing(lv.ctx, c.o.Chat)
 	tick := time.NewTicker(draftEvery)
 	defer tick.Stop()
-	drafts, shown := true, false
+	drafts, shown := !lv.typingOnly, false
 	last := time.Now()
 	for {
 		select {

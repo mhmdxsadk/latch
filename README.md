@@ -273,11 +273,12 @@ the Docker Agent database the conversation has in the agent's home
 (`~/.cagent/latch-sessions`) and starts over. `/stop` stops a running
 answer. Clearing deletes the messages on screen, including yours, but not
 requests still waiting for your decision; Telegram only lets bots delete
-messages from the last 48 hours. When the agent files a request, its answer
-and the request are one message, with the buttons under it; the line saying
-what would run is always Latch's own words. After you approve or deny a
-request, the agent is told how it ended so it can check the fix, and its
-reply is added to that same message.
+messages from the last 48 hours. When the agent files a request, the request
+is the whole reply: one message with the buttons, shown once after the agent
+has finished, with the text of the change coming from Latch and not from
+the agent. When you approve or deny it, that same message is edited to say
+how it ended, and the agent is told so it can check the fix; its reply is
+added under the outcome.
 
 You can send photos too (or JPEG and PNG files), with a caption as your
 message; an album arrives as one message. Turn on `agent.images` only if the
