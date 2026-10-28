@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.1](https://github.com/mhmdxsadk/latch/compare/v0.19.0...v0.19.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **tgchat:** write photos as the agent's account ([6c61467](https://github.com/mhmdxsadk/latch/commit/6c61467f81f6a5ca1c225d39887a2c357defe920))
+
 ## [0.19.0](https://github.com/mhmdxsadk/latch/compare/v0.18.3...v0.19.0) (2026-10-28)
 
 
