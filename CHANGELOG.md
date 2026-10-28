@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/mhmdxsadk/latch/compare/v0.19.1...v0.20.0) (2026-10-28)
+
+
+### Features
+
+* **tgchat:** one message per change request ([5f42902](https://github.com/mhmdxsadk/latch/commit/5f42902eac6399cc47762fa11363451306e6d77d))
+
 ## [0.19.1](https://github.com/mhmdxsadk/latch/compare/v0.19.0...v0.19.1) (2026-10-28)
 
 
