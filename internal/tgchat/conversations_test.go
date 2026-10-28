@@ -62,11 +62,13 @@ func (h *convHarness) say(text string) int64 {
 }
 
 func (h *convHarness) ask(text string) int64 {
+	before := len(h.chat.screen())
 	id := h.say(text)
 	h.waitText("answer to " + text)
-	// The answer is on screen; wait until the chat has noted it too.
+	// The answer is on screen; wait until the chat has noted it too: the
+	// question and the answer are both new on its list.
 	tgtest.WaitFor(h.t, "the answer to be noted", func() bool {
-		return len(h.chat.screen()) >= 2 && !h.chat.busy()
+		return len(h.chat.screen()) >= before+2 && !h.chat.busy()
 	})
 	return id
 }
