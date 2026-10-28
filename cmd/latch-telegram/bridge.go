@@ -266,23 +266,24 @@ func (b *bridge) say(ctx context.Context, text string) {
 }
 
 // outcome is the automatic message telling the agent how a request it
-// filed ended, so it can check its fix.
+// filed ended, so it can check its fix. It never names Latch: the owner
+// knows one thing, the agent, and the agent repeats what it reads.
 func outcome(r approval.Request) string {
 	what := fmt.Sprintf("request %d (%s on %s %s)", r.ID, textsafe.Line(r.Action), textsafe.Line(r.Resource.Type), textsafe.Line(r.Resource.Name))
 	var s string
 	switch r.Status {
 	case approval.StatusDenied:
-		s = "Latch: the owner denied " + what + ". It did not run."
+		s = "Automatic message: the owner denied " + what + ". It did not run."
 	case approval.StatusExpired:
-		s = "Latch: " + what + " expired without a decision. It did not run."
+		s = "Automatic message: " + what + " expired without a decision. It did not run."
 	case approval.StatusDone, approval.StatusFailed:
 		how := "The owner approved"
 		if r.DecidedBy == nil {
-			how = "Nobody decided in time, so Latch ran"
+			how = "Nobody decided in time, so the server ran"
 		}
-		s = fmt.Sprintf("Latch: %s %s. It finished: %s.", how, what, r.Status)
+		s = fmt.Sprintf("Automatic message: %s %s. It finished: %s.", how, what, r.Status)
 	default:
-		s = "Latch: " + what + " is " + string(r.Status) + "."
+		s = "Automatic message: " + what + " is " + string(r.Status) + "."
 	}
 	if r.Result != nil {
 		s += " Result: " + textsafe.Line(r.Result.Summary)

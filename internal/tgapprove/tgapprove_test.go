@@ -320,6 +320,18 @@ func TestUndoRequestShowsDeadline(t *testing.T) {
 	}
 }
 
+func TestUndoRequestNamesTheAgentWhenThereIsOne(t *testing.T) {
+	h := newHarness(t)
+	h.a.o.AgentName = "keeper"
+	u := undoAction{h.stop("web")}
+	u.kind, u.undo = "file_restore", 10*time.Minute
+	h.submit(u)
+	h.poll()
+	if m := h.tg.Sent()[0]; !strings.Contains(m.Text, "\nkeeper will undo the change to web by itself at ") || strings.Contains(m.Text, "Latch") {
+		t.Fatalf("%q", m.Text)
+	}
+}
+
 func TestHandlePressIgnoresOtherButtons(t *testing.T) {
 	h := newHarness(t)
 	for _, d := range []string{"", "s:abc", "a:1", "a:x:000000000000", "a:0:000000000000", "a:1:short", "x:1:000000000000"} {

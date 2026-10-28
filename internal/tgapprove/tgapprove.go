@@ -256,7 +256,7 @@ func (a *Approver) updateLocked(ctx context.Context, r approval.Request) {
 func (a *Approver) goneLocked(ctx context.Context, id int64, s *shown) {
 	var b tgapi.Builder
 	b.Bold(fmt.Sprintf("Request %d is gone", id))
-	b.Plain("\nLatch no longer knows it (it restarted, or forgot the request). Nothing will run.")
+	b.Plain("\nThe request was lost (the service restarted). Nothing will run.")
 	text := b.Done()
 	if err := a.o.Bot.Edit(ctx, a.o.Chat, s.Message, text, nil); err != nil {
 		a.o.Logger.Warn("updating a request message failed", "id", id, "err", err)
@@ -312,7 +312,7 @@ func (a *Approver) decide(ctx context.Context, approve bool, id int64, fp string
 		}
 		return fmt.Sprintf("Request %d is gone or expired. Nothing done.", id)
 	case err != nil:
-		return "Could not reach Latch. Nothing done."
+		return "Could not reach the approval service. Nothing done."
 	}
 	if fingerprint(r) != fp {
 		return fmt.Sprintf("This message no longer matches request %d. Nothing done.", id)
@@ -337,7 +337,7 @@ func (a *Approver) decide(ctx context.Context, approve bool, id int64, fp string
 	case errors.As(err, &ae):
 		return fmt.Sprintf("Request %d: %s. Nothing done.", id, textsafe.Line(ae.Message))
 	case err != nil:
-		return "Could not reach Latch. Nothing done."
+		return "Could not reach the approval service. Nothing done."
 	}
 	a.updateLocked(ctx, got)
 	_ = a.saveLocked()
@@ -545,7 +545,7 @@ func (a *Approver) pendingText(r approval.Request) (tgapi.Text, []tgapi.Text) {
 	var b tgapi.Builder
 	if r.RunsOnTimeout {
 		b.Bold("A change did not come up. Undo it?")
-		b.Plain("\nLatch will " + a.phrase(r, false) + " by itself at ")
+		b.Plain("\n" + a.voice() + " will " + a.phrase(r, false) + " by itself at ")
 		b.Text(a.timeText(r.ExpiresAt, false))
 		b.Plain(" unless you deny it.")
 	} else {
@@ -599,6 +599,15 @@ func (a *Approver) phrase(r approval.Request, past bool) string {
 		return verb("send ", "sent ") + method + " request to " + name
 	}
 	return verb("run ", "ran ") + clean(r.Action) + " on " + thing
+}
+
+// voice is how the chat names whoever acts on its own: the agent, as far as
+// the owner is concerned, or Latch where there is no agent.
+func (a *Approver) voice() string {
+	if a.o.AgentName != "" {
+		return a.o.AgentName
+	}
+	return "Latch"
 }
 
 func (a *Approver) who(uid uint32) string {

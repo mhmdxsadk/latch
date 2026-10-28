@@ -400,16 +400,16 @@ func TestOutcome(t *testing.T) {
 	r := approval.Request{ID: 3, Action: "docker_stop", Resource: approval.Resource{Type: "container", Name: "web"},
 		Status: approval.StatusDone, DecidedBy: &uid, Result: &approval.Result{Summary: "stopped", Details: []string{"state exited"}}}
 	got := outcome(r)
-	want := "Latch: The owner approved request 3 (docker_stop on container web). It finished: done. Result: stopped\nstate exited\nCheck whether the problem is fixed and tell the owner."
+	want := "Automatic message: The owner approved request 3 (docker_stop on container web). It finished: done. Result: stopped\nstate exited\nCheck whether the problem is fixed and tell the owner."
 	if got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 	r.Status, r.Result = approval.StatusDenied, nil
-	if got := outcome(r); got != "Latch: the owner denied request 3 (docker_stop on container web). It did not run." {
+	if got := outcome(r); got != "Automatic message: the owner denied request 3 (docker_stop on container web). It did not run." {
 		t.Errorf("%q", got)
 	}
 	r.Status, r.DecidedBy, r.RunsOnTimeout = approval.StatusDone, nil, true
-	if got := outcome(r); !strings.HasPrefix(got, "Latch: Nobody decided in time, so Latch ran request 3") {
+	if got := outcome(r); !strings.HasPrefix(got, "Automatic message: Nobody decided in time, so the server ran request 3") {
 		t.Errorf("%q", got)
 	}
 }

@@ -104,7 +104,7 @@ func pair(ctx context.Context, bot pairing, current int64, in *bufio.Reader, out
 		got := strings.ToUpper(strings.Join(strings.Fields(line), ""))
 		if subtle.ConstantTimeCompare([]byte(got), []byte(code)) == 1 {
 			var ok tgapi.Builder
-			ok.Bold("Paired.").Plain(" This chat now answers for Latch and approves its changes.")
+			ok.Bold("Paired.").Plain(" This chat now approves changes on this server.")
 			_, _ = bot.Send(ctx, user, ok.Done(), nil)
 			return user, nil
 		}
