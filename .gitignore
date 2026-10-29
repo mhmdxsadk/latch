@@ -31,3 +31,6 @@ coverage.*
 /PLAN*.md
 /TODO*.md
 *.handoff.md
+
+# Local image exploration and generated drafts
+/output/
