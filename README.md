@@ -67,7 +67,7 @@ toolsets:
 ### Root and secrets
 
 Latch runs as root to read host files, use Docker and manage systemd. The agent
-must not run as root or have access to Docker's socket: Docker access lets it
+must not run as root or have access to Docker's socket. Docker access lets it
 become root and bypass Latch.
 
 File tools block credentials, private keys, `.env` files, Latch's state and
@@ -98,8 +98,8 @@ Changes use `docker_restart`, `docker_stop`, `docker_start`,
 `docker_compose_up`, `systemd_restart`, `systemd_stop`, `systemd_start`,
 `file_edit`, `file_create`, `file_restore` and `http_request`.
 
-Log output is bounded by `limits`. File reads and searches are bounded too;
-binary files are refused. `net_http_get` sends a plain GET without agent-supplied
+`limits` bounds log output. File reads and searches have bounds too, and Latch
+refuses binary files. `net_http_get` sends a plain GET without agent-supplied
 headers or cookies. `http_request` supports POST, PUT, PATCH and DELETE, requires
 approval and does not follow redirects.
 
@@ -130,7 +130,7 @@ File edits apply only changed lines. An unchanged line showing `[hidden]`
 keeps its real value. Files with secrets spanning multiple lines cannot be
 edited. Latch preserves ownership, permissions and line endings.
 
-Before changing a file, Latch keeps a backup, retaining the newest three per
+Latch backs up a file before changing it and keeps the newest three backups per
 path. List them with `sudo latch backups /etc/nginx/nginx.conf`.
 
 For a file change with a restart, Latch checks the container's health for up
@@ -174,8 +174,8 @@ Keep its token in a root-only file outside the agent's reach.
 
 ### Chat with Keeper
 
-Configure `agent` to talk to an agent in the same chat, or remove that section
-for approvals only. Each turn runs as the agent's Linux account. The
+Keeper is the example name for the agent in the chat. Configure `agent` to talk
+to it in the same chat, or remove that section for approvals only. Each turn runs as the agent's Linux account. The
 [Telegram example](config/telegram.example.yaml) covers the settings and the
 Latch change-tool permissions needed with Docker Agent's restricted mode.
 
