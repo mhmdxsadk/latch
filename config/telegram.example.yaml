@@ -2,7 +2,8 @@
 # Check it with: latch-telegram validate, then: sudo latch-telegram doctor
 
 # Your Telegram user id. Only this account is answered, in a private chat
-# with the bot; everyone else is ignored. latch-telegram pair fills it in.
+# with the bot; everyone else is ignored. Leave it 0 until you pair: message
+# the bot, then run the command it sends. latch-telegram pair fills it in.
 owner_id: 123456789
 
 # The bot token from @BotFather, alone in a file (root, mode 0600).

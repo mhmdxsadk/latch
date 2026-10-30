@@ -156,16 +156,24 @@ To set it up:
    then put the token in it.
 2. Copy `/etc/latch/telegram.example.yaml` to `/etc/latch/telegram.yaml`.
    Set `token_file` to the token path. For a secrets manager's env file, also
-   set `token_key` to the variable name.
-3. Run `sudo latch-telegram pair`, message your bot, and enter the code it
-   sends you on the server. Pairing writes your account as `owner_id`.
-4. Validate and start the bridge:
+   set `token_key` to the variable name. Set `owner_id: 0`.
+3. Validate and start the bridge:
 
-```sh
-sudo latch-telegram validate
-sudo latch-telegram doctor
-sudo systemctl enable --now latch-telegram
-```
+   ```sh
+   sudo latch-telegram validate
+   sudo systemctl enable --now latch-telegram
+   ```
+
+4. Send any message to your bot. Until it has an owner, the bot replies with a
+   one-time code and a Copy command button. Run the command on the server, for
+   example `sudo latch-telegram pair ABCD-EFGH`. It names the account that got
+   the code and asks you to confirm. It writes `owner_id`, and the running
+   bridge picks it up within a few seconds without a restart.
+5. Check the setup with `sudo latch-telegram doctor`.
+
+A code works for 10 minutes and only for the account that received it, so
+someone else messaging the bot first cannot pair. To pair a different account,
+set `owner_id: 0` and restart the bridge.
 
 Only the paired account gets replies, and only in a private chat. Enable
 Telegram two-step verification because this account can approve server changes.

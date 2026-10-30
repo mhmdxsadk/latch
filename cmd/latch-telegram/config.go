@@ -35,6 +35,7 @@ const (
 // Config is /etc/latch/telegram.yaml. Unknown keys are refused.
 type Config struct {
 	// OwnerID is the owner's Telegram user id. Nobody else is answered.
+	// 0 means not paired yet: the bot only hands out pairing codes.
 	OwnerID   int64  `yaml:"owner_id"`
 	TokenFile string `yaml:"token_file"`
 	// TokenKey, when set, reads token_file as KEY=value lines (an env file,
@@ -96,11 +97,8 @@ var (
 	argPattern = regexp.MustCompile(`^[A-Za-z0-9_./=:,@+-]{1,200}$`)
 )
 
-func loadConfig(path string) (*Config, error) { return parseConfig(path, true) }
-
-// parseConfig loads path; requireOwner is false only for pair, which writes
-// owner_id.
-func parseConfig(path string, requireOwner bool) (*Config, error) {
+// loadConfig reads and checks the config at path.
+func loadConfig(path string) (*Config, error) {
 	f, err := os.Open(path) //nolint:gosec // owner-supplied config location
 	if err != nil {
 		return nil, err
@@ -120,7 +118,7 @@ func parseConfig(path string, requireOwner bool) (*Config, error) {
 		return nil, cleanYAMLError(err)
 	}
 	c.defaults()
-	return &c, c.validate(requireOwner)
+	return &c, c.validate()
 }
 
 func cleanYAMLError(err error) error {
@@ -157,11 +155,11 @@ func (c *Config) defaults() {
 	}
 }
 
-func (c *Config) validate(requireOwner bool) error {
+func (c *Config) validate() error {
 	var errs []string
 	add := func(format string, args ...any) { errs = append(errs, fmt.Sprintf(format, args...)) }
-	if c.OwnerID < 0 || requireOwner && c.OwnerID == 0 {
-		add("owner_id: set it to your Telegram user id (a positive number), or run latch-telegram pair")
+	if c.OwnerID < 0 {
+		add("owner_id: must be your Telegram user id (a positive number), or 0 until you pair")
 	}
 	absPath := func(name, p string) {
 		if !filepath.IsAbs(p) || filepath.Clean(p) != p {

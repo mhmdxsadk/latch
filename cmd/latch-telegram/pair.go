@@ -2,155 +2,70 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"math/big"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
-	"github.com/mhmdxsadk/latch/internal/tgapi"
 	"github.com/mhmdxsadk/latch/internal/tgapprove"
 )
 
 const (
-	pairWait     = 10 * time.Minute
-	pairAttempts = 3
+	// codeTTL is how long a pairing code works.
+	codeTTL = 10 * time.Minute
+	// maxWaiting caps the codes held at once, so strangers messaging the
+	// bot cannot grow the list without limit.
+	maxWaiting  = 20
+	pairingFile = "pairing.json"
+	codeLength  = 8
 	// codeAlphabet leaves out look-alikes (0/O, 1/I/L).
 	codeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 )
 
-// pairing is what pair needs from Telegram; tests substitute a fake.
-type pairing interface {
-	Me(ctx context.Context) (tgapi.User, error)
-	Updates(ctx context.Context, offset int64) ([]tgapi.Update, error)
-	Confirm(ctx context.Context, offset int64) error
-	Send(ctx context.Context, chat int64, t tgapi.Text, kb tgapi.Keyboard) (tgapi.Message, error)
+// waiting is a pairing code the bridge issued to a Telegram account. The
+// state directory keeps only the code's hash, in a root-only file; the
+// running bridge keeps the code itself in memory to resend it.
+type waiting struct {
+	UserID  int64     `json:"user_id"`
+	Name    string    `json:"name"`
+	Hash    string    `json:"hash"`
+	Expires time.Time `json:"expires"`
 }
 
-// cmdPair finds the owner's Telegram account and writes owner_id: the first
-// private message to the bot names an account, the bot sends that account a
-// code, and the owner types the code here. Someone else who messages the bot
-// first cannot pair, because the owner never sees their code.
-func cmdPair(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	path := configFlag(fs)
-	if err := fs.Parse(args); err != nil {
-		return 2
+// normalize reduces a typed code to its letters and digits, upper case, so
+// "abcd efgh" and "ABCD-EFGH" are the same code.
+func normalize(code string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(code) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
 	}
-	cfg, err := loadConfigForPairing(*path)
-	if err != nil {
-		printProblems(stderr, *path, err)
-		return 1
-	}
-	tok, err := readToken(cfg)
-	if err != nil {
-		fmt.Fprintf(stderr, "latch-telegram: %v\n", err)
-		return 1
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), pairWait+time.Minute)
-	defer cancel()
-	id, err := pair(ctx, tgapi.New(tgapi.DefaultBaseURL, tok), cfg.OwnerID, bufio.NewReader(stdin), stdout)
-	if err != nil {
-		fmt.Fprintf(stderr, "latch-telegram: %v\n", err)
-		return 1
-	}
-	if err := setOwnerID(*path, id); err != nil {
-		fmt.Fprintf(stderr, "latch-telegram: %s: %v\n", *path, err)
-		return 1
-	}
-	fmt.Fprintf(stdout, "latch-telegram: paired with Telegram user %d; owner_id written to %s\n", id, *path)
-	fmt.Fprintln(stdout, "Restart the bridge to use it: systemctl restart latch-telegram")
-	return 0
+	return b.String()
 }
 
-func pair(ctx context.Context, bot pairing, current int64, in *bufio.Reader, out io.Writer) (int64, error) {
-	me, err := bot.Me(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("the bot token does not work: %w", err)
-	}
-	if current > 0 {
-		fmt.Fprintf(out, "owner_id is %d now; pairing replaces it.\n", current)
-	}
-	fmt.Fprintf(out, "Send any message to your bot (id %d) in Telegram now. Waiting up to %s.\n", me.ID, pairWait)
-	user, err := firstSender(ctx, bot)
-	if err != nil {
-		return 0, err
-	}
-	code, err := newCode()
-	if err != nil {
-		return 0, err
-	}
-	var b tgapi.Builder
-	// The code is a spoiler, hidden until tapped.
-	b.Bold("Pairing code: ").Styled("spoiler", code)
-	b.Plain("\nTap to show it, or use Copy code. Type it into latch-telegram pair on the server. If you did not start pairing, ignore this message.")
-	kb := tgapi.Keyboard{{{Text: "Copy code", Copy: &tgapi.CopyText{Text: code}}}}
-	if _, err := bot.Send(ctx, user, b.Done(), kb); err != nil {
-		return 0, fmt.Errorf("sending the code failed: %w", err)
-	}
-	fmt.Fprintf(out, "A message came from Telegram user %d. The bot sent that account a code.\n", user)
-	for range pairAttempts {
-		fmt.Fprint(out, "Code from Telegram: ")
-		line, err := in.ReadString('\n')
-		got := strings.ToUpper(strings.Join(strings.Fields(line), ""))
-		if subtle.ConstantTimeCompare([]byte(got), []byte(code)) == 1 {
-			var ok tgapi.Builder
-			ok.Bold("Paired.").Plain(" This chat now approves changes on this server.")
-			_, _ = bot.Send(ctx, user, ok.Done(), nil)
-			return user, nil
-		}
-		if err != nil {
-			return 0, errors.New("no code entered; nothing changed")
-		}
-		fmt.Fprintln(out, "That code does not match.")
-	}
-	return 0, errors.New("the code did not match; nothing changed. If the code never arrived, someone else messaged the bot first: run pair again")
-}
-
-// firstSender waits for the first private text message from a person and
-// returns their user id. Updates up to it are marked handled.
-func firstSender(ctx context.Context, bot pairing) (int64, error) {
-	deadline := time.Now().Add(pairWait)
-	var offset int64
-	for time.Now().Before(deadline) {
-		ups, err := bot.Updates(ctx, offset)
-		if err != nil {
-			var te *tgapi.Error
-			if errors.As(err, &te) && te.Code == 409 {
-				return 0, errors.New("the bridge is running and reads the bot's messages; stop it first: systemctl stop latch-telegram")
-			}
-			if ctx.Err() != nil {
-				return 0, ctx.Err()
-			}
-			time.Sleep(2 * time.Second)
-			continue
-		}
-		for _, u := range ups {
-			offset = u.UpdateID + 1
-			m := u.Message
-			if m == nil || m.From == nil || m.From.IsBot || m.Chat.Type != "private" || m.Chat.ID != m.From.ID {
-				continue
-			}
-			_ = bot.Confirm(ctx, offset)
-			return m.From.ID, nil
-		}
-	}
-	return 0, errors.New("no message arrived in time; nothing changed")
+func hashCode(code string) string {
+	sum := sha256.Sum256([]byte(normalize(code)))
+	return hex.EncodeToString(sum[:])
 }
 
 func newCode() (string, error) {
 	var b strings.Builder
-	for i := range 8 {
-		if i == 4 {
+	for i := range codeLength {
+		if i == codeLength/2 {
 			b.WriteByte('-')
 		}
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(codeAlphabet))))
@@ -160,6 +75,119 @@ func newCode() (string, error) {
 		b.WriteByte(codeAlphabet[n.Int64()])
 	}
 	return b.String(), nil
+}
+
+// readWaiting returns the codes in dir that have not expired. A missing file
+// means none are waiting.
+func readWaiting(dir string, now time.Time) ([]waiting, error) {
+	b, err := os.ReadFile(filepath.Join(dir, pairingFile)) //nolint:gosec // the configured state directory
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var all, live []waiting
+	if err := json.Unmarshal(b, &all); err != nil {
+		return nil, fmt.Errorf("%s: %w", pairingFile, err)
+	}
+	for _, w := range all {
+		if now.Before(w.Expires) {
+			live = append(live, w)
+		}
+	}
+	return live, nil
+}
+
+// writeWaiting replaces the list in dir, or removes the file when it is empty.
+func writeWaiting(dir string, ws []waiting) error {
+	p := filepath.Join(dir, pairingFile)
+	if len(ws) == 0 {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	b, err := json.Marshal(ws)
+	if err != nil {
+		return err
+	}
+	return tgapprove.WriteFile(p, b)
+}
+
+// cmdPair finishes pairing. The running bridge sends a code to whoever
+// messages the bot while no owner is set; the owner types that code here,
+// as root, and this writes their account into the config as owner_id. The
+// bridge notices the change and starts, so nothing needs a restart. Someone
+// else who messages the bot first cannot pair: the code goes only to their
+// own chat, and this command shows whose code it is before it pairs.
+func cmdPair(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() {
+		fmt.Fprint(stderr, "Usage: latch-telegram pair [flags] [CODE]\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
+	path := configFlag(fs)
+	yes := fs.Bool("yes", false, "pair without asking whether the account is yours")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	cfg, err := loadConfig(*path)
+	if err != nil {
+		printProblems(stderr, *path, err)
+		return 1
+	}
+	fail := func(format string, a ...any) int {
+		fmt.Fprintf(stderr, "latch-telegram: "+format+"\n", a...)
+		return 1
+	}
+	if cfg.OwnerID != 0 {
+		return fail("%s: already paired with Telegram user %d; to pair another account, remove owner_id and restart latch-telegram", *path, cfg.OwnerID)
+	}
+	in := bufio.NewReader(stdin)
+	code := strings.Join(fs.Args(), "")
+	if code == "" {
+		fmt.Fprint(stdout, "Pairing code: ")
+		code, _ = in.ReadString('\n')
+	}
+	if len(normalize(code)) != codeLength {
+		return fail("that is not a pairing code like ABCD-EFGH")
+	}
+	ws, err := readWaiting(cfg.StateDir, time.Now())
+	if err != nil {
+		return fail("reading waiting codes in %s: %v (run as root)", cfg.StateDir, err)
+	}
+	var found *waiting
+	want := hashCode(code)
+	for i := range ws {
+		if subtle.ConstantTimeCompare([]byte(ws[i].Hash), []byte(want)) == 1 {
+			found = &ws[i]
+		}
+	}
+	if found == nil {
+		return fail("no waiting request has that code, or it expired. Message the bot for a new one; latch-telegram must be running")
+	}
+	who := "Telegram user " + strconv.FormatInt(found.UserID, 10)
+	if found.Name != "" {
+		who += " (" + found.Name + ")"
+	}
+	if !*yes {
+		fmt.Fprintf(stdout, "This code was sent to %s.\nPair this account? [y/N] ", who)
+		answer, _ := in.ReadString('\n')
+		if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
+			return fail("not paired; nothing changed")
+		}
+	}
+	if err := setOwnerID(*path, found.UserID); err != nil {
+		return fail("%s: %v", *path, err)
+	}
+	if err := writeWaiting(cfg.StateDir, nil); err != nil {
+		fmt.Fprintf(stderr, "latch-telegram: owner_id is set, but removing the waiting codes failed: %v\n", err)
+	}
+	fmt.Fprintf(stdout, "latch-telegram: paired with %s; owner_id written to %s\n", who, *path)
+	fmt.Fprintln(stdout, "A running bridge starts within a few seconds. If it is not running: systemctl enable --now latch-telegram")
+	return 0
 }
 
 var ownerLine = regexp.MustCompile(`(?m)^owner_id:.*$`)
@@ -189,7 +217,3 @@ func setOwnerID(path string, id int64) error {
 	}
 	return tgapprove.WriteFile(path, []byte(s))
 }
-
-// loadConfigForPairing loads the config but allows a missing owner_id,
-// which is what pair fills in.
-func loadConfigForPairing(path string) (*Config, error) { return parseConfig(path, false) }

@@ -1,12 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -45,7 +42,7 @@ func TestExampleConfigIsValid(t *testing.T) {
 
 func TestConfigErrors(t *testing.T) {
 	for _, tc := range []struct{ body, want string }{
-		{"", "owner_id"},
+		{"owner_id: -3\n", "owner_id"},
 		{"owner_id: 1\nbot_token: abc\n", "field bot_token not found"},
 		{"owner_id: 1\nstate_dir: var/lib\n", "state_dir"},
 		{"owner_id: 1\nagent:\n  user: root\n  config: /a.yaml\n", "never root"},
@@ -451,6 +448,10 @@ func TestValidateCommand(t *testing.T) {
 	}
 	p = writeConfig(t, "owner_id: 0\n")
 	out.Reset()
+	if code := run([]string{"validate", "--config", p}, &out, &errb); code != 0 || !strings.Contains(out.String(), "not paired yet") {
+		t.Fatalf("%d %q %q", code, out.String(), errb.String())
+	}
+	p = writeConfig(t, "owner_id: -1\n")
 	if code := run([]string{"validate", "--config", p}, &out, &errb); code != 1 || !strings.Contains(errb.String(), "owner_id") {
 		t.Fatalf("%d %q", code, errb.String())
 	}
@@ -458,75 +459,10 @@ func TestValidateCommand(t *testing.T) {
 
 func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
-// pairBot runs pair against the fake server with the owner's code typed by
-// type_ (which gets the code the bot sent).
-func runPair(t *testing.T, tg *tgtest.Server, typed func(code string) string) (int64, string, error) {
-	t.Helper()
-	pr, pw := io.Pipe()
-	var out bytes.Buffer
-	done := make(chan struct{})
-	var id int64
-	var err error
-	go func() {
-		id, err = pair(context.Background(), tg.Client(), 0, bufio.NewReader(pr), &out)
-		close(done)
-	}()
-	tgtest.WaitFor(t, "the code message", func() bool {
-		for _, m := range tg.Sent() {
-			if strings.HasPrefix(m.Text, "Pairing code: ") {
-				return true
-			}
-		}
-		return false
-	})
-	var code string
-	for _, m := range tg.Sent() {
-		if c, ok := strings.CutPrefix(m.Text, "Pairing code: "); ok {
-			code, _, _ = strings.Cut(c, "\n")
-			if len(m.Keyboard) != 1 || m.Keyboard[0][0].Copy == nil || m.Keyboard[0][0].Copy.Text != code {
-				t.Errorf("no copy button for the code: %+v", m.Keyboard)
-			}
-			f := m.Formatted()
-			if len(f.Entities) < 2 || f.Slice(f.Entities[1]) != code || f.Entities[1].Type != "spoiler" {
-				t.Errorf("code is not hidden: %+v", f.Entities)
-			}
-		}
-	}
-	go func() {
-		for _, line := range strings.Split(typed(code), "\n") {
-			fmt.Fprintln(pw, line)
-		}
-		pw.Close()
-	}()
-	<-done
-	return id, out.String(), err
-}
-
-func TestPair(t *testing.T) {
-	tg := tgtest.New(t)
-	tg.Message(owner, "hi")
-	id, out, err := runPair(t, tg, func(code string) string { return strings.ToLower(code[:4]) + " " + code[4:] })
-	if err != nil || id != owner {
-		t.Fatalf("%d %v\n%s", id, err, out)
-	}
-	if last := tg.Sent()[len(tg.Sent())-1]; !strings.HasPrefix(last.Text, "Paired.") {
-		t.Errorf("no confirmation: %q", last.Text)
-	}
-}
-
-func TestPairWrongCode(t *testing.T) {
-	tg := tgtest.New(t)
-	tg.Message(owner, "hi")
-	id, out, err := runPair(t, tg, func(string) string { return "AAAA-AAAA\nBBBB-BBBB\nCCCC-CCCC" })
-	if err == nil || id != 0 || strings.Count(out, "does not match") != 3 {
-		t.Fatalf("%d %v\n%s", id, err, out)
-	}
-}
-
 func TestSetOwnerIDKeepsComments(t *testing.T) {
 	p := writeConfig(t, "# my bridge\n# owner below\ntoken_key: TELEGRAM_BOT_TOKEN\nowner_id: 0 # replace me\n")
-	if _, err := loadConfigForPairing(p); err != nil {
-		t.Fatalf("pairing must accept a missing owner: %v", err)
+	if c, err := loadConfig(p); err != nil || c.OwnerID != 0 {
+		t.Fatalf("an unpaired config must load: %v %+v", err, c)
 	}
 	if err := setOwnerID(p, 8616164410); err != nil {
 		t.Fatal(err)

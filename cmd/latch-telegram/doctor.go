@@ -85,6 +85,11 @@ func doctor(ctx context.Context, cfg *Config, in checks, out io.Writer) bool {
 	if err == nil {
 		check("bot token accepted by Telegram", in.botMe(ctx, tok), "check the token, and that this server can reach api.telegram.org")
 	}
+	if cfg.OwnerID == 0 {
+		fmt.Fprintln(out, "OK    not paired yet (message the bot, then run the command it sends)")
+	} else {
+		fmt.Fprintf(out, "OK    paired with Telegram user %d\n", cfg.OwnerID)
+	}
 	check("admin socket "+cfg.AdminSocket, in.pending(ctx, cfg.AdminSocket), "is the latch service running? run doctor as root")
 
 	switch fi, err := in.stat(cfg.StateDir); {

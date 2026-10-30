@@ -43,7 +43,7 @@ const usage = `Usage: latch-telegram <command> [flags]
 
 Commands:
   serve      Start the Telegram bridge
-  pair       Link your Telegram account: writes owner_id
+  pair       Link your Telegram account with the code the bot sends
   validate   Validate the configuration without starting
   doctor     Check the token, the admin socket and the agent setup
   version    Print version information
@@ -111,16 +111,19 @@ func printProblems(w io.Writer, path string, err error) {
 }
 
 func cmdValidate(args []string, stdout, stderr io.Writer) int {
-	_, path, ok := load("validate", args, stderr)
+	cfg, path, ok := load("validate", args, stderr)
 	if !ok {
 		return 1
 	}
 	fmt.Fprintf(stdout, "latch-telegram: %s: configuration OK\n", path)
+	if cfg.OwnerID == 0 {
+		fmt.Fprintln(stdout, "latch-telegram: not paired yet; start the service, message the bot, then run the command it sends")
+	}
 	return 0
 }
 
 func cmdServe(args []string, stderr io.Writer) int {
-	cfg, _, ok := load("serve", args, stderr)
+	cfg, path, ok := load("serve", args, stderr)
 	if !ok {
 		return 1
 	}
@@ -149,6 +152,24 @@ func cmdServe(args []string, stderr io.Writer) int {
 		return 0 // stopped while starting; nothing is wrong
 	case err != nil:
 		return fail("could not reach Telegram with the bot token", err)
+	}
+
+	if cfg.OwnerID == 0 {
+		log.Info("not paired yet: message the bot, then run the command it replies with", "bot", "@"+me.Username)
+		paired, err := awaitOwner(ctx, bot, path, cfg.StateDir, ownerWatch, log)
+		switch {
+		case ctx.Err() != nil:
+			return 0
+		case err != nil:
+			return fail("waiting to be paired failed", err)
+		}
+		cfg = paired
+		var ok tgapi.Builder
+		ok.Bold("Paired.").Plain(" This chat now approves changes on this server.")
+		if _, err := bot.Send(ctx, cfg.OwnerID, ok.Done(), nil); err != nil {
+			log.Warn("sending the pairing confirmation failed", "err", err)
+		}
+		log.Info("paired", "owner", cfg.OwnerID)
 	}
 
 	b, err := newBridge(cfg, bot, log)

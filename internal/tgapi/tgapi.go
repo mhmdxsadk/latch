@@ -35,8 +35,10 @@ const maxResponse = 8 << 20
 
 // User is a Telegram account.
 type User struct {
-	ID    int64 `json:"id"`
-	IsBot bool  `json:"is_bot"`
+	ID        int64  `json:"id"`
+	IsBot     bool   `json:"is_bot"`
+	FirstName string `json:"first_name,omitempty"`
+	Username  string `json:"username,omitempty"`
 }
 
 // Chat is a Telegram chat. Type is "private" for a one-to-one chat.
