@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.21.0](https://github.com/mhmdxsadk/latch/compare/v0.20.2...v0.21.0) (2026-10-30)
+
+
+### Features
+
+* **telegram:** pair from the bot with a one-time code ([db7fe5b](https://github.com/mhmdxsadk/latch/commit/db7fe5b26aa218464b96e45568f38475dd0ebced))
+* **telegram:** sign in to the model from the chat with /login ([7eeb932](https://github.com/mhmdxsadk/latch/commit/7eeb932add2faca4e5f83d7af440885daca4d917))
+
+
+### Bug Fixes
+
+* **tgapprove:** show only what is needed to decide ([e3b1873](https://github.com/mhmdxsadk/latch/commit/e3b1873fad6bb8f9ad265ae873d825fe9ca11f2f))
+
 ## [0.20.2](https://github.com/mhmdxsadk/latch/compare/v0.20.1...v0.20.2) (2026-10-28)
 
 
