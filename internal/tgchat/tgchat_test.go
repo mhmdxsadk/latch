@@ -201,6 +201,33 @@ func TestTimeoutAndFailure(t *testing.T) {
 	}
 }
 
+func TestLoginExpired(t *testing.T) {
+	for _, stderr := range []string{
+		"Error: model failed: error receiving from stream: HTTP 401: Encountered invalidated oauth token for user, failing request.",
+		"the ChatGPT session is no longer valid (HTTP 400: x); sign in again with `docker agent setup`",
+		"not signed in with a ChatGPT account",
+	} {
+		if !(&RunError{Code: 1, Stderr: stderr}).LoginExpired() {
+			t.Errorf("not recognized: %q", stderr)
+		}
+	}
+	if (&RunError{Code: 1, Stderr: "HTTP 429: usage limit"}).LoginExpired() {
+		t.Error("a usage limit is not an expired login")
+	}
+
+	h := newHarness(t, time.Minute)
+	h.run.reply = func(string) (string, error) {
+		return "", &RunError{Code: 1, Stderr: "Error: model failed: HTTP 401: Encountered invalidated oauth token"}
+	}
+	h.send("hi")
+	h.waitText("Error: exit status 1: Error: model failed: HTTP 401")
+	h.chat.o.LoginCommand = true
+	h.send("hello")
+	if m := h.waitText("The model sign-in expired. Send /login to sign in again."); strings.Contains(m.Text, "401") {
+		t.Errorf("error text shown: %q", m.Text)
+	}
+}
+
 func TestAnswersAreCleanedAndSplit(t *testing.T) {
 	h := newHarness(t, time.Minute)
 	long := strings.Repeat("a line of the answer\n", 400) // over 8000 characters

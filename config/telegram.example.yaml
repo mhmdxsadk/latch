@@ -49,6 +49,11 @@ agent:
   args: [--safety, restricted]
   # A turn that takes longer is stopped.
   timeout: 10m
+  # /login signs the agent's model provider in from the chat, for the first
+  # sign-in and whenever it expires. Only chatgpt is supported: it writes
+  # chatgpt-auth.json in the agent's Docker Agent config directory, the file
+  # `docker-agent setup` would write.
+  # login: chatgpt
   # Photos (and JPEG or PNG files) you send go to the agent with your
   # message. Turn this on only if the agent's model reads images; otherwise
   # Docker Agent quietly ignores them.

@@ -112,12 +112,13 @@ const (
 	StylePrimary = "primary" // blue
 )
 
-// Button is an inline keyboard button. It either sends Data back when
-// pressed, or copies Copy to the clipboard.
+// Button is an inline keyboard button. It sends Data back when pressed,
+// copies Copy to the clipboard, or opens URL.
 type Button struct {
 	Text  string    `json:"text"`
 	Data  string    `json:"callback_data,omitempty"`
 	Copy  *CopyText `json:"copy_text,omitempty"`
+	URL   string    `json:"url,omitempty"`
 	Style string    `json:"style,omitempty"`
 }
 

@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,9 +68,14 @@ var Commands = []tgapi.Command{
 
 // Options configure a Chat.
 type Options struct {
-	Bot    Bot
-	Chat   int64
-	Runner Runner
+	// LoginCommand says the bridge handles /login, so a turn that fails
+	// for want of a sign-in points to it. ExtraCommands are listed in /help
+	// after the chat's own.
+	LoginCommand  bool
+	ExtraCommands []tgapi.Command
+	Bot           Bot
+	Chat          int64
+	Runner        Runner
 	// IndexPath is a root-only file holding the chat state.
 	IndexPath string
 	// Name labels the agent's answers, for example "keeper".
@@ -420,6 +426,9 @@ func (c *Chat) turn(parent context.Context, j job) {
 	case errors.As(err, &re) && re.UsageLimit():
 		c.sayTo(parent, j.messageID, usageLimitText)
 		return
+	case errors.As(err, &re) && re.LoginExpired() && c.o.LoginCommand:
+		c.sayTo(parent, j.messageID, loginExpiredText)
+		return
 	case errors.As(err, &re):
 		c.sayTo(parent, j.messageID, fmt.Sprintf("Error: %s.", re.Error()))
 		return
@@ -457,6 +466,10 @@ func (c *Chat) Busy() bool {
 // usageLimitText is what the owner reads when the model's usage limit is
 // used up: no error text, and nothing to fix.
 const usageLimitText = "Usage limit reached. Try again after it resets."
+
+// loginExpiredText is shown when the model's sign-in stopped working and the
+// bridge can sign in again (Options.LoginCommand).
+const loginExpiredText = "The model sign-in expired. Send /login to sign in again."
 
 // live shows a turn as it happens: a draft with a Stop button that grows
 // with the answer, or the typing indicator when drafts do not work.
@@ -582,7 +595,7 @@ func (c *Chat) welcome() string {
 	}
 	var b strings.Builder
 	b.WriteString(intro + "\n\nCommands:")
-	for _, cmd := range Commands {
+	for _, cmd := range append(slices.Clone(Commands), c.o.ExtraCommands...) {
 		b.WriteString("\n\n/" + cmd.Command + " - " + cmd.Description)
 	}
 	return b.String()

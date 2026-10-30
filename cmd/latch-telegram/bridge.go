@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ type bridge struct {
 	owner     int64
 	approvals *tgapprove.Approver
 	chat      *tgchat.Chat // nil: approvals only
+	login     *loginDesk   // nil: no /login (agent.login)
 	log       *slog.Logger
 	now       func() time.Time
 	loc       *time.Location
@@ -77,6 +79,9 @@ func describe(host string, chat bool) (long, short string) {
 
 func (b *bridge) commands() []tgapi.Command {
 	if b.chat != nil {
+		if b.login != nil {
+			return append(slices.Clone(tgchat.Commands), loginCommand)
+		}
 		return tgchat.Commands
 	}
 	return []tgapi.Command{{Command: "help", Description: "What this bot does"}}
@@ -166,6 +171,10 @@ func (b *bridge) dispatch(ctx context.Context, u tgapi.Update) {
 		case m.Date > 0 && b.now().Sub(time.Unix(m.Date, 0)) > staleAfter:
 			b.say(ctx, fmt.Sprintf("Ignored a message sent at %s while the bridge was not running. Send it again if it still matters.",
 				time.Unix(m.Date, 0).In(b.location()).Format("15:04")))
+		case b.login != nil && isLoginCommand(m.Text):
+			b.login.Start(ctx)
+		case b.login != nil && b.login.Handle(ctx, m):
+			// The pasted address never reaches the agent.
 		case b.chat != nil && (len(m.Photo) > 0 || isImageFile(m.Document)):
 			b.picture(ctx, m)
 		case b.chat != nil:

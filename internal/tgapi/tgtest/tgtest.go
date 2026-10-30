@@ -514,8 +514,8 @@ func CheckEntities(text string, es []tgapi.Entity) string {
 var dateTimeFormat = regexp.MustCompile(`^(r|w?[dD]?[tT]?)$`)
 
 // CheckKeyboard applies Telegram's rules for inline buttons: exactly one
-// action (callback data of 1-64 bytes, or copy text of 1-256 characters) and
-// a known style.
+// action (callback data of 1-64 bytes, copy text of 1-256 characters, or an
+// https URL) and a known style.
 func CheckKeyboard(kb tgapi.Keyboard) string {
 	for _, row := range kb {
 		for _, b := range row {
@@ -530,6 +530,12 @@ func CheckKeyboard(kb tgapi.Keyboard) string {
 				actions++
 				if n := tgapi.TextLen(b.Copy.Text); n < 1 || n > 256 {
 					return "copy text must be 1-256 characters"
+				}
+			}
+			if b.URL != "" {
+				actions++
+				if !strings.HasPrefix(b.URL, "https://") || len(b.URL) > 2048 {
+					return "a URL button needs an https URL of at most 2048 bytes"
 				}
 			}
 			if actions != 1 {

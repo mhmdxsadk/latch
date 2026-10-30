@@ -116,6 +116,14 @@ func (a Account) WriteFile(ctx context.Context, path string, data []byte) error 
 	return a.run(ctx, bytes.NewReader(data), "/bin/sh", "-c", `set -C; umask 077; cat > "$1"`, "sh", path)
 }
 
+// ReplaceFile writes data to path as the account, readable by the account
+// only, replacing a file that is already there. It writes a new file beside
+// path and renames it over, so a reader never sees half a file.
+func (a Account) ReplaceFile(ctx context.Context, path string, data []byte) error {
+	return a.run(ctx, bytes.NewReader(data), "/bin/sh", "-c",
+		`set -C; umask 077; tmp="$1.new.$$"; if cat > "$tmp" && mv -f -- "$tmp" "$1"; then exit 0; fi; rm -f -- "$tmp"; exit 1`, "sh", path)
+}
+
 // Remove deletes files as the account that owns them; missing ones are fine.
 func (a Account) Remove(ctx context.Context, paths ...string) error {
 	if len(paths) == 0 {
@@ -347,6 +355,14 @@ func (e *RunError) Error() string {
 func (e *RunError) UsageLimit() bool {
 	s := strings.ToLower(e.Stderr)
 	return strings.Contains(s, "usage limit") || strings.Contains(s, "http 429")
+}
+
+// LoginExpired reports whether the model refused the run because its sign-in
+// is gone or no longer valid (HTTP 401, or Docker Agent saying so on refresh).
+func (e *RunError) LoginExpired() bool {
+	s := strings.ToLower(e.Stderr)
+	return strings.Contains(s, "http 401") || strings.Contains(s, "invalidated oauth token") ||
+		strings.Contains(s, "session is no longer valid") || strings.Contains(s, "not signed in with a chatgpt account")
 }
 
 func lastLines(s string, n int) string {

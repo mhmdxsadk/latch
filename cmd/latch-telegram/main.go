@@ -27,6 +27,7 @@ import (
 
 	"github.com/mhmdxsadk/latch/internal/admin"
 	"github.com/mhmdxsadk/latch/internal/approval"
+	"github.com/mhmdxsadk/latch/internal/chatgptauth"
 	"github.com/mhmdxsadk/latch/internal/textsafe"
 	"github.com/mhmdxsadk/latch/internal/tgapi"
 	"github.com/mhmdxsadk/latch/internal/tgapprove"
@@ -245,6 +246,10 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 		}
 		cancel()
 		intro, _ := describe(b.host, true)
+		var extra []tgapi.Command
+		if a.Login == loginChatGPT {
+			extra = []tgapi.Command{loginCommand}
+		}
 		b.chat, err = tgchat.New(tgchat.Options{
 			SessionDir: sessionDir,
 			Remove: func(ctx context.Context, paths []string) error {
@@ -280,10 +285,12 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			Follow: func(ctx context.Context, message int64, t tgapi.Text) bool {
 				return b.approvals.Follow(ctx, message, t)
 			},
-			CheckRunner: checks,
-			CheckEvery:  every,
-			Bot:         bot,
-			Chat:        cfg.OwnerID,
+			LoginCommand:  a.Login != "",
+			ExtraCommands: extra,
+			CheckRunner:   checks,
+			CheckEvery:    every,
+			Bot:           bot,
+			Chat:          cfg.OwnerID,
 			Runner: &tgchat.ExecRunner{
 				Command: a.Command, Config: a.Config, ExtraArgs: a.Args, Account: &acct,
 			},
@@ -298,6 +305,25 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 		if err != nil {
 			return nil, err
 		}
+	}
+	if a := cfg.Agent; a != nil && a.Login == loginChatGPT {
+		acct, err := tgchat.LookupAccount(a.User)
+		if err != nil {
+			return nil, err
+		}
+		dir := configDirFor(acct.Home, a.Args)
+		write := func(ctx context.Context, data []byte) error {
+			if err := acct.MakeDir(ctx, dir); err != nil {
+				return err
+			}
+			return acct.ReplaceFile(ctx, filepath.Join(dir, chatgptauth.FileName), data)
+		}
+		// Docker Agent reads the file the way it reads it for a turn, and
+		// exits with an error when the setup would stop an agent running.
+		verify := func(ctx context.Context) error {
+			return acct.Run(ctx, "/usr/bin/env", "HOME="+acct.Home, a.Command, "doctor", "--config-dir", dir, a.Config)
+		}
+		b.login = newLoginDesk(bot, cfg.OwnerID, log, write, verify)
 	}
 	client := admin.NewClient(cfg.AdminSocket)
 	client.Via = approval.ViaTelegram

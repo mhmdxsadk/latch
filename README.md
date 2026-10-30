@@ -183,7 +183,8 @@ Keep its token in a root-only file outside the agent's reach.
 ### Chat with Keeper
 
 Keeper is the example name for the agent in the chat. Configure `agent` to talk
-to it in the same chat, or remove that section for approvals only. Each turn runs as the agent's Linux account. The
+to it in the same chat, or remove that section for approvals only. Each turn
+runs as the agent's Linux account. The
 [Telegram example](config/telegram.example.yaml) covers the settings and the
 Latch change-tool permissions needed with Docker Agent's restricted mode.
 
@@ -195,6 +196,7 @@ action itself. After your decision, the agent can check the result.
   approval requests remain; Telegram may retain messages older than 48 hours.
 - `/stop` stops the current turn.
 - `/check` runs a configured server check now.
+- `/login` signs the model provider in. It exists when `agent.login` is set.
 - `/help` lists commands.
 
 Enable `agent.images` for photos and JPEG or PNG files only if the model
@@ -209,6 +211,28 @@ which the bridge verifies before each run.
 
 Telegram bot chats are not end-to-end encrypted. Logs, files and images you
 send pass through Telegram's servers.
+
+### Sign in to the model
+
+With `agent.login: chatgpt`, `/login` signs the agent in to a ChatGPT account.
+Use it for the first sign-in and again when it expires. A turn that fails
+because the sign-in is gone tells you to send `/login`.
+
+1. Send `/login` and tap Sign in with ChatGPT. Approve the sign-in in your
+   browser.
+2. The browser then shows an error page, because OpenAI only allows the
+   redirect `http://localhost:1455/...`, which is your own device. Copy the
+   full address from the address bar.
+3. Paste it into the chat. Latch deletes your message at once, because the
+   address holds a one-time code. It exchanges the code, writes
+   `chatgpt-auth.json` in the agent's Docker Agent config directory as the
+   agent's account, and runs `docker-agent doctor` to check the result.
+
+The link works for 10 minutes. Docker Agent refreshes the login itself after
+that. Latch never sends the tokens to the model or the chat. The pasted
+address passes through Telegram's servers before Latch deletes it. Its code
+works once, and only with a secret that Latch holds in memory, so the address
+is useless to anyone else.
 
 ## License
 

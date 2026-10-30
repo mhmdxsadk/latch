@@ -28,6 +28,7 @@ const (
 	// credentialName is a systemd credential that, when a unit override
 	// passes one (LoadCredential=telegram-token:PATH), replaces token_file.
 	credentialName = "telegram-token"
+	loginChatGPT   = "chatgpt"
 	maxConfigBytes = 64 << 10
 	maxTimeout     = time.Hour
 )
@@ -60,6 +61,9 @@ type AgentConfig struct {
 	Config  string   `yaml:"config"`
 	Args    []string `yaml:"args"`
 	Timeout Duration `yaml:"timeout"`
+	// Login turns on /login, which signs the agent's model provider in from
+	// the chat. Only "chatgpt" is supported. Empty: no /login.
+	Login string `yaml:"login"`
 	// Images turns on photos: the agent's model must read images, or Docker
 	// Agent drops them without a word.
 	Images bool `yaml:"images"`
@@ -183,6 +187,9 @@ func (c *Config) validate() error {
 			add("agent.user: set the Linux account the agent runs as")
 		case a.User == "root" || !userName.MatchString(a.User):
 			add("agent.user: %q is not allowed (a normal account name, never root)", a.User)
+		}
+		if a.Login != "" && a.Login != loginChatGPT {
+			add("agent.login: %q is not supported (only %q)", a.Login, loginChatGPT)
 		}
 		if !label.MatchString(a.Name) {
 			add("agent.name: %q must be 1 to 32 letters, digits, spaces, _ . or -", a.Name)
