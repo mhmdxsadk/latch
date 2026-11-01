@@ -64,6 +64,11 @@ type AgentConfig struct {
 	// Login turns on /login, which signs the agent's model provider in from
 	// the chat. Only "chatgpt" is supported. Empty: no /login.
 	Login string `yaml:"login"`
+	// ResetAfter ends the conversation, clearing the screen like /new, this
+	// long after the owner's last message. /keep postpones it. Telegram only
+	// deletes messages from the last 48 hours, so keep it under that. Empty:
+	// conversations end only with /new.
+	ResetAfter Duration `yaml:"reset_after"`
 	// Images turns on photos: the agent's model must read images, or Docker
 	// Agent drops them without a word.
 	Images bool `yaml:"images"`
@@ -190,6 +195,9 @@ func (c *Config) validate() error {
 		}
 		if a.Login != "" && a.Login != loginChatGPT {
 			add("agent.login: %q is not supported (only %q)", a.Login, loginChatGPT)
+		}
+		if d := time.Duration(a.ResetAfter); a.ResetAfter != 0 && (d < time.Hour || d > 7*24*time.Hour) {
+			add("agent.reset_after: %s must be between 1h and 168h", d)
 		}
 		if !label.MatchString(a.Name) {
 			add("agent.name: %q must be 1 to 32 letters, digits, spaces, _ . or -", a.Name)

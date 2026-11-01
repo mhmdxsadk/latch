@@ -188,6 +188,14 @@ runs as the agent's Linux account. The
 [Telegram example](config/telegram.example.yaml) covers the settings and the
 Latch change-tool permissions needed with Docker Agent's restricted mode.
 
+With `agent.reset_after: 24h`, a conversation ends by itself 24 hours after
+your last message. Latch clears the screen like `/new`, deletes the old
+conversation and posts one silent note, so the chat stays in your chat list.
+Telegram's own auto-delete would empty the chat and drop it from the list.
+`/keep` postpones the clearing by another 24 hours from now; send it again to
+extend further. Latch never clears while an answer is running. Telegram only
+deletes messages from the last 48 hours, so keep `reset_after` under that.
+
 Answers stream with a Stop button. When the agent requests a change, the
 approval message replaces its answer. Latch writes that request from the
 action itself. After your decision, the agent can check the result.
@@ -196,6 +204,8 @@ action itself. After your decision, the agent can check the result.
   approval requests remain; Telegram may retain messages older than 48 hours.
 - `/stop` stops the current turn.
 - `/check` runs a configured server check now.
+- `/keep` postpones the automatic clearing of the conversation. It exists when
+  `agent.reset_after` is set.
 - `/login` signs the model provider in. It exists when `agent.login` is set.
 - `/help` lists commands.
 

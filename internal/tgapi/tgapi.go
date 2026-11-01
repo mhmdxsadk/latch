@@ -200,6 +200,14 @@ func (c *Client) Confirm(ctx context.Context, offset int64) error {
 	return c.call(ctx, "getUpdates", map[string]any{"offset": offset, "timeout": 0, "limit": 1}, &out)
 }
 
+type silentKey struct{}
+
+// Silent marks the messages sent with the returned context as silent: they
+// arrive without a notification sound.
+func Silent(ctx context.Context) context.Context {
+	return context.WithValue(ctx, silentKey{}, true)
+}
+
 // Send sends t to chat, with buttons when kb is not nil. If Telegram
 // refuses the formatting, the text goes out again without it.
 func (c *Client) Send(ctx context.Context, chat int64, t Text, kb Keyboard) (Message, error) {
@@ -213,6 +221,9 @@ func (c *Client) Send(ctx context.Context, chat int64, t Text, kb Keyboard) (Mes
 	}
 	if kb != nil {
 		body["reply_markup"] = map[string]any{"inline_keyboard": kb}
+	}
+	if ctx.Value(silentKey{}) != nil {
+		body["disable_notification"] = true
 	}
 	var m Message
 	err := c.call(ctx, "sendMessage", body, &m)

@@ -49,6 +49,12 @@ agent:
   args: [--safety, restricted]
   # A turn that takes longer is stopped.
   timeout: 10m
+  # End the conversation by itself this long after your last message: the
+  # screen is cleared like /new, the old conversation is deleted, and one
+  # quiet note stays so the chat keeps its place in your chat list. /keep
+  # postpones it by the same time. Telegram only deletes messages from the
+  # last 48 hours, so keep this under that. 1h to 168h; unset: only /new.
+  # reset_after: 24h
   # /login signs the agent's model provider in from the chat, for the first
   # sign-in and whenever it expires. Only chatgpt is supported: it writes
   # chatgpt-auth.json in the agent's Docker Agent config directory, the file

@@ -58,6 +58,9 @@ const (
 	imageText = "[User attached one or more files without additional text. Respond using the conversation context and the attached files.]"
 )
 
+// KeepCommand is listed only when ResetAfter is set.
+var KeepCommand = tgapi.Command{Command: "keep", Description: "Postpone clearing this conversation"}
+
 // Commands is the bot's command menu.
 var Commands = []tgapi.Command{
 	{Command: "new", Description: "Clears the chat and starts a new conversation"},
@@ -73,9 +76,13 @@ type Options struct {
 	// after the chat's own.
 	LoginCommand  bool
 	ExtraCommands []tgapi.Command
-	Bot           Bot
-	Chat          int64
-	Runner        Runner
+	// ResetAfter ends the conversation, clearing the screen like /new, once
+	// this long has passed since the owner's last message. 0: never.
+	// /keep postpones it by the same time.
+	ResetAfter time.Duration
+	Bot        Bot
+	Chat       int64
+	Runner     Runner
 	// IndexPath is a root-only file holding the chat state.
 	IndexPath string
 	// Name labels the agent's answers, for example "keeper".
@@ -144,6 +151,12 @@ type index struct {
 	// /new). Messages are the ids of the messages on the owner's screen.
 	Conversation string  `json:"conversation,omitempty"`
 	Messages     []int64 `json:"messages,omitempty"`
+	// LastActive is the owner's last message, KeepUntil the end of a /keep,
+	// and Note the message that says the conversation ended or began again.
+	// Only the automatic reset reads them.
+	LastActive time.Time `json:"last_active,omitzero"`
+	KeepUntil  time.Time `json:"keep_until,omitzero"`
+	Note       int64     `json:"note,omitempty"`
 	// LastCheck and Reported belong to the scheduled checks.
 	LastCheck time.Time `json:"last_check,omitzero"`
 	Reported  []report  `json:"reported,omitempty"`
@@ -196,6 +209,9 @@ func (c *Chat) Run(ctx context.Context) {
 		c.mu.Unlock()
 		go c.checkLoop(ctx)
 	}
+	if c.ResetEnabled() {
+		go c.resetLoop(ctx)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -219,6 +235,7 @@ func (c *Chat) HandleText(ctx context.Context, text string, messageID int64) {
 		return
 	}
 	c.track(messageID) // the owner's message is on screen too
+	c.touch()
 	if len(text) > maxMessage {
 		c.say(ctx, "That message is too long; keep it under 8 KB.")
 		return
@@ -257,6 +274,7 @@ func (c *Chat) Notify(text, note string, replyTo int64) {
 // messageIDs are the owner's messages, noted for /new to clear.
 func (c *Chat) HandleImages(ctx context.Context, caption string, images [][]byte, messageIDs []int64) {
 	c.track(messageIDs...)
+	c.touch()
 	if c.o.SaveImage == nil {
 		c.say(ctx, "Photos are not available; the agent's conversation folder is not set up.")
 		return
@@ -327,6 +345,8 @@ func (c *Chat) handleCommand(ctx context.Context, cmd string, messageID int64) {
 		c.plain(ctx, c.welcome())
 	case "new":
 		c.newConversation(ctx, messageID)
+	case "keep":
+		c.keep(ctx)
 	case "check":
 		if c.o.CheckRunner == nil {
 			c.say(ctx, "Checks are not set up (agent.checks in telegram.yaml).")

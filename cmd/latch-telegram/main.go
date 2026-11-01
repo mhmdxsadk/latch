@@ -245,10 +245,7 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 		}
 		cancel()
 		intro, _ := describe(b.host, true)
-		var extra []tgapi.Command
-		if a.Login == loginChatGPT {
-			extra = []tgapi.Command{loginCommand}
-		}
+		extra := extraCommands(a.Login == loginChatGPT, a.ResetAfter != 0)
 		b.chat, err = tgchat.New(tgchat.Options{
 			SessionDir: sessionDir,
 			Remove: func(ctx context.Context, paths []string) error {
@@ -285,6 +282,7 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 				return b.approvals.Follow(ctx, message, t)
 			},
 			LoginCommand:  a.Login != "",
+			ResetAfter:    time.Duration(a.ResetAfter),
 			ExtraCommands: extra,
 			CheckRunner:   checks,
 			CheckEvery:    every,

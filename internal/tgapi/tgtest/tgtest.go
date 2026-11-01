@@ -29,6 +29,7 @@ type Sent struct {
 	Edits    int
 	ReplyTo  int64 // the message it replies to, or 0
 	Deleted  bool
+	Silent   bool // sent without a notification
 }
 
 // Formatted returns the message as a tgapi.Text.
@@ -289,6 +290,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			MessageID int64 `json:"message_id"`
 		} `json:"reply_parameters"`
 		MessageIDs       []int64 `json:"message_ids"`
+		Silent           bool    `json:"disable_notification"`
 		FileID           string  `json:"file_id"`
 		Description      *string `json:"description"`
 		ShortDescription *string `json:"short_description"`
@@ -334,7 +336,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.getUpdates(w, r, body.Offset, time.Duration(body.Timeout)*time.Second)
 	case "sendMessage":
 		s.mu.Lock()
-		m := &Sent{ID: s.nextID, Chat: body.ChatID, Text: body.Text, Entities: body.Entities}
+		m := &Sent{ID: s.nextID, Chat: body.ChatID, Text: body.Text, Entities: body.Entities, Silent: body.Silent}
 		if body.Markup != nil {
 			m.Keyboard = body.Markup.Keyboard
 		}

@@ -77,12 +77,21 @@ func describe(host string, chat bool) (long, short string) {
 		strings.ToUpper(server[:1]) + server[1:] + " approvals."
 }
 
+// extraCommands are the chat commands that exist only when configured.
+func extraCommands(login, keep bool) []tgapi.Command {
+	var out []tgapi.Command
+	if login {
+		out = append(out, loginCommand)
+	}
+	if keep {
+		out = append(out, tgchat.KeepCommand)
+	}
+	return out
+}
+
 func (b *bridge) commands() []tgapi.Command {
 	if b.chat != nil {
-		if b.login != nil {
-			return append(slices.Clone(tgchat.Commands), loginCommand)
-		}
-		return tgchat.Commands
+		return append(slices.Clone(tgchat.Commands), extraCommands(b.login != nil, b.chat.ResetEnabled())...)
 	}
 	return []tgapi.Command{{Command: "help", Description: "What this bot does"}}
 }
