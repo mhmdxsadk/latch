@@ -88,12 +88,25 @@ func (h *loginHarness) waitSaid(t *testing.T, want string) {
 func TestLoginSignsIn(t *testing.T) {
 	h := newLoginHarness(t)
 	h.desk.Start(context.Background())
-	link := h.tg.Sent()[0]
-	if len(link.Keyboard) != 1 || link.Keyboard[0][0].URL != h.flow.URL() || link.Keyboard[0][0].Text != "Sign in with ChatGPT" {
-		t.Fatalf("no sign-in button: %+v", link.Keyboard)
+	msg := h.tg.Sent()[0]
+	want := "Sign in to ChatGPT\n\n" +
+		"1. Tap the link below to copy it, then open it in your browser.\n" +
+		"2. The page will fail to load, which is expected. Tap the address bar and copy the full address.\n" +
+		"3. Paste it here.\n\n" + h.flow.URL() + "\n\nThis link works for 10 minutes."
+	if msg.Text != want {
+		t.Fatalf("text:\n%q\nwant:\n%q", msg.Text, want)
 	}
-	if strings.Contains(link.Text, "oauth/authorize") {
-		t.Errorf("the link belongs on the button, not in the text: %q", link.Text)
+	if len(msg.Keyboard) != 0 {
+		t.Errorf("a button would open Telegram's own browser, which cannot finish the sign-in: %+v", msg.Keyboard)
+	}
+	f := msg.Formatted()
+	var bold, mono bool
+	for _, e := range f.Entities {
+		bold = bold || e.Type == "bold" && f.Slice(e) == "Sign in to ChatGPT"
+		mono = mono || e.Type == "code" && f.Slice(e) == h.flow.URL()
+	}
+	if !bold || !mono {
+		t.Errorf("want a bold title and the link in monospace (tap to copy): %+v", f.Entities)
 	}
 
 	id := h.paste(goodAddress)
