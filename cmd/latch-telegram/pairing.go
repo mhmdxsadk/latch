@@ -100,9 +100,9 @@ func (d *desk) handle(ctx context.Context, m tgapi.Message) {
 // command.
 func pairingMessage(configPath, code string) (tgapi.Text, tgapi.Keyboard) {
 	var b tgapi.Builder
-	b.Bold("Pairing code").Plain("\nRun on the server, within ")
-	b.Plain(fmt.Sprintf("%d minutes:\n\n", int(codeTTL.Minutes())))
+	b.Bold("Pairing").Plain("\nTo pair this bot, run this command on the server:\n\n")
 	b.Code(pairCommand(configPath, "")).Plain(" ").Styled("spoiler", code)
+	b.Plain(fmt.Sprintf("\n\nThis code works for %d minutes.", int(codeTTL.Minutes())))
 	kb := tgapi.Keyboard{{{Text: "Copy command", Copy: &tgapi.CopyText{Text: pairCommand(configPath, code)}}}}
 	return b.Done(), kb
 }
@@ -111,9 +111,9 @@ func pairingMessage(configPath, code string) (tgapi.Text, tgapi.Keyboard) {
 // says how to sign the agent in.
 func pairedMessage(login bool) tgapi.Text {
 	var b tgapi.Builder
-	b.Bold("Paired.").Plain("\nApproval requests for this server arrive in this chat.")
+	b.Bold("Paired.")
 	if login {
-		b.Plain("\n\nSend /login to sign in to the model.")
+		b.Plain("\n\nYou can now send /login to sign in to ChatGPT.")
 	}
 	return b.Done()
 }

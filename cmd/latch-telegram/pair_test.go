@@ -40,10 +40,15 @@ func codeSentTo(t *testing.T, tg *tgtest.Server, chat int64) string {
 	var got string
 	tgtest.WaitFor(t, "the pairing reply", func() bool {
 		for _, m := range tg.Sent() {
-			if m.Chat == chat && strings.Contains(m.Text, "latch-telegram pair") {
-				f := strings.Fields(m.Text)
-				got = f[len(f)-1]
-				return true
+			if m.Chat != chat {
+				continue
+			}
+			for _, line := range strings.Split(m.Text, "\n") {
+				if strings.Contains(line, "latch-telegram pair") {
+					f := strings.Fields(line)
+					got = f[len(f)-1]
+					return true
+				}
 			}
 		}
 		return false
@@ -80,6 +85,13 @@ func TestPairingFlow(t *testing.T) {
 	}
 	if !coded || !hidden {
 		t.Errorf("want the command in monospace and the code hidden: %+v", f.Entities)
+	}
+	want := "Pairing\nTo pair this bot, run this command on the server:\n\nsudo latch-telegram pair --config " + cfgPath + " " + code + "\n\nThis code works for 10 minutes."
+	if reply.Text != want {
+		t.Errorf("text:\n%q\nwant:\n%q", reply.Text, want)
+	}
+	if len(f.Entities) == 0 || f.Entities[0].Type != "bold" || f.Slice(f.Entities[0]) != "Pairing" {
+		t.Errorf("the first line must be bold: %+v", f.Entities)
 	}
 	for _, unwanted := range []string{"ignore", "If you did not"} {
 		if strings.Contains(reply.Text, unwanted) {
@@ -199,12 +211,15 @@ func TestPairCommand(t *testing.T) {
 
 func TestPairedMessage(t *testing.T) {
 	plain := pairedMessage(false)
-	if plain.S != "Paired.\nApproval requests for this server arrive in this chat." {
+	if plain.S != "Paired." {
 		t.Errorf("without login: %q", plain.S)
 	}
 	withLogin := pairedMessage(true)
-	if !strings.HasSuffix(withLogin.S, "\n\nSend /login to sign in to the model.") {
+	if withLogin.S != "Paired.\n\nYou can now send /login to sign in to ChatGPT." {
 		t.Errorf("with login: %q", withLogin.S)
+	}
+	if len(withLogin.Entities) != 1 || withLogin.Entities[0].Type != "bold" || withLogin.Slice(withLogin.Entities[0]) != "Paired." {
+		t.Errorf("the first line must be bold: %+v", withLogin.Entities)
 	}
 	if tgtest.CheckEntities(withLogin.S, withLogin.Entities) != "" {
 		t.Errorf("entities: %+v", withLogin.Entities)
