@@ -95,25 +95,24 @@ func (l *loginDesk) Start(ctx context.Context) {
 	l.mu.Lock()
 	l.flow = flow
 	l.mu.Unlock()
-	if _, err := l.bot.Send(ctx, l.chat, loginMessage(flow.URL()), nil); err != nil {
+	t, kb := loginMessage(flow.URL())
+	if _, err := l.bot.Send(ctx, l.chat, t, kb); err != nil {
 		l.log.Warn("sending the sign-in link failed", "err", err)
 	}
 }
 
-// loginMessage is the sign-in instructions with the link. The link is
-// monospace, which Telegram copies when tapped, and there is no button: a
-// button opens Telegram's own browser, which cannot finish the sign-in. The
-// sign-in request lives in the browser that opens this exact link, so it has
-// to go to the owner's real browser.
-func loginMessage(link string) tgapi.Text {
+// loginMessage is the sign-in instructions, with the link on a button. The
+// link is about 450 characters, too long for a copy button (256) and ugly as
+// text. The button opens it in the owner's browser only when Telegram is set
+// to open links outside its own browser, which cannot finish the sign-in.
+func loginMessage(link string) (tgapi.Text, tgapi.Keyboard) {
 	var b tgapi.Builder
 	b.Bold("Sign in to ChatGPT")
-	b.Plain("\n\n1. Tap the link below to copy it, then open it in your browser.")
+	b.Plain("\n\n1. Tap the button and approve the sign-in.")
 	b.Plain("\n2. The page will fail to load, which is expected. Tap the address bar and copy the full address.")
-	b.Plain("\n3. Paste it here.\n\n")
-	b.Code(link)
+	b.Plain("\n3. Paste it here.")
 	b.Plain(fmt.Sprintf("\n\nThis link works for %d minutes.", int(chatgptauth.Valid.Minutes())))
-	return b.Done()
+	return b.Done(), tgapi.Keyboard{{{Text: "Sign in with ChatGPT", URL: link, Style: tgapi.StylePrimary}}}
 }
 
 // Handle takes the owner's message m when it holds the browser's address and

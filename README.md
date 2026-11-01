@@ -218,10 +218,12 @@ With `agent.login: chatgpt`, `/login` signs the agent in to a ChatGPT account.
 Use it for the first sign-in and again when it expires. A turn that fails
 because the sign-in is gone tells you to send `/login`.
 
-1. Send `/login`. Tap the link in the reply to copy it, then open it in your
-   browser. Do not use a button or Telegram's built-in browser: the sign-in
-   request lives in the browser that opens this exact link, and the built-in
-   browser cannot finish it.
+1. Send `/login` and tap Sign in with ChatGPT. Set Telegram to open links in
+   your own browser first (on iPhone, Settings, Data and Storage, Open Links
+   In; on Android, Settings, Chat Settings, In-App Browser). Telegram's
+   built-in browser cannot finish the sign-in, and the sign-in request lives
+   in the browser that opens the link, so moving to another browser from
+   there loses it.
 2. Approve the sign-in. The browser then shows an error page, because OpenAI
    only allows the redirect `http://localhost:1455/...`, which is your own
    device. Tap the address bar and copy the full address.

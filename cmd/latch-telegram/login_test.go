@@ -90,23 +90,22 @@ func TestLoginSignsIn(t *testing.T) {
 	h.desk.Start(context.Background())
 	msg := h.tg.Sent()[0]
 	want := "Sign in to ChatGPT\n\n" +
-		"1. Tap the link below to copy it, then open it in your browser.\n" +
+		"1. Tap the button and approve the sign-in.\n" +
 		"2. The page will fail to load, which is expected. Tap the address bar and copy the full address.\n" +
-		"3. Paste it here.\n\n" + h.flow.URL() + "\n\nThis link works for 10 minutes."
+		"3. Paste it here.\n\n" +
+		"This link works for 10 minutes."
 	if msg.Text != want {
 		t.Fatalf("text:\n%q\nwant:\n%q", msg.Text, want)
 	}
-	if len(msg.Keyboard) != 0 {
-		t.Errorf("a button would open Telegram's own browser, which cannot finish the sign-in: %+v", msg.Keyboard)
+	if len(msg.Keyboard) != 1 || len(msg.Keyboard[0]) != 1 || msg.Keyboard[0][0].URL != h.flow.URL() || msg.Keyboard[0][0].Text != "Sign in with ChatGPT" {
+		t.Fatalf("the link belongs on one button: %+v", msg.Keyboard)
+	}
+	if strings.Contains(msg.Text, "oauth/authorize") {
+		t.Errorf("the long link must not be shown as text: %q", msg.Text)
 	}
 	f := msg.Formatted()
-	var bold, mono bool
-	for _, e := range f.Entities {
-		bold = bold || e.Type == "bold" && f.Slice(e) == "Sign in to ChatGPT"
-		mono = mono || e.Type == "code" && f.Slice(e) == h.flow.URL()
-	}
-	if !bold || !mono {
-		t.Errorf("want a bold title and the link in monospace (tap to copy): %+v", f.Entities)
+	if len(f.Entities) != 1 || f.Entities[0].Type != "bold" || f.Slice(f.Entities[0]) != "Sign in to ChatGPT" {
+		t.Errorf("want only a bold title: %+v", f.Entities)
 	}
 
 	id := h.paste(goodAddress)
