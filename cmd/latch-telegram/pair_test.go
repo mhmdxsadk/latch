@@ -41,8 +41,7 @@ func codeSentTo(t *testing.T, tg *tgtest.Server, chat int64) string {
 	tgtest.WaitFor(t, "the pairing reply", func() bool {
 		for _, m := range tg.Sent() {
 			if m.Chat == chat && strings.Contains(m.Text, "latch-telegram pair") {
-				line, _, _ := strings.Cut(m.Text, "\n\nThe code")
-				f := strings.Fields(line)
+				f := strings.Fields(m.Text)
 				got = f[len(f)-1]
 				return true
 			}
@@ -74,12 +73,18 @@ func TestPairingFlow(t *testing.T) {
 		t.Errorf("no copy button for the command: %+v", reply.Keyboard)
 	}
 	f := reply.Formatted()
-	var coded bool
+	var coded, hidden bool
 	for _, e := range f.Entities {
-		coded = coded || e.Type == "code" && f.Slice(e) == cmd
+		coded = coded || e.Type == "code" && f.Slice(e) == pairCommand(cfgPath, "")
+		hidden = hidden || e.Type == "spoiler" && f.Slice(e) == code
 	}
-	if !coded {
-		t.Errorf("command is not monospace: %+v", f.Entities)
+	if !coded || !hidden {
+		t.Errorf("want the command in monospace and the code hidden: %+v", f.Entities)
+	}
+	for _, unwanted := range []string{"ignore", "If you did not"} {
+		if strings.Contains(reply.Text, unwanted) {
+			t.Errorf("message still says %q: %q", unwanted, reply.Text)
+		}
 	}
 
 	// The state file holds the hash, not the code.
@@ -189,5 +194,19 @@ func TestPairCommand(t *testing.T) {
 	}
 	if got := pairCommand("/srv/a b;rm/t.yaml", "ABCD-EFGH"); strings.Contains(got, "rm") {
 		t.Errorf("an unsafe path must not reach the shell: %q", got)
+	}
+}
+
+func TestPairedMessage(t *testing.T) {
+	plain := pairedMessage(false)
+	if plain.S != "Paired.\nApproval requests for this server arrive in this chat." {
+		t.Errorf("without login: %q", plain.S)
+	}
+	withLogin := pairedMessage(true)
+	if !strings.HasSuffix(withLogin.S, "\n\nSend /login to sign in to the model.") {
+		t.Errorf("with login: %q", withLogin.S)
+	}
+	if tgtest.CheckEntities(withLogin.S, withLogin.Entities) != "" {
+		t.Errorf("entities: %+v", withLogin.Entities)
 	}
 }

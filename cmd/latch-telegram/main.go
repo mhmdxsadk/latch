@@ -165,9 +165,8 @@ func cmdServe(args []string, stderr io.Writer) int {
 			return fail("waiting to be paired failed", err)
 		}
 		cfg = paired
-		var ok tgapi.Builder
-		ok.Bold("Paired.").Plain(" This chat now approves changes on this server.")
-		if _, err := bot.Send(ctx, cfg.OwnerID, ok.Done(), nil); err != nil {
+		login := cfg.Agent != nil && cfg.Agent.Login != ""
+		if _, err := bot.Send(ctx, cfg.OwnerID, pairedMessage(login), nil); err != nil {
 			log.Warn("sending the pairing confirmation failed", "err", err)
 		}
 		log.Info("paired", "owner", cfg.OwnerID)

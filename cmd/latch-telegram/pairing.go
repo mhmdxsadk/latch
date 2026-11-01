@@ -34,6 +34,9 @@ func pairCommand(configPath, code string) string {
 	if configPath != defaultConfig && safePath.MatchString(configPath) {
 		cmd += " --config " + configPath
 	}
+	if code == "" {
+		return cmd
+	}
 	return cmd + " " + code
 }
 
@@ -85,14 +88,34 @@ func (d *desk) handle(ctx context.Context, m tgapi.Message) {
 			return
 		}
 	}
-	cmd := pairCommand(d.configPath, code)
-	var b tgapi.Builder
-	b.Bold("Pair this bot with your server").Plain("\nRun this on the server:\n\n").Code(cmd)
-	b.Plain(fmt.Sprintf("\n\nThe code works for %d minutes. If you did not ask for this, ignore it.", int(codeTTL.Minutes())))
-	kb := tgapi.Keyboard{{{Text: "Copy command", Copy: &tgapi.CopyText{Text: cmd}}}}
-	if _, err := d.bot.Send(ctx, m.Chat.ID, b.Done(), kb); err != nil {
+	t, kb := pairingMessage(d.configPath, code)
+	if _, err := d.bot.Send(ctx, m.Chat.ID, t, kb); err != nil {
 		d.log.Warn("sending the pairing code failed", "err", err)
 	}
+}
+
+// pairingMessage is the reply that carries a pairing code. The code is a
+// spoiler; Telegram cannot combine a spoiler with monospace, so the command
+// is monospace and the code beside it is hidden. The button copies the whole
+// command.
+func pairingMessage(configPath, code string) (tgapi.Text, tgapi.Keyboard) {
+	var b tgapi.Builder
+	b.Bold("Pairing code").Plain("\nRun on the server, within ")
+	b.Plain(fmt.Sprintf("%d minutes:\n\n", int(codeTTL.Minutes())))
+	b.Code(pairCommand(configPath, "")).Plain(" ").Styled("spoiler", code)
+	kb := tgapi.Keyboard{{{Text: "Copy command", Copy: &tgapi.CopyText{Text: pairCommand(configPath, code)}}}}
+	return b.Done(), kb
+}
+
+// pairedMessage is the confirmation once pairing is done. With login it also
+// says how to sign the agent in.
+func pairedMessage(login bool) tgapi.Text {
+	var b tgapi.Builder
+	b.Bold("Paired.").Plain("\nApproval requests for this server arrive in this chat.")
+	if login {
+		b.Plain("\n\nSend /login to sign in to the model.")
+	}
+	return b.Done()
 }
 
 // holds reports whether user has a code that has not expired.
