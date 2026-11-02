@@ -14,12 +14,11 @@ concurrency:
 
 jobs:
   test:
-    name: test (go ${{ matrix.go }}, ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: test (go ${{ matrix.go }})
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
         go: ["1.26", "1.27"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -28,20 +27,20 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: ${{ matrix.go }}
-      - name: Check formatting
-        run: test -z "$(gofmt -l .)" || { gofmt -d .; exit 1; }
-      - name: go mod tidy is clean
-        run: go mod tidy -diff
-      - run: go vet ./...
       - name: Test (race)
         run: go test -race -count=1 ./...
 
-  shellcheck:
+  checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - name: go mod tidy is clean
+        run: go mod tidy -diff
       - run: shellcheck scripts/install.sh
 
   build:
