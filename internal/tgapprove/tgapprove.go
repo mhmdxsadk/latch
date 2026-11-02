@@ -53,7 +53,8 @@ type Bot interface {
 const (
 	DefaultInterval = 3 * time.Second
 	// noticeWindow is how old a finished automatic restart may be and still
-	// get a notice; older ones (seen at first start) stay quiet.
+	// get a notice; older ones (seen at first start) stay quiet. With an
+	// agent configured there are no notices: its answer reports the restart.
 	noticeWindow = 10 * time.Minute
 	// keepFinished is how many finished requests the state file remembers.
 	keepFinished = 500
@@ -227,7 +228,7 @@ func (a *Approver) updateLocked(ctx context.Context, r approval.Request) {
 			a.state.Requests[r.ID] = &shown{Message: m.MessageID, Text: hashText(text)}
 		case !r.NeedsApproval && !final:
 			// An automatic restart still running: wait for its outcome.
-		case !r.NeedsApproval && a.o.Now().Sub(r.FinishedAt) < noticeWindow:
+		case !r.NeedsApproval && a.o.AgentName == "" && a.o.Now().Sub(r.FinishedAt) < noticeWindow:
 			if _, err := a.o.Bot.Send(ctx, a.o.Chat, a.notice(r), nil); err != nil {
 				a.o.Logger.Warn("sending a notice failed", "id", r.ID, "err", err)
 				return

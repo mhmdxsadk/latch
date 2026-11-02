@@ -306,6 +306,18 @@ func TestAutomaticRestartNotice(t *testing.T) {
 	}
 }
 
+func TestAutomaticRestartIsQuietWithAnAgent(t *testing.T) {
+	h := newHarness(t)
+	h.a.o.AgentName = "keeper"
+	h.submit(action{kind: "docker_restart", name: "caddy", mode: approval.RateLimited, runs: &h.runs})
+	h.store.Wait()
+	h.poll()
+	h.poll()
+	if sent := h.tg.Sent(); len(sent) != 0 {
+		t.Fatalf("%+v", sent)
+	}
+}
+
 func TestUndoRequestShowsDeadline(t *testing.T) {
 	h := newHarness(t)
 	u := undoAction{h.stop("web")}
