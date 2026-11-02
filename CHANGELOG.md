@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.21.0](https://github.com/mhmdxsadk/latch/compare/v0.20.2...v0.21.0) (2026-11-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **telegram:** agent.reset_after and /keep are gone; remove reset_after from telegram.yaml.
+
+### Features
+
+* **telegram:** bring back sessions, drop auto reset and /keep ([9eeeae9](https://github.com/mhmdxsadk/latch/commit/9eeeae9236e057488301bb8ee352c7d5c4f4fd3b))
+* **telegram:** end conversations by themselves, with /keep to postpone ([1516cd2](https://github.com/mhmdxsadk/latch/commit/1516cd227ce5c7240d443fee1f5b8d2b905848cf))
+* **telegram:** pair from the bot with a one-time code ([db7fe5b](https://github.com/mhmdxsadk/latch/commit/db7fe5b26aa218464b96e45568f38475dd0ebced))
+* **telegram:** sign in to the model from the chat with /login ([7eeb932](https://github.com/mhmdxsadk/latch/commit/7eeb932add2faca4e5f83d7af440885daca4d917))
+
+
+### Bug Fixes
+
+* **telegram:** put the sign-in link back on a button ([5884dca](https://github.com/mhmdxsadk/latch/commit/5884dca613cdef2e5ebe12cd6afa6f1a317e9272))
+* **telegram:** reword the pairing and paired messages ([56c69eb](https://github.com/mhmdxsadk/latch/commit/56c69eb9af068aaf15d41d1c998f77d178f82d17))
+* **telegram:** shorten the pairing messages ([64836cf](https://github.com/mhmdxsadk/latch/commit/64836cff22068995b9bd668fc84ab56aba180e70))
+* **telegram:** show the sign-in link as text, not a button ([7fe5f09](https://github.com/mhmdxsadk/latch/commit/7fe5f09c37fc629782689a9fc3bebd2a3f7127a3))
+* **tgapprove:** show only what is needed to decide ([e3b1873](https://github.com/mhmdxsadk/latch/commit/e3b1873fad6bb8f9ad265ae873d825fe9ca11f2f))
+
 ## [0.20.2](https://github.com/mhmdxsadk/latch/compare/v0.20.1...v0.20.2) (2026-10-28)
 
 
