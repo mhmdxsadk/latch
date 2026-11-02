@@ -11,9 +11,9 @@ import (
 // with CheckRunner, which must not be able to change anything (an agent
 // config without the change tools, run in restricted safety mode). When it
 // finds nothing new it answers allClear and the owner hears nothing. When it
-// finds a problem, its report becomes the current conversation, so the owner's
-// reply ("fix it") continues there. Fixes are only ever made when the owner
-// asks.
+// finds a problem, its report opens a new conversation, which becomes the
+// active one so the owner's reply ("fix it") continues there. Fixes are only
+// ever made when the owner asks.
 
 // allClear is the whole answer of a check that found nothing new.
 const allClear = "ALL_CLEAR"
@@ -103,19 +103,26 @@ func (c *Chat) check(ctx context.Context, manual bool) {
 		}
 		return
 	}
-	// A finding becomes the current conversation, so the owner's reply
-	// ("fix it") continues there; the conversation it replaces is deleted.
-	// What is on the screen stays and goes with /new.
+	// A finding becomes a conversation of its own and the active one, so the
+	// owner's reply ("fix it") continues there. What is on the screen now
+	// stays on it: it moves to the new conversation, which /new clears with
+	// the rest.
+	headline := title(firstLine(answer))
 	c.mu.Lock()
-	old := c.index.Conversation
-	c.index.Conversation = id
+	screen := c.screenLocked()
+	c.index.Sessions = append(c.index.Sessions, session{
+		ID: id, Title: "Check: " + headline, Started: now, LastUsed: now, Messages: screen,
+	})
+	c.index.Active = id
 	c.index.Reported = append(c.index.Reported, report{At: now, Headline: textHead(firstLine(answer), 200)})
+	victims := c.pruneLocked()
 	err = c.saveLocked()
 	c.mu.Unlock()
 	if err != nil {
 		c.o.Logger.Warn("saving the chat state failed", "err", err)
 	}
-	c.removeDB(ctx, c.dbFor(old))
+	c.dropSessions(ctx, victims)
+	c.appendHistory(id, "agent", answer)
 	c.answer(ctx, answer, 0)
 }
 

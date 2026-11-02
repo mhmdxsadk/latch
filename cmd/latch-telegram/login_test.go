@@ -225,28 +225,3 @@ func TestConfigDirFor(t *testing.T) {
 		}
 	}
 }
-
-func TestConfigResetAfter(t *testing.T) {
-	base := "owner_id: 1\nagent:\n  user: keeper\n  config: /home/keeper/keeper.yaml\n"
-	if c, err := loadConfig(writeConfig(t, base+"  reset_after: 24h\n")); err != nil || time.Duration(c.Agent.ResetAfter) != 24*time.Hour {
-		t.Errorf("24h: %v", err)
-	}
-	if c, err := loadConfig(writeConfig(t, base)); err != nil || c.Agent.ResetAfter != 0 {
-		t.Errorf("unset must mean off: %v", err)
-	}
-	for _, bad := range []string{"30m", "200h"} {
-		if _, err := loadConfig(writeConfig(t, base+"  reset_after: "+bad+"\n")); err == nil || !strings.Contains(err.Error(), "agent.reset_after") {
-			t.Errorf("%s: %v", bad, err)
-		}
-	}
-}
-
-func TestExtraCommands(t *testing.T) {
-	if got := extraCommands(false, false); len(got) != 0 {
-		t.Errorf("nothing configured: %+v", got)
-	}
-	got := extraCommands(true, true)
-	if len(got) != 2 || got[0].Command != "login" || got[1].Command != "keep" {
-		t.Errorf("both: %+v", got)
-	}
-}

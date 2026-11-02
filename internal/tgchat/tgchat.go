@@ -1,13 +1,16 @@
 // Package tgchat lets the owner talk to the agent team from Telegram.
 //
 // Each Telegram message becomes one agent turn in the active conversation.
-// There is one conversation at a time. It lives in Docker Agent's session
-// database, a file of its own; this package keeps the conversation's id and
-// the messages on screen, so /new can clear the screen and delete the
-// database. Turns run one at a time, in order. Agent answers are untrusted
-// text: they are cleaned of control characters and their Markdown becomes
-// formatting this package computes
-// (never links). A turn that files a request shows the request alone, in one
+// A conversation lives in Docker Agent's session database, one file per
+// conversation; this package keeps an index (id, title, times, the messages
+// on screen) and a transcript per conversation, so the owner can switch
+// between them without ever seeing an id: /new clears the screen and starts
+// over, /sessions goes back to an earlier conversation and shows its messages
+// again. At most MaxSessions conversations are kept, and a conversation
+// quiet for IdleAfter is left behind by the next message. Turns run one at a
+// time, in order. Agent answers are untrusted text: they are cleaned of
+// control characters and their Markdown becomes formatting this package
+// computes (never links). A turn that files a request shows the request alone, in one
 // message that is shown once and edited in place when it is decided; the
 // agent's answer to the decision is added under the outcome. An agent cannot
 // pose as Latch where it matters: a request waiting for a decision always
@@ -58,12 +61,10 @@ const (
 	imageText = "[User attached one or more files without additional text. Respond using the conversation context and the attached files.]"
 )
 
-// KeepCommand is listed only when ResetAfter is set.
-var KeepCommand = tgapi.Command{Command: "keep", Description: "Postpone clearing this conversation"}
-
 // Commands is the bot's command menu.
 var Commands = []tgapi.Command{
 	{Command: "new", Description: "Clears the chat and starts a new conversation"},
+	{Command: "sessions", Description: "Shows earlier conversations to go back to"},
 	{Command: "stop", Description: "Stop the running answer and drop waiting messages"},
 	{Command: "check", Description: "Checks the server's current state"},
 	{Command: "help", Description: "Shows this message"},
@@ -76,13 +77,9 @@ type Options struct {
 	// after the chat's own.
 	LoginCommand  bool
 	ExtraCommands []tgapi.Command
-	// ResetAfter ends the conversation, clearing the screen like /new, once
-	// this long has passed since the owner's last message. 0: never.
-	// /keep postpones it by the same time.
-	ResetAfter time.Duration
-	Bot        Bot
-	Chat       int64
-	Runner     Runner
+	Bot           Bot
+	Chat          int64
+	Runner        Runner
 	// IndexPath is a root-only file holding the chat state.
 	IndexPath string
 	// Name labels the agent's answers, for example "keeper".
@@ -101,6 +98,8 @@ type Options struct {
 	// SessionDir is where each conversation's Docker Agent database lives
 	// ("" uses the agent's shared database and never deletes anything).
 	SessionDir string
+	// HistoryDir holds the transcripts, root-only ("" shows no history).
+	HistoryDir string
 	// Remove deletes files in SessionDir, as the agent's account.
 	Remove func(ctx context.Context, paths []string) error
 	// SaveImage writes a photo where the agent can read it and returns its
@@ -126,6 +125,7 @@ type Chat struct {
 	o     Options
 	queue chan job
 
+	hmu    sync.Mutex // transcripts
 	mu     sync.Mutex
 	index  index
 	cancel context.CancelFunc // of the running turn, nil when idle
@@ -147,16 +147,12 @@ type job struct {
 }
 
 type index struct {
-	// Conversation is the current one ("" until the first message after
-	// /new). Messages are the ids of the messages on the owner's screen.
-	Conversation string  `json:"conversation,omitempty"`
-	Messages     []int64 `json:"messages,omitempty"`
-	// LastActive is the owner's last message, KeepUntil the end of a /keep,
-	// and Note the message that says the conversation ended or began again.
-	// Only the automatic reset reads them.
-	LastActive time.Time `json:"last_active,omitzero"`
-	KeepUntil  time.Time `json:"keep_until,omitzero"`
-	Note       int64     `json:"note,omitempty"`
+	// Active is the current conversation ("" until the first message after
+	// /new).
+	Active   string    `json:"active,omitempty"`
+	Sessions []session `json:"sessions,omitempty"`
+	// Loose are screen messages sent while no conversation was active.
+	Loose []int64 `json:"loose,omitempty"`
 	// LastCheck and Reported belong to the scheduled checks.
 	LastCheck time.Time `json:"last_check,omitzero"`
 	Reported  []report  `json:"reported,omitempty"`
@@ -209,9 +205,6 @@ func (c *Chat) Run(ctx context.Context) {
 		c.mu.Unlock()
 		go c.checkLoop(ctx)
 	}
-	if c.ResetEnabled() {
-		go c.resetLoop(ctx)
-	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -234,19 +227,15 @@ func (c *Chat) HandleText(ctx context.Context, text string, messageID int64) {
 		c.handleCommand(ctx, cmd, messageID)
 		return
 	}
+	c.rollOver()
 	c.track(messageID) // the owner's message is on screen too
-	c.touch()
 	if len(text) > maxMessage {
 		c.say(ctx, "That message is too long; keep it under 8 KB.")
 		return
 	}
-	c.mu.Lock()
-	id := c.activeLocked()
-	err := c.saveLocked()
-	c.mu.Unlock()
-	if err != nil {
-		c.o.Logger.Warn("saving the chat state failed", "err", err)
-	}
+	id, victims := c.begin(text)
+	c.dropSessions(ctx, victims)
+	c.appendHistory(id, "owner", text)
 	c.enqueue(ctx, job{session: id, text: text})
 }
 
@@ -257,7 +246,7 @@ func (c *Chat) HandleText(ctx context.Context, text string, messageID int64) {
 // when the queue is full the message is dropped and logged.
 func (c *Chat) Notify(text, note string, replyTo int64) {
 	c.mu.Lock()
-	id := c.index.Conversation
+	id := c.index.Active
 	c.mu.Unlock()
 	if id == "" {
 		return // no conversation: nobody to tell
@@ -273,8 +262,8 @@ func (c *Chat) Notify(text, note string, replyTo int64) {
 // them attached. caption is the text sent with them ("" for none);
 // messageIDs are the owner's messages, noted for /new to clear.
 func (c *Chat) HandleImages(ctx context.Context, caption string, images [][]byte, messageIDs []int64) {
+	c.rollOver()
 	c.track(messageIDs...)
-	c.touch()
 	if c.o.SaveImage == nil {
 		c.say(ctx, "Photos are not available; the agent's conversation folder is not set up.")
 		return
@@ -306,16 +295,13 @@ func (c *Chat) HandleImages(ctx context.Context, caption string, images [][]byte
 		}
 		paths = append(paths, path)
 	}
+	titleText, shown := caption, caption+" [photo]"
 	if strings.TrimSpace(caption) == "" {
-		caption = imageText
+		caption, titleText, shown = imageText, "Photo", "[photo]"
 	}
-	c.mu.Lock()
-	id := c.activeLocked()
-	err := c.saveLocked()
-	c.mu.Unlock()
-	if err != nil {
-		c.o.Logger.Warn("saving the chat state failed", "err", err)
-	}
+	id, victims := c.begin(titleText)
+	c.dropSessions(ctx, victims)
+	c.appendHistory(id, "owner", shown)
 	select {
 	case c.queue <- job{session: id, text: caption, images: paths}:
 	default:
@@ -345,8 +331,8 @@ func (c *Chat) handleCommand(ctx context.Context, cmd string, messageID int64) {
 		c.plain(ctx, c.welcome())
 	case "new":
 		c.newConversation(ctx, messageID)
-	case "keep":
-		c.keep(ctx)
+	case "sessions":
+		c.sessionList(ctx)
 	case "check":
 		if c.o.CheckRunner == nil {
 			c.say(ctx, "Checks are not set up (agent.checks in telegram.yaml).")
@@ -393,7 +379,7 @@ func (c *Chat) StopDraft(id int64) bool {
 func (c *Chat) turn(parent context.Context, j job) {
 	defer c.discard(j.images)
 	if !c.isActive(j.session) {
-		return // the owner started over while this waited
+		return // the owner moved to another conversation while this waited
 	}
 	ctx, cancel := context.WithTimeout(parent, c.o.Timeout)
 	defer cancel()
@@ -427,9 +413,15 @@ func (c *Chat) turn(parent context.Context, j job) {
 		return
 	}
 	if !c.isActive(j.session) {
-		// The owner started over meanwhile: nothing goes to the screen, and
-		// the database the run may have written again goes too.
-		c.removeDB(parent, c.dbFor(j.session))
+		// The owner moved to another conversation meanwhile: nothing goes to
+		// the screen, but the answer is kept for when they come back. A
+		// conversation deleted meanwhile loses the database the run wrote.
+		switch {
+		case !c.exists(j.session):
+			c.removeDB(parent, c.dbFor(j.session))
+		case err == nil:
+			c.appendHistory(j.session, "agent", out)
+		}
 		return
 	}
 	select {
@@ -469,6 +461,7 @@ func (c *Chat) deliver(ctx context.Context, out string, j job, started time.Time
 		c.o.Logger.Debug("dropped the answer of a turn that filed a request")
 		return
 	}
+	c.appendHistory(j.session, "agent", out)
 	body := Markdown(out)
 	if j.messageID != 0 && c.o.Follow != nil && strings.TrimSpace(body.S) != "" && c.o.Follow(ctx, j.messageID, body) {
 		return

@@ -146,7 +146,7 @@ func TestMessagesRunInTheActiveSession(t *testing.T) {
 
 	// The conversation survives a bridge restart.
 	c := h.newChat(time.Minute)
-	if c.index.Conversation != h.run.Calls()[2].session {
+	if c.index.Active != h.run.Calls()[2].session {
 		t.Fatalf("index %+v", c.index)
 	}
 	if st, err := os.Stat(h.index); err != nil || st.Mode().Perm() != 0o600 {
@@ -447,6 +447,7 @@ func TestWelcome(t *testing.T) {
 	m := h.waitText("On-call engineer for the Lisbon server. Monitors containers.")
 	want := "On-call engineer for the Lisbon server. Monitors containers.\n\nCommands:\n\n" +
 		"/new - Clears the chat and starts a new conversation\n\n" +
+		"/sessions - Shows earlier conversations to go back to\n\n" +
 		"/stop - Stop the running answer and drop waiting messages\n\n" +
 		"/check - Checks the server's current state\n\n" +
 		"/help - Shows this message"
@@ -466,7 +467,7 @@ func TestChecks(t *testing.T) {
 
 	h.send("/check")
 	h.waitText("All clear.")
-	if id := h.chat.index.Conversation; id != "" {
+	if id := h.chat.index.Active; id != "" {
 		t.Fatalf("an all-clear check left a conversation: %s", id)
 	}
 
@@ -478,7 +479,7 @@ func TestChecks(t *testing.T) {
 	h.chat.queue <- job{check: true} // a scheduled one: silent unless it finds something
 	h.waitText("Jellyfin keeps restarting.")
 	h.chat.mu.Lock()
-	active, reported := h.chat.index.Conversation, h.chat.index.Reported
+	active, reported := h.chat.index.Active, h.chat.index.Reported
 	h.chat.mu.Unlock()
 	if active == "" {
 		t.Fatal("the finding is not the current conversation")

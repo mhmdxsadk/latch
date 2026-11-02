@@ -245,9 +245,17 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 		}
 		cancel()
 		intro, _ := describe(b.host, true)
-		extra := extraCommands(a.Login == loginChatGPT, a.ResetAfter != 0)
+		var extra []tgapi.Command
+		if a.Login == loginChatGPT {
+			extra = []tgapi.Command{loginCommand}
+		}
+		historyDir := filepath.Join(cfg.StateDir, "history")
+		if err := os.MkdirAll(historyDir, 0o700); err != nil {
+			return nil, err
+		}
 		b.chat, err = tgchat.New(tgchat.Options{
 			SessionDir: sessionDir,
+			HistoryDir: historyDir,
 			Remove: func(ctx context.Context, paths []string) error {
 				for _, p := range paths {
 					if filepath.Dir(p) != sessionDir || strings.Contains(p, "..") {
@@ -282,7 +290,6 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 				return b.approvals.Follow(ctx, message, t)
 			},
 			LoginCommand:  a.Login != "",
-			ResetAfter:    time.Duration(a.ResetAfter),
 			ExtraCommands: extra,
 			CheckRunner:   checks,
 			CheckEvery:    every,

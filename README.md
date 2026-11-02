@@ -188,31 +188,30 @@ runs as the agent's Linux account. The
 [Telegram example](config/telegram.example.yaml) covers the settings and the
 Latch change-tool permissions needed with Docker Agent's restricted mode.
 
-With `agent.reset_after: 24h`, a conversation ends by itself 24 hours after
-your last message. Latch clears the screen like `/new`, deletes the old
-conversation and posts one silent note, so the chat stays in your chat list.
-Telegram's own auto-delete would empty the chat and drop it from the list.
-`/keep` postpones the clearing by another 24 hours from now; send it again to
-extend further. Latch never clears while an answer is running. Telegram only
-deletes messages from the last 48 hours, so keep `reset_after` under that.
+Latch keeps up to 10 conversations, each with its own Docker Agent database
+in the agent's home (`~/.cagent/latch-sessions`) and a transcript in the
+bridge's state folder. When you have sent nothing to the current conversation
+for 3 days, your next message starts a new one. Past 10, Latch deletes the
+conversation you used least recently, with its database and transcript.
 
 Answers stream with a Stop button. When the agent requests a change, the
 approval message replaces its answer. Latch writes that request from the
 action itself. After your decision, the agent can check the result.
 
-- `/new` clears the conversation and its Docker Agent database. Pending
-  approval requests remain; Telegram may retain messages older than 48 hours.
+- `/new` clears the chat and starts a new conversation. The old one stays in
+  the list. Pending approval requests remain; Telegram may retain messages
+  older than 48 hours.
+- `/sessions` lists earlier conversations. Tapping one clears the chat, shows
+  its messages again and continues it.
 - `/stop` stops the current turn.
 - `/check` runs a configured server check now.
-- `/keep` postpones the automatic clearing of the conversation. It exists when
-  `agent.reset_after` is set.
 - `/login` signs the model provider in. It exists when `agent.login` is set.
 - `/help` lists commands.
 
 Enable `agent.images` for photos and JPEG or PNG files only if the model
 supports images. Albums arrive as one turn. Images go to the model provider
-and remain in the conversation database until `/new`; text redaction does
-not apply to them.
+and remain in the conversation database until Latch deletes the conversation;
+text redaction does not apply to them.
 
 Optional `agent.checks` runs scheduled inspections, every 6 hours by default,
 and reports new findings. Checks cannot change anything, including restarts.
