@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.22.0](https://github.com/mhmdxsadk/latch/compare/v0.21.0...v0.22.0) (2026-11-02)
+
+
+### Features
+
+* **telegram:** settle conversations, with /settle and an offer from the agent ([d6f1830](https://github.com/mhmdxsadk/latch/commit/d6f1830e6f77061c5caf2540bcd03757509f0743))
+
+
+### Bug Fixes
+
+* **tgapprove:** no automatic restart notices when an agent is configured ([3c7025d](https://github.com/mhmdxsadk/latch/commit/3c7025d94f3a42aa921cba49004741bb20ec02fb))
+
 ## [0.21.0](https://github.com/mhmdxsadk/latch/compare/v0.20.2...v0.21.0) (2026-11-02)
 
 
