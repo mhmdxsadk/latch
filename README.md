@@ -188,21 +188,31 @@ runs as the agent's Linux account. The
 [Telegram example](config/telegram.example.yaml) covers the settings and the
 Latch change-tool permissions needed with Docker Agent's restricted mode.
 
-Latch keeps up to 10 conversations, each with its own Docker Agent database
-in the agent's home (`~/.cagent/latch-sessions`) and a transcript in the
-bridge's state folder. When you have sent nothing to the current conversation
-for 3 days, your next message starts a new one. Past 10, Latch deletes the
-conversation you used least recently, with its database and transcript.
+A conversation is meant to solve one issue and then be settled. `/settle`
+closes the current one and clears the chat. A conversation you have sent
+nothing to for 72 hours counts as settled too, and your next message starts a
+new one. Settled conversations stay in `/sessions`, listed after the open
+ones, and tapping one opens it again. Latch keeps up to 10 conversations,
+open and settled, each with its own Docker Agent database in the agent's home
+(`~/.cagent/latch-sessions`) and a transcript in the bridge's state folder.
+Past 10, Latch deletes the one you used least recently, with its database and
+transcript.
+
+When the agent is done, it can ask you to settle. If the last line of its
+answer is `READY_TO_SETTLE`, Latch drops that line and sends its own message,
+"Settle this conversation?", with a Settle button. Tell the agent this in its
+instructions. It never settles anything itself.
 
 Answers stream with a Stop button. When the agent requests a change, the
 approval message replaces its answer. Latch writes that request from the
 action itself. After your decision, the agent can check the result.
 
-- `/new` clears the chat and starts a new conversation. The old one stays in
-  the list. Pending approval requests remain; Telegram may retain messages
-  older than 48 hours.
-- `/sessions` lists earlier conversations. Tapping one clears the chat, shows
-  its messages again and continues it.
+- `/new` clears the chat and starts a new conversation. The old one stays
+  open in the list. Pending approval requests remain; Telegram may retain
+  messages older than 48 hours.
+- `/sessions` lists open and settled conversations. Tapping one clears the
+  chat, shows its messages again and continues it.
+- `/settle` closes the current conversation and clears the chat.
 - `/stop` stops the current turn.
 - `/check` runs a configured server check now.
 - `/login` signs the model provider in. It exists when `agent.login` is set.

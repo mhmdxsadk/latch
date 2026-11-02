@@ -651,3 +651,145 @@ func TestPhotoStartsAConversationTitledPhoto(t *testing.T) {
 	}
 	tgtest.WaitFor(t, "the photo turn to end", func() bool { return !h.chat.busy() })
 }
+
+func (h *convHarness) pressData(data string, message int64) string {
+	h.t.Helper()
+	cb := tgapi.CallbackQuery{ID: "cb-" + data, Data: data, Message: &tgapi.Message{MessageID: message}}
+	if !h.chat.HandlePress(context.Background(), cb) {
+		h.t.Fatal("not handled")
+	}
+	got, _ := h.tg.Answer(cb.ID)
+	return got
+}
+
+func TestSettleClearsTheScreenAndKeepsTheConversation(t *testing.T) {
+	h := newConvHarness(t)
+	id1 := h.ask("is caddy up?")
+	first := h.sessions()[0]
+	h.waitAllNoted()
+	cmd := h.say("/settle")
+	note := h.waitText("Settled: is caddy up?")
+	for _, id := range []int64{id1, cmd} {
+		if !h.tg.Deleted(id) {
+			t.Errorf("message %d is still on screen", id)
+		}
+	}
+	if got := h.visibleTexts(); len(got) != 1 || got[0] != note.Text {
+		t.Fatalf("screen after /settle: %q", got)
+	}
+	got := h.sessions()
+	if len(got) != 1 || got[0].Settled.IsZero() || h.chat.index.Active != "" || len(h.files.removed) != 0 {
+		t.Fatalf("sessions %+v, active %q, deleted %v", got, h.chat.index.Active, h.files.removed)
+	}
+	// The next message starts another conversation; the settled one is listed
+	// after the open one and can be opened again.
+	h.clock.Advance(time.Hour)
+	h.ask("disk space?")
+	list := h.picker()
+	if len(list.Keyboard) != 2 || !strings.HasPrefix(list.Keyboard[0][0].Text, "* disk space?") ||
+		!strings.HasPrefix(list.Keyboard[1][0].Text, "is caddy up?") || !strings.HasSuffix(list.Keyboard[1][0].Text, " - settled") {
+		t.Fatalf("list %+v", list.Keyboard)
+	}
+	h.press(list, 1)
+	tgtest.WaitFor(t, "the resume note", func() bool {
+		v := h.visibleTexts()
+		return len(v) > 0 && strings.HasPrefix(v[len(v)-1], "Back in: is caddy up?")
+	})
+	if s := h.sessions()[0]; !s.Settled.IsZero() || h.chat.index.Active != first.ID {
+		t.Errorf("reopening left %+v active %q", s, h.chat.index.Active)
+	}
+	h.ask("one more thing")
+	if last := h.run.Calls()[len(h.run.Calls())-1]; last.session != first.ID {
+		t.Errorf("a message after reopening ran in %s", last.session)
+	}
+}
+
+func TestSettleWithNothingOpen(t *testing.T) {
+	h := newConvHarness(t)
+	h.say("/settle")
+	h.waitText("No open conversation to settle.")
+	if len(h.sessions()) != 0 || len(h.files.removed) != 0 {
+		t.Errorf("sessions %+v, deleted %v", h.sessions(), h.files.removed)
+	}
+}
+
+func TestQuietConversationsCountAsSettled(t *testing.T) {
+	h := newConvHarness(t)
+	h.ask("first")
+	h.clock.Advance(time.Hour)
+	h.newConversation()
+	h.ask("second")
+	h.clock.Advance(IdleAfter - time.Hour/2) // first: quiet for IdleAfter and more; second: not yet
+	list := h.picker()
+	if len(list.Keyboard) != 2 || !strings.HasPrefix(list.Keyboard[0][0].Text, "* second") || strings.HasSuffix(list.Keyboard[0][0].Text, "settled") ||
+		!strings.HasPrefix(list.Keyboard[1][0].Text, "first") || !strings.HasSuffix(list.Keyboard[1][0].Text, " - settled") {
+		t.Fatalf("list %+v", list.Keyboard)
+	}
+	h.clock.Advance(time.Hour) // now the second has been quiet that long too
+	list = h.picker()
+	if !strings.HasSuffix(list.Keyboard[0][0].Text, " - settled") || !strings.HasSuffix(list.Keyboard[1][0].Text, " - settled") {
+		t.Errorf("list %+v", list.Keyboard)
+	}
+}
+
+func TestAgentOffersToSettle(t *testing.T) {
+	h := newConvHarness(t)
+	h.run.reply = func(string) (string, error) {
+		return "Caddy is back up. Nothing else is wrong.\n\nREADY_TO_SETTLE\n", nil
+	}
+	h.say("fix caddy")
+	answer := h.waitText("Caddy is back up.")
+	if strings.Contains(answer.Text, "READY_TO_SETTLE") || len(answer.Keyboard) != 0 {
+		t.Fatalf("the agent's words show the marker or carry buttons: %+v", answer)
+	}
+	offer := h.waitText("Settle this conversation?")
+	if len(offer.Keyboard) != 1 || offer.Keyboard[0][0].Text != "Settle" {
+		t.Fatalf("offer %+v", offer)
+	}
+	if hist := h.chat.loadHistory(h.sessions()[0].ID); len(hist) != 2 || strings.Contains(hist[1].Text, "READY_TO_SETTLE") {
+		t.Errorf("history %+v", hist)
+	}
+	h.waitAllNoted()
+	h.pressData(offer.Keyboard[0][0].Data, offer.ID)
+	h.waitText("Settled: fix caddy")
+	tgtest.WaitFor(t, "the screen to hold only the note", func() bool { return len(h.visibleTexts()) == 1 })
+	if s := h.sessions()[0]; s.Settled.IsZero() {
+		t.Errorf("not settled: %+v", s)
+	}
+	// The old button does nothing any more.
+	if got := h.pressData(offer.Keyboard[0][0].Data, offer.ID); got != "That conversation is no longer open." {
+		t.Errorf("stale button answered %q", got)
+	}
+}
+
+func TestAgentOfferWithoutWords(t *testing.T) {
+	h := newConvHarness(t)
+	h.run.reply = func(string) (string, error) { return "READY_TO_SETTLE", nil }
+	h.say("anything else?")
+	h.waitText("Settle this conversation?")
+	for _, m := range h.tg.Sent() {
+		if strings.Contains(m.Text, "no answer") || strings.Contains(m.Text, "READY_TO_SETTLE") {
+			t.Errorf("unexpected message %q", m.Text)
+		}
+	}
+}
+
+func TestSplitSettle(t *testing.T) {
+	for _, tc := range []struct {
+		in, out string
+		done    bool
+	}{
+		{"Fixed.\n\nREADY_TO_SETTLE", "Fixed.", true},
+		{"Fixed.\nready_to_settle.\n\n", "Fixed.", true},
+		{"Fixed.\n**`READY_TO_SETTLE`**", "Fixed.", true},
+		{"READY_TO_SETTLE", "", true},
+		{"READY_TO_SETTLE\nFixed.", "READY_TO_SETTLE\nFixed.", false},
+		{"I could say READY_TO_SETTLE here", "I could say READY_TO_SETTLE here", false},
+		{"Fixed.", "Fixed.", false},
+		{"", "", false},
+	} {
+		if out, done := splitSettle(tc.in); out != tc.out || done != tc.done {
+			t.Errorf("splitSettle(%q) = %q, %v", tc.in, out, done)
+		}
+	}
+}

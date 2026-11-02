@@ -65,6 +65,7 @@ const (
 var Commands = []tgapi.Command{
 	{Command: "new", Description: "Clears the chat and starts a new conversation"},
 	{Command: "sessions", Description: "Shows earlier conversations to go back to"},
+	{Command: "settle", Description: "Closes this conversation and clears the chat"},
 	{Command: "stop", Description: "Stop the running answer and drop waiting messages"},
 	{Command: "check", Description: "Checks the server's current state"},
 	{Command: "help", Description: "Shows this message"},
@@ -223,11 +224,11 @@ func (c *Chat) Run(ctx context.Context) {
 // the agent. messageID is the owner's message, only noted for /new to clear;
 // the answer is a plain message, not a reply to it.
 func (c *Chat) HandleText(ctx context.Context, text string, messageID int64) {
+	c.rollOver()
 	if cmd, ok := command(text); ok {
 		c.handleCommand(ctx, cmd, messageID)
 		return
 	}
-	c.rollOver()
 	c.track(messageID) // the owner's message is on screen too
 	if len(text) > maxMessage {
 		c.say(ctx, "That message is too long; keep it under 8 KB.")
@@ -323,14 +324,16 @@ func (c *Chat) discard(paths []string) {
 }
 
 func (c *Chat) handleCommand(ctx context.Context, cmd string, messageID int64) {
-	if cmd != "new" {
-		c.track(messageID) // /new deletes its own message with the rest
+	if cmd != "new" && cmd != "settle" {
+		c.track(messageID) // /new and /settle delete their own message with the rest
 	}
 	switch cmd {
 	case "start", "help":
 		c.plain(ctx, c.welcome())
 	case "new":
-		c.newConversation(ctx, messageID)
+		c.leave(ctx, messageID, false)
+	case "settle":
+		c.leave(ctx, messageID, true)
 	case "sessions":
 		c.sessionList(ctx)
 	case "check":
@@ -461,12 +464,38 @@ func (c *Chat) deliver(ctx context.Context, out string, j job, started time.Time
 		c.o.Logger.Debug("dropped the answer of a turn that filed a request")
 		return
 	}
+	out, done := splitSettle(out)
 	c.appendHistory(j.session, "agent", out)
 	body := Markdown(out)
-	if j.messageID != 0 && c.o.Follow != nil && strings.TrimSpace(body.S) != "" && c.o.Follow(ctx, j.messageID, body) {
-		return
+	switch {
+	case strings.TrimSpace(body.S) == "" && done:
+		// Only the offer: nothing to show but the question.
+	case j.messageID != 0 && c.o.Follow != nil && strings.TrimSpace(body.S) != "" && c.o.Follow(ctx, j.messageID, body):
+	default:
+		c.answer(ctx, out, j.messageID)
 	}
-	c.answer(ctx, out, j.messageID)
+	if done {
+		c.offerSettle(ctx, j.session)
+	}
+}
+
+// settleMarker is the whole last line of an answer in which the agent says
+// the issue is solved and nothing is left to do. The bridge removes it and
+// asks the owner, with a button, whether to settle the conversation.
+const settleMarker = "READY_TO_SETTLE"
+
+// splitSettle removes the settle marker from the end of an answer and
+// reports whether it was there.
+func splitSettle(out string) (string, bool) {
+	t := strings.TrimRight(out, " \t\r\n")
+	i := strings.LastIndex(t, "\n")
+	if !strings.EqualFold(strings.Trim(t[i+1:], "`*. "), settleMarker) {
+		return out, false
+	}
+	if i < 0 {
+		return "", true
+	}
+	return strings.TrimRight(t[:i], " \t\r\n"), true
 }
 
 // Busy reports whether an agent turn is running.
@@ -566,7 +595,8 @@ func (lv *live) loop() {
 // preview is the draft for p: the answer so far.
 func (c *Chat) preview(p Progress) tgapi.Text {
 	var b tgapi.Builder
-	body := Markdown(p.Text)
+	text, _ := splitSettle(p.Text)
+	body := Markdown(text)
 	if body.Len() > tgapi.MaxText-b.Len()-8 {
 		body = tgapi.SplitText(body, tgapi.MaxText-b.Len()-8)[0]
 	}

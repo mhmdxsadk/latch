@@ -20,16 +20,20 @@ import (
 // A conversation is a Docker Agent session plus what this package keeps for
 // it: the messages on the owner's screen (so /new can clear them) and a
 // transcript (so resuming can show them again). The screen always belongs to
-// the active conversation. At most MaxSessions conversations are kept; the
-// least recently used ones beyond that are deleted, database and transcript
-// included. A conversation the owner has not written to for IdleAfter is
-// left behind: the next message starts a new one.
+// the active conversation. A conversation is meant to solve one issue and
+// then be settled: /settle (or the Settle button under the agent's offer)
+// closes it, clearing the screen like /new, and /sessions lists it under the
+// settled ones, from where the owner can reopen it. A conversation the owner
+// has not written to for IdleAfter counts as settled too, and the next
+// message starts a new one. At most MaxSessions conversations are kept, open
+// and settled; the least recently used ones beyond that are deleted,
+// database and transcript included.
 
 const (
 	// MaxSessions is how many conversations are kept.
 	MaxSessions = 10
 	// IdleAfter is how long a conversation can go without a message from
-	// the owner before the next message starts a new one.
+	// the owner before it counts as settled.
 	IdleAfter = 3 * 24 * time.Hour
 	// titleLen is the longest conversation title.
 	titleLen = 40
@@ -50,6 +54,9 @@ type session struct {
 	Title    string    `json:"title"`
 	Started  time.Time `json:"started"`
 	LastUsed time.Time `json:"last_used,omitzero"`
+	// Settled is when the owner (or the agent's offer) closed it. Reopening
+	// clears it.
+	Settled time.Time `json:"settled,omitzero"`
 	// Messages are the ids of the messages on the owner's screen.
 	Messages []int64 `json:"messages,omitempty"`
 }
@@ -65,6 +72,12 @@ func (s session) used() time.Time {
 		return s.Started
 	}
 	return s.LastUsed
+}
+
+// isSettled reports whether s is closed: settled on purpose, or quiet for
+// IdleAfter.
+func (c *Chat) isSettled(s session) bool {
+	return !s.Settled.IsZero() || c.o.Now().Sub(s.used()) >= IdleAfter
 }
 
 func (s session) label(loc *time.Location) string {
@@ -419,11 +432,24 @@ func (c *Chat) screenLocked() []int64 {
 	return ids
 }
 
-// newConversation clears the screen, which is everything the owner and the
-// bot said in the active conversation. The conversation stays and can be
-// resumed with /sessions; the next message starts a new one.
-func (c *Chat) newConversation(ctx context.Context, cmdMessage int64) {
+// leave clears the screen, which is everything the owner and the bot said in
+// the active conversation, and leaves the conversation: the next message
+// starts a new one. The conversation stays and can be opened again with
+// /sessions. With settle it is also marked settled, and the note names it.
+func (c *Chat) leave(ctx context.Context, cmdMessage int64, settle bool) {
 	c.mu.Lock()
+	text := "New conversation."
+	if settle {
+		cur := c.currentLocked()
+		if cur == nil {
+			c.mu.Unlock()
+			c.track(cmdMessage)
+			c.say(ctx, "No open conversation to settle.")
+			return
+		}
+		cur.Settled = c.o.Now().UTC()
+		text = "Settled: " + cur.label(c.o.Location)
+	}
 	screen := append(c.screenLocked(), cmdMessage)
 	c.index.Active = ""
 	if err := c.saveLocked(); err != nil {
@@ -432,14 +458,23 @@ func (c *Chat) newConversation(ctx context.Context, cmdMessage int64) {
 	c.mu.Unlock()
 
 	c.stopRunning()
-	text := "New conversation."
 	if c.clearScreen(ctx, screen) > 0 {
 		text += " Telegram only deletes messages from the last 48 hours, so some older ones stay."
 	}
 	c.say(ctx, text)
 }
 
-// sessionList sends the kept conversations as buttons, newest first.
+// offerSettle asks the owner whether to settle conversation id, with a
+// button. The words are the bridge's own: the agent only says it is done.
+func (c *Chat) offerSettle(ctx context.Context, id string) {
+	kb := tgapi.Keyboard{{{Text: "Settle", Data: "x:" + id}}}
+	if _, err := c.post(ctx, note("Settle this conversation?"), kb); err != nil {
+		c.o.Logger.Warn("sending failed", "err", err)
+	}
+}
+
+// sessionList sends the kept conversations as buttons: the open ones, then
+// the settled ones, each newest first.
 func (c *Chat) sessionList(ctx context.Context) {
 	c.mu.Lock()
 	list := slices.Clone(c.index.Sessions)
@@ -449,12 +484,23 @@ func (c *Chat) sessionList(ctx context.Context) {
 		c.say(ctx, "No conversations yet. Send a message to start one.")
 		return
 	}
-	slices.SortStableFunc(list, func(a, b session) int { return b.used().Compare(a.used()) })
+	slices.SortStableFunc(list, func(a, b session) int {
+		if sa, sb := c.isSettled(a), c.isSettled(b); sa != sb {
+			if sa {
+				return 1
+			}
+			return -1
+		}
+		return b.used().Compare(a.used())
+	})
 	var kb tgapi.Keyboard
 	for _, s := range list {
 		text := s.label(c.o.Location)
 		if s.ID == active {
 			text = "* " + text
+		}
+		if c.isSettled(s) {
+			text += " - settled"
 		}
 		kb = append(kb, []tgapi.Button{{Text: text, Data: "s:" + s.ID}})
 	}
@@ -463,12 +509,28 @@ func (c *Chat) sessionList(ctx context.Context) {
 	}
 }
 
-// HandlePress handles a session button. It reports false for other buttons.
+// HandlePress handles a session button and a Settle button. It reports
+// false for other buttons.
 func (c *Chat) HandlePress(ctx context.Context, cb tgapi.CallbackQuery) bool {
+	if id, ok := strings.CutPrefix(cb.Data, "x:"); ok {
+		c.rollOver()
+		if !c.isActive(id) {
+			if err := c.o.Bot.Answer(ctx, cb.ID, "That conversation is no longer open."); err != nil {
+				c.o.Logger.Warn("answering a button failed", "err", err)
+			}
+			return true
+		}
+		if err := c.o.Bot.Answer(ctx, cb.ID, ""); err != nil {
+			c.o.Logger.Warn("answering a button failed", "err", err)
+		}
+		c.leave(ctx, 0, true)
+		return true
+	}
 	id, ok := strings.CutPrefix(cb.Data, "s:")
 	if !ok {
 		return false
 	}
+	c.rollOver()
 	var listMessage int64
 	if cb.Message != nil {
 		listMessage = cb.Message.MessageID
@@ -485,8 +547,9 @@ func (c *Chat) HandlePress(ctx context.Context, cb tgapi.CallbackQuery) bool {
 	return true
 }
 
-// resume makes conversation id the active one: it clears the screen and
-// shows the conversation's earlier messages. It reports whether id exists.
+// resume makes conversation id the active one, open again if it was
+// settled: it clears the screen and shows the conversation's earlier
+// messages. It reports whether id exists.
 func (c *Chat) resume(ctx context.Context, id string, extra int64) (label string, ok bool) {
 	c.mu.Lock()
 	i := slices.IndexFunc(c.index.Sessions, func(s session) bool { return s.ID == id })
@@ -501,6 +564,7 @@ func (c *Chat) resume(ctx context.Context, id string, extra int64) (label string
 	screen := append(c.screenLocked(), extra)
 	target := &c.index.Sessions[i]
 	target.Messages = nil
+	target.Settled = time.Time{}
 	target.LastUsed = c.o.Now().UTC()
 	c.index.Active = id
 	label = target.label(c.o.Location)

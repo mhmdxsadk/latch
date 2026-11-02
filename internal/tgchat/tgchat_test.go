@@ -448,6 +448,7 @@ func TestWelcome(t *testing.T) {
 	want := "On-call engineer for the Lisbon server. Monitors containers.\n\nCommands:\n\n" +
 		"/new - Clears the chat and starts a new conversation\n\n" +
 		"/sessions - Shows earlier conversations to go back to\n\n" +
+		"/settle - Closes this conversation and clears the chat\n\n" +
 		"/stop - Stop the running answer and drop waiting messages\n\n" +
 		"/check - Checks the server's current state\n\n" +
 		"/help - Shows this message"
