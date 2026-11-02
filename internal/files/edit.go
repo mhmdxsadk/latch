@@ -292,6 +292,26 @@ func (c *check) resolveNew(p string) (NewFile, error) {
 	return NewFile{Path: target, UID: uid, GID: gid}, nil
 }
 
+// ResolveDir returns the resolved path of the existing folder p. The path
+// and every step of its resolution must not be blocked.
+func (e *Editor) ResolveDir(ctx context.Context, p string) (string, error) {
+	if err := ValidatePath(p); err != nil {
+		return "", err
+	}
+	c, err := e.guard.session(ctx)
+	if err != nil {
+		return "", err
+	}
+	real, info, err := c.resolve(p)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", ErrNotDir
+	}
+	return real, nil
+}
+
 // Locate returns the resolved path of p, which may no longer exist (to list
 // its backups). The path must not be blocked.
 func (e *Editor) Locate(ctx context.Context, p string) (string, error) {

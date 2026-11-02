@@ -57,6 +57,9 @@ var (
 	ErrBadCompose    = errors.New("the container's compose labels are not usable, or its compose files are missing")
 	ErrComposeFailed = errors.New("docker compose failed")
 	ErrNoDockerCLI   = errors.New("the docker CLI was not found in " + strings.Join(DockerCLIPaths, " or "))
+
+	ErrBadProject      = errors.New("the folder name cannot be used as a compose project name (lowercase letters, digits, - and _)")
+	ErrProjectConflict = errors.New("containers of a compose project with this name or in this folder already exist and belong to a different project or folder")
 )
 
 // ComposeTarget is one compose service, read from a container's labels.
@@ -83,6 +86,71 @@ func (t ComposeTarget) labels() map[string]string {
 		labelWorkingDir:  t.WorkingDir,
 		labelConfigFiles: strings.Join(t.ConfigFiles, ","),
 	}
+}
+
+// ProjectFiles are the compose file names docker compose looks for in a
+// folder, in its order of preference.
+var ProjectFiles = []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
+
+// ProjectTarget is a whole compose project started from a folder: the folder,
+// one compose file in it and the project name made from the folder's name.
+type ProjectTarget struct {
+	Project string `json:"project"`
+	Dir     string `json:"dir"`
+	File    string `json:"file"`
+	// Existing are the names of the containers (running or not) that already
+	// belong to the project (filled by Actions.ProjectTarget).
+	Existing []string `json:"existing,omitempty"`
+}
+
+// Same reports whether t and o start the same project from the same file.
+func (t ProjectTarget) Same(o ProjectTarget) bool {
+	return t.Project == o.Project && t.Dir == o.Dir && t.File == o.File
+}
+
+// ProjectName makes the project name docker compose would make from the
+// folder: its base name in lowercase without characters compose drops.
+func ProjectName(dir string) (string, error) {
+	name := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + 'a' - 'A'
+		}
+		return -1
+	}, filepath.Base(dir))
+	if dir == "/" || !composeProject.MatchString(name) {
+		return "", ErrBadProject
+	}
+	return name, nil
+}
+
+// CheckProjectFiles requires the folder to be a directory and the file to be
+// a regular file inside it (symlinks are followed).
+func CheckProjectFiles(t ProjectTarget, stat func(string) (fs.FileInfo, error)) error {
+	if !composeProject.MatchString(t.Project) || !cleanPath(t.Dir) || !cleanPath(t.File) || filepath.Dir(t.File) != t.Dir ||
+		!slices.Contains(ProjectFiles, filepath.Base(t.File)) {
+		return ErrBadCompose
+	}
+	if fi, err := stat(t.Dir); err != nil || !fi.IsDir() {
+		return ErrBadCompose
+	}
+	if fi, err := stat(t.File); err != nil || !fi.Mode().IsRegular() {
+		return ErrBadCompose
+	}
+	return nil
+}
+
+// ProjectArgs is the exact argument list for starting a project. Every value
+// comes from a validated ProjectTarget; nothing comes from the agent except
+// the pull choice.
+func ProjectArgs(t ProjectTarget, pull bool) []string {
+	args := []string{"compose", "--project-name", t.Project, "--project-directory", t.Dir, "-f", t.File, "up", "-d"}
+	if pull {
+		args = append(args, "--pull", "always")
+	}
+	return args
 }
 
 // ComposeResult is the outcome of "docker compose up".

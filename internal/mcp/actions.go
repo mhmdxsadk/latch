@@ -2,8 +2,11 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +40,10 @@ var (
 	// errComposeChanged is returned when the compose labels differ between
 	// request and execution.
 	errComposeChanged = errors.New("compose labels changed")
+	// errProjectChanged is returned when the folder, compose file or project
+	// differ between request and execution.
+	errProjectChanged = errors.New("compose project changed")
+	errNoComposeFile  = userError{"the folder has no compose file (looked for " + "compose.yaml, compose.yml, docker-compose.yaml and docker-compose.yml)"}
 )
 
 type actionIn struct {
@@ -46,6 +53,11 @@ type actionIn struct {
 type composeIn struct {
 	Name string `json:"name" jsonschema:"exact container name, from docker_list; its compose service is updated"`
 	Pull bool   `json:"pull,omitempty" jsonschema:"pull the newest image first (--pull always); default false"`
+}
+
+type composeProjectIn struct {
+	Folder string `json:"folder" jsonschema:"absolute, clean path of the folder that holds the project's compose file (compose.yaml, compose.yml, docker-compose.yaml or docker-compose.yml); the folder name becomes the project name"`
+	Pull   bool   `json:"pull,omitempty" jsonschema:"pull the newest images first (--pull always); default false"`
 }
 
 type statusIn struct {
@@ -136,7 +148,10 @@ func ExplainActionError(err error) (summary, reason string) {
 		return "the resource no longer exists or is not allowed", "not_found"
 	case errors.Is(err, errComposeChanged):
 		return "the container's compose labels changed after the request; ask again", "changed"
-	case errors.Is(err, docker.ErrNotCompose), errors.Is(err, docker.ErrBadCompose):
+	case errors.Is(err, errProjectChanged):
+		return "the compose folder or file changed after the request; nothing was started; ask again", "changed"
+	case errors.Is(err, docker.ErrNotCompose), errors.Is(err, docker.ErrBadCompose),
+		errors.Is(err, docker.ErrBadProject), errors.Is(err, docker.ErrProjectConflict):
 		return err.Error(), "bad_compose"
 	case errors.Is(err, docker.ErrNoDockerCLI):
 		return "the docker CLI is not installed where Latch looks for it", "no_docker_cli"
@@ -315,6 +330,11 @@ func checkSiblings(p *policy.Policy, t docker.ComposeTarget) error {
 
 func (a composeAction) Execute(ctx context.Context) (approval.Result, error) {
 	res, err := a.d.DockerActions.ComposeUp(ctx, a.target, a.pull)
+	return composeResult(res, err), err
+}
+
+// composeResult is what the owner and agent see of a docker compose run.
+func composeResult(res docker.ComposeResult, err error) approval.Result {
 	out := approval.Result{Details: res.Output}
 	switch {
 	case res.TimedOut:
@@ -324,7 +344,91 @@ func (a composeAction) Execute(ctx context.Context) (approval.Result, error) {
 	case err == nil:
 		out.Summary = "docker compose exited with status 0"
 	}
-	return out, err
+	return out
+}
+
+// projectAction runs docker compose up for a whole project in a folder. The
+// folder, the compose file's content (by hash) and the project must be
+// unchanged when it runs.
+type projectAction struct {
+	d      *Deps
+	folder string // as the agent gave it
+	target docker.ProjectTarget
+	hash   [sha256.Size]byte
+	pull   bool
+}
+
+func (a projectAction) Kind() string { return "docker_compose_project_up" }
+func (a projectAction) Resource() approval.Resource {
+	return approval.Resource{Type: "folder", Name: a.target.Dir}
+}
+func (a projectAction) Params() []approval.Param {
+	return []approval.Param{{Name: "pull", Value: strconv.FormatBool(a.pull)}}
+}
+func (a projectAction) Mode() approval.Mode { return approval.Always }
+
+func (a projectAction) Describe() []string {
+	lines := []string{
+		"start compose project " + a.target.Project + " in " + a.target.Dir,
+		"compose file " + a.target.File + " (sha256 " + hex.EncodeToString(a.hash[:6]) + ")",
+		"runs in " + a.target.Dir + ":",
+		"docker " + strings.Join(docker.ProjectArgs(a.target, a.pull), " "),
+	}
+	if len(a.target.Existing) > 0 {
+		lines = append(lines, "containers already in this project: "+strings.Join(a.target.Existing, ", "))
+	}
+	return lines
+}
+
+func (a projectAction) Check(ctx context.Context) error {
+	t, hash, err := a.d.projectTarget(ctx, a.folder)
+	if err != nil {
+		return err
+	}
+	if !t.Same(a.target) || hash != a.hash {
+		return errProjectChanged
+	}
+	return checkProjectContainers(a.d.Policy, t)
+}
+
+func (a projectAction) Execute(ctx context.Context) (approval.Result, error) {
+	res, err := a.d.DockerActions.ComposeProjectUp(ctx, a.target, a.pull)
+	return composeResult(res, err), err
+}
+
+// projectTarget resolves the folder, picks its compose file and returns the
+// project with the file's content hash. Everything goes through the file
+// guard, so a folder the file tools cannot see is refused like a missing one.
+func (d *Deps) projectTarget(ctx context.Context, folder string) (docker.ProjectTarget, [sha256.Size]byte, error) {
+	var none [sha256.Size]byte
+	dir, err := d.Editor.ResolveDir(ctx, folder)
+	if err != nil {
+		return docker.ProjectTarget{}, none, err
+	}
+	for _, name := range docker.ProjectFiles {
+		file := filepath.Join(dir, name)
+		f, err := d.Editor.Load(ctx, file)
+		if errors.Is(err, files.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return docker.ProjectTarget{}, none, err
+		}
+		t, err := d.DockerActions.ProjectTarget(ctx, dir, file)
+		return t, f.Hash, err
+	}
+	return docker.ProjectTarget{}, none, errNoComposeFile
+}
+
+// checkProjectContainers refuses a project that already has an excluded
+// container: compose would act on it too.
+func checkProjectContainers(p *policy.Policy, t docker.ProjectTarget) error {
+	for _, n := range t.Existing {
+		if !p.ContainerVisible(n) {
+			return policy.ErrNotAllowed
+		}
+	}
+	return nil
 }
 
 // unitAction restarts, stops or starts one systemd unit.
@@ -446,6 +550,36 @@ func registerActions(s *sdk.Server, d *Deps) {
 		}
 		out, err := d.submit(ctx, composeAction{d: d, name: name, pull: in.Pull, target: t})
 		return out, name, err
+	}))
+
+	sdk.AddTool(s, &sdk.Tool{
+		Name: "docker_compose_project_up",
+		Description: "Start a whole docker compose project from a folder, for example one you just set up with dir_create and " +
+			"file_create: runs 'docker compose up -d' with the folder's compose file (compose.yaml, compose.yml, " +
+			"docker-compose.yaml or docker-compose.yml, whichever exists first), optionally pulling the newest images first. " +
+			"The project name is the folder name in lowercase. It creates missing containers, recreates changed ones and starts " +
+			"stopped ones, for every service in the file; it never removes containers. Use docker_compose_up instead to update " +
+			"one service of a project that already runs. The folder must hold no containers of another project or excluded " +
+			"containers. The owner approves this folder and the compose file's content as it is then, and the request fails if the " +
+			"file changes before the owner decides. The result contains the last lines of the command's output; check the " +
+			"containers with docker_status afterwards." + alwaysNote + approvalNote,
+		Annotations: changeAnnotations(true, false),
+	}, wrap(d, "docker_compose_project_up", func(ctx context.Context, in composeProjectIn) (actionOut, string, error) {
+		if err := files.ValidatePath(in.Folder); err != nil {
+			return actionOut{}, "", err
+		}
+		t, hash, err := d.projectTarget(ctx, in.Folder)
+		if errors.Is(err, docker.ErrBadCompose) || errors.Is(err, docker.ErrBadProject) || errors.Is(err, docker.ErrProjectConflict) {
+			return actionOut{}, in.Folder, userError{err.Error()}
+		}
+		if err != nil {
+			return actionOut{}, in.Folder, err
+		}
+		if err := checkProjectContainers(d.Policy, t); err != nil {
+			return actionOut{}, in.Folder, err
+		}
+		out, err := d.submit(ctx, projectAction{d: d, folder: in.Folder, target: t, hash: hash, pull: in.Pull})
+		return out, in.Folder, err
 	}))
 
 	for _, v := range []struct {

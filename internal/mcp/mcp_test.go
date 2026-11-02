@@ -133,7 +133,7 @@ func TestToolSurfaceIsFixed(t *testing.T) {
 		"file_read": true, "file_list": true, "file_find": true, "file_grep": true,
 		"net_ping": true, "net_dns": true, "net_tcp": true, "net_traceroute": true, "net_http_get": true,
 		"request_status": true, "request_list": true,
-		"docker_restart": false, "docker_stop": false, "docker_start": false, "docker_compose_up": false,
+		"docker_restart": false, "docker_stop": false, "docker_start": false, "docker_compose_up": false, "docker_compose_project_up": false,
 		"systemd_restart": false, "systemd_stop": false, "systemd_start": false,
 		"file_backups": true,
 		"file_edit":    false, "file_create": false, "file_restore": false, "dir_create": false, "http_request": false,

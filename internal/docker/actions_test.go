@@ -504,3 +504,154 @@ func TestRunCLITimeoutKillsProcessGroup(t *testing.T) {
 		t.Error("killed run reported success")
 	}
 }
+
+func TestProjectName(t *testing.T) {
+	for dir, want := range map[string]string{
+		"/srv/services/streaming-stack": "streaming-stack",
+		"/srv/My_Stack.v2":              "my_stackv2",
+		"/srv/9lives":                   "9lives",
+	} {
+		if got, err := ProjectName(dir); err != nil || got != want {
+			t.Errorf("ProjectName(%q) = %q, %v; want %q", dir, got, err, want)
+		}
+	}
+	for _, dir := range []string{"/", "/srv/---", "/srv/_x", "/srv/...", "/srv/" + strings.Repeat("a", 129)} {
+		if _, err := ProjectName(dir); !errors.Is(err, ErrBadProject) {
+			t.Errorf("ProjectName(%q) accepted", dir)
+		}
+	}
+}
+
+func TestProjectArgsAreFixed(t *testing.T) {
+	tg := ProjectTarget{Project: "stack", Dir: "/srv/stack", File: "/srv/stack/compose.yaml"}
+	want := []string{"compose", "--project-name", "stack", "--project-directory", "/srv/stack", "-f", "/srv/stack/compose.yaml", "up", "-d"}
+	if got := ProjectArgs(tg, false); !slices.Equal(got, want) {
+		t.Errorf("got %q", got)
+	}
+	if got := ProjectArgs(tg, true); !slices.Equal(got, append(want, "--pull", "always")) {
+		t.Errorf("got %q", got)
+	}
+}
+
+// projectServer answers the label-filtered lists with the containers whose
+// labels match the filter.
+func projectServer(t *testing.T, all []map[string]any) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		var f struct{ Label []string }
+		if err := json.Unmarshal([]byte(r.URL.Query().Get("filters")), &f); err != nil {
+			t.Error(err)
+		}
+		var out []map[string]any
+		for _, c := range all {
+			labels, _ := c["Labels"].(map[string]string)
+			match := true
+			for _, l := range f.Label {
+				k, v, _ := strings.Cut(l, "=")
+				match = match && labels[k] == v
+			}
+			if match {
+				out = append(out, c)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	}
+}
+
+func TestProjectTarget(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "stack")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "compose.yaml")
+	if err := os.WriteFile(file, []byte("services: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mine := map[string]string{labelProject: "stack", labelWorkingDir: dir}
+	elsewhere := map[string]string{labelProject: "stack", labelWorkingDir: "/srv/other"}
+	otherProject := map[string]string{labelProject: "other", labelWorkingDir: dir}
+	unrelated := map[string]string{labelProject: "unrelated", labelWorkingDir: "/srv/unrelated"}
+
+	for _, tc := range []struct {
+		name string
+		all  []map[string]any
+		want []string
+		err  error
+	}{
+		{"new project", []map[string]any{{"Names": []string{"/x"}, "Labels": unrelated}}, nil, nil},
+		{"existing", []map[string]any{
+			{"Names": []string{"/b"}, "Labels": mine}, {"Names": []string{"/a"}, "Labels": mine},
+			{"Names": []string{"/x"}, "Labels": unrelated}}, []string{"a", "b"}, nil},
+		{"same name, other folder", []map[string]any{{"Names": []string{"/a"}, "Labels": elsewhere}}, nil, ErrProjectConflict},
+		{"same folder, other project", []map[string]any{{"Names": []string{"/a"}, "Labels": otherProject}}, nil, ErrProjectConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, _ := newActionsFake(t, projectServer(t, tc.all))
+			got, err := a.ProjectTarget(context.Background(), dir, file)
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("err = %v, want %v", err, tc.err)
+			}
+			if err == nil && (got.Project != "stack" || got.Dir != dir || got.File != file || !slices.Equal(got.Existing, tc.want)) {
+				t.Errorf("got %+v", got)
+			}
+		})
+	}
+
+	a, rec, _ := newActionsFake(t, projectServer(t, nil))
+	for _, c := range []struct{ dir, file string }{
+		{dir, filepath.Join(dir, "missing.yaml")},
+		{dir, filepath.Join(dir, "other.yaml")},
+		{dir, "/etc/passwd"},
+		{dir, dir + "/../x/compose.yaml"},
+		{"relative", "relative/compose.yaml"},
+		{"/", "/compose.yaml"},
+	} {
+		if _, err := a.ProjectTarget(context.Background(), c.dir, c.file); err == nil {
+			t.Errorf("accepted %+v", c)
+		}
+	}
+	if rec.count() != 0 {
+		t.Error("a bad target reached the Engine API")
+	}
+}
+
+func TestComposeProjectUpRevalidatesAndUsesFixedArgs(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "stack")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "compose.yml")
+	if err := os.WriteFile(file, []byte("services: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, rec, fr := newActionsFake(t, func(http.ResponseWriter, *http.Request) {})
+	tg := ProjectTarget{Project: "stack", Dir: dir, File: file}
+	fr.res = ComposeResult{Output: []string{"Container web Started"}}
+	if res, err := a.ComposeProjectUp(context.Background(), tg, true); err != nil || len(res.Output) != 1 {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if fr.dir != dir || !slices.Equal(fr.args, ProjectArgs(tg, true)) {
+		t.Errorf("ran %q in %s", fr.args, fr.dir)
+	}
+	fr.args = nil
+	for _, mut := range []func(*ProjectTarget){
+		func(c *ProjectTarget) { c.Project = "x;id" },
+		func(c *ProjectTarget) { c.Project = "--build" },
+		func(c *ProjectTarget) { c.Dir = "relative" },
+		func(c *ProjectTarget) { c.File = filepath.Join(dir, "missing.yml") },
+		func(c *ProjectTarget) { c.File = "/etc/passwd" },
+		func(c *ProjectTarget) { c.File = filepath.Join(dir, "..", "compose.yml") },
+	} {
+		c := tg
+		mut(&c)
+		if _, err := a.ComposeProjectUp(context.Background(), c, false); err == nil {
+			t.Errorf("tampered target %+v accepted", c)
+		}
+	}
+	if fr.args != nil {
+		t.Errorf("runner called for a tampered target: %q", fr.args)
+	}
+	if rec.count() != 0 {
+		t.Error("ComposeProjectUp must not call the Engine API")
+	}
+}

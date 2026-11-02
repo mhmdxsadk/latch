@@ -387,3 +387,35 @@ func TestIsUnitPath(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveDir(t *testing.T) {
+	f, e := newEditorFixture(t)
+	ctx := context.Background()
+	pub := f.path("public")
+	link := f.symlink(pub, "link-to-public")
+	for _, p := range []string{pub, link} {
+		got, err := e.ResolveDir(ctx, p)
+		if err != nil {
+			t.Fatalf("ResolveDir(%q): %v", p, err)
+		}
+		if want, _ := filepath.EvalSymlinks(pub); got != want {
+			t.Errorf("ResolveDir(%q) = %q, want %q", p, got, want)
+		}
+	}
+	for _, tc := range []struct {
+		path string
+		want error
+	}{
+		{f.path("public/hello.txt"), ErrNotDir},
+		{f.path("nope"), ErrNotFound},
+		{f.blocked, ErrBlocked},
+		{f.path("private/sub"), ErrBlocked},
+		{f.path("container-data"), ErrBlocked},
+		{f.symlink(f.blocked, "sneaky"), ErrBlocked},
+		{"relative", ErrInvalidPath},
+	} {
+		if _, err := e.ResolveDir(ctx, tc.path); !errors.Is(err, tc.want) {
+			t.Errorf("ResolveDir(%q) = %v, want %v", tc.path, err, tc.want)
+		}
+	}
+}

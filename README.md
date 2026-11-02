@@ -95,8 +95,16 @@ Latch checks resolved addresses and redirects to prevent bypasses.
 | Requests | `request_status`, `request_list` |
 
 Changes use `docker_restart`, `docker_stop`, `docker_start`,
-`docker_compose_up`, `systemd_restart`, `systemd_stop`, `systemd_start`,
-`file_edit`, `file_create`, `file_restore`, `dir_create` and `http_request`.
+`docker_compose_up`, `docker_compose_project_up`, `systemd_restart`,
+`systemd_stop`, `systemd_start`, `file_edit`, `file_create`, `file_restore`,
+`dir_create` and `http_request`.
+
+`docker_compose_up` updates one service of a running project.
+`docker_compose_project_up` starts every service of a project from a folder with
+a compose file. The folder name becomes the project name. The owner approves
+the folder and the compose file's content, and the request fails if the file
+changes before the decision. It refuses a project that has excluded containers
+or whose name or folder belongs to another project.
 
 `limits` bounds log output. File reads and searches have bounds too, and Latch
 refuses binary files. `net_http_get` sends a plain GET without agent-supplied

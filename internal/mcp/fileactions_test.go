@@ -546,3 +546,127 @@ func TestComposeEditRefusedWithExcludedSibling(t *testing.T) {
 	p := composeEdit(t, f, "secret-db")
 	f.refusal(t, "file_edit", map[string]any{"path": p, "old": "ports: [80]", "new": "ports: [81]", "restart": map[string]any{"container": "my-web"}})
 }
+
+// projectFolder makes a folder with a compose file in the harness.
+func projectFolder(t *testing.T, f *editHarness, name, file string) string {
+	t.Helper()
+	dir := f.path(name)
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if file != "" {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte("services: {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestComposeProjectUp(t *testing.T) {
+	f := newEditHarness(t)
+	dir := projectFolder(t, f, "streaming-stack", "compose.yaml")
+	f.da.composeRes = docker.ComposeResult{Output: []string{"Container aiostreams Started", "Container jellyfin Started"}}
+
+	out := f.act(t, "docker_compose_project_up", map[string]any{"folder": dir, "pull": true})
+	if out.Status != "pending" || out.ResourceType != "folder" || out.Resource != dir {
+		t.Fatalf("got %+v", out)
+	}
+	if len(f.da.projects) != 0 {
+		t.Fatal("started before approval")
+	}
+	req, _ := f.store.Get(out.ID)
+	file := filepath.Join(dir, "compose.yaml")
+	want := "docker compose --project-name streaming-stack --project-directory " + dir + " -f " + file + " up -d --pull always"
+	if !slices.Contains(req.Details, want) || !strings.Contains(strings.Join(req.Details, "\n"), "sha256 ") {
+		t.Errorf("owner sees %q", req.Details)
+	}
+	if !slices.Equal(req.Params, []approval.Param{{Name: "pull", Value: "true"}}) {
+		t.Errorf("params %+v", req.Params)
+	}
+	f.approve(t, out.ID)
+	if len(f.da.projects) != 1 || f.da.projects[0].Project != "streaming-stack" || f.da.projects[0].File != file || !f.da.projPulls[0] {
+		t.Fatalf("ran %+v %v", f.da.projects, f.da.projPulls)
+	}
+	done := f.act(t, "request_status", map[string]any{"id": out.ID})
+	if done.Status != "done" || done.Result.Summary != "docker compose exited with status 0" || len(done.Result.Details) != 2 {
+		t.Errorf("got %+v", done)
+	}
+}
+
+func TestComposeProjectUpPrefersComposeYaml(t *testing.T) {
+	f := newEditHarness(t)
+	dir := projectFolder(t, f, "app", "docker-compose.yml")
+	f.approve(t, f.act(t, "docker_compose_project_up", map[string]any{"folder": dir}).ID)
+	if len(f.da.projects) != 1 || filepath.Base(f.da.projects[0].File) != "docker-compose.yml" {
+		t.Fatalf("ran %+v", f.da.projects)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.approve(t, f.act(t, "docker_compose_project_up", map[string]any{"folder": dir}).ID)
+	if len(f.da.projects) != 2 || filepath.Base(f.da.projects[1].File) != "compose.yaml" {
+		t.Fatalf("ran %+v", f.da.projects)
+	}
+}
+
+func TestComposeProjectUpRefusals(t *testing.T) {
+	f := newEditHarness(t)
+	empty := projectFolder(t, f, "empty", "")
+	dir := projectFolder(t, f, "stack", "compose.yaml")
+	odd := projectFolder(t, f, "---", "compose.yaml")
+	plain := f.write(t, "plain.txt", "x\n")
+	for _, c := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"relative", map[string]any{"folder": "stack"}, "path"},
+		{"missing", map[string]any{"folder": f.path("nope")}, "does not exist or is not allowed"},
+		{"blocked", map[string]any{"folder": f.path("blocked")}, "does not exist or is not allowed"},
+		{"a file", map[string]any{"folder": plain}, "not a directory"},
+		{"no compose file", map[string]any{"folder": empty}, "no compose file"},
+		{"bad project name", map[string]any{"folder": odd}, "project name"},
+		{"extra field", map[string]any{"folder": dir, "file": "/tmp/x.yaml"}, ""},
+	} {
+		if got := f.refusal(t, "docker_compose_project_up", c.args); !strings.Contains(got, c.want) {
+			t.Errorf("%s: %q", c.name, got)
+		}
+	}
+	f.da.existing = []string{"jellyfin", "secret-vault"}
+	if got := f.refusal(t, "docker_compose_project_up", map[string]any{"folder": dir}); !strings.Contains(got, "does not exist or is not allowed") {
+		t.Errorf("excluded container: %q", got)
+	}
+	f.da.existing = nil
+	f.da.projectErr = docker.ErrProjectConflict
+	if got := f.refusal(t, "docker_compose_project_up", map[string]any{"folder": dir}); got != docker.ErrProjectConflict.Error() {
+		t.Errorf("conflict: %q", got)
+	}
+	if len(f.store.List(false, 0)) != 0 || len(f.da.projects) != 0 {
+		t.Error("a refused request was stored or run")
+	}
+}
+
+func TestComposeProjectUpFileChangedBeforeApproval(t *testing.T) {
+	f := newEditHarness(t)
+	dir := projectFolder(t, f, "stack", "compose.yaml")
+	out := f.act(t, "docker_compose_project_up", map[string]any{"folder": dir})
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services: {web: {privileged: true}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.approve(t, out.ID)
+	done := f.act(t, "request_status", map[string]any{"id": out.ID})
+	if done.Status != "failed" || !strings.Contains(done.Result.Summary, "changed after the request") || len(f.da.projects) != 0 {
+		t.Errorf("got %+v, ran %v", done, f.da.projects)
+	}
+}
+
+func TestComposeProjectUpExcludedContainerAppearsBeforeApproval(t *testing.T) {
+	f := newEditHarness(t)
+	dir := projectFolder(t, f, "stack", "compose.yaml")
+	out := f.act(t, "docker_compose_project_up", map[string]any{"folder": dir})
+	f.da.existing = []string{"secret-vault"}
+	f.approve(t, out.ID)
+	if done := f.act(t, "request_status", map[string]any{"id": out.ID}); done.Status != "failed" || len(f.da.projects) != 0 {
+		t.Errorf("got %+v, ran %v", done, f.da.projects)
+	}
+}

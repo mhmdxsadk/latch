@@ -72,6 +72,11 @@ type fakeDockerActions struct {
 	composeRes docker.ComposeResult
 	composeErr error
 	block      chan struct{}
+
+	existing   []string // containers already in any project
+	projectErr error
+	projects   []docker.ProjectTarget
+	projPulls  []bool
 }
 
 func (f *fakeDockerActions) record(s string) {
@@ -114,6 +119,27 @@ func (f *fakeDockerActions) ComposeUp(_ context.Context, t docker.ComposeTarget,
 	defer f.mu.Unlock()
 	f.composed = append(f.composed, t)
 	f.pulls = append(f.pulls, pull)
+	return f.composeRes, f.composeErr
+}
+
+func (f *fakeDockerActions) ProjectTarget(_ context.Context, dir, file string) (docker.ProjectTarget, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "project "+dir)
+	if f.projectErr != nil {
+		return docker.ProjectTarget{}, f.projectErr
+	}
+	name, err := docker.ProjectName(dir)
+	if err != nil {
+		return docker.ProjectTarget{}, err
+	}
+	return docker.ProjectTarget{Project: name, Dir: dir, File: file, Existing: slices.Clone(f.existing)}, nil
+}
+func (f *fakeDockerActions) ComposeProjectUp(_ context.Context, t docker.ProjectTarget, pull bool) (docker.ComposeResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.projects = append(f.projects, t)
+	f.projPulls = append(f.projPulls, pull)
 	return f.composeRes, f.composeErr
 }
 

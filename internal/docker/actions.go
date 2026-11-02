@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -39,6 +40,11 @@ type Mutator interface {
 	ComposeTarget(ctx context.Context, name string) (ComposeTarget, error)
 	// ComposeUp runs "docker compose up -d" for exactly one service.
 	ComposeUp(ctx context.Context, t ComposeTarget, pull bool) (ComposeResult, error)
+	// ProjectTarget validates a folder and compose file and finds the
+	// containers that already belong to the project.
+	ProjectTarget(ctx context.Context, dir, file string) (ProjectTarget, error)
+	// ComposeProjectUp runs "docker compose up -d" for the whole project.
+	ComposeProjectUp(ctx context.Context, t ProjectTarget, pull bool) (ComposeResult, error)
 }
 
 var _ Mutator = (*Actions)(nil)
@@ -151,10 +157,27 @@ func (a *Actions) ComposeTarget(ctx context.Context, name string) (ComposeTarget
 // serviceContainers lists the names of every container (running or not)
 // labelled with the compose project and service.
 func (a *Actions) serviceContainers(ctx context.Context, project, service string) ([]string, error) {
-	filters, err := json.Marshal(map[string][]string{"label": {
-		labelProject + "=" + project,
-		labelService + "=" + service,
-	}})
+	list, err := a.listByLabels(ctx, labelProject+"="+project, labelService+"="+service)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(list))
+	for _, c := range list {
+		names = append(names, c.name)
+	}
+	return names, nil
+}
+
+// listed is one entry of a label-filtered container list.
+type listed struct {
+	name   string
+	labels map[string]string
+}
+
+// listByLabels lists every container (running or not) that has all the given
+// labels, each "key=value".
+func (a *Actions) listByLabels(ctx context.Context, labels ...string) ([]listed, error) {
+	filters, err := json.Marshal(map[string][]string{"label": labels})
 	if err != nil {
 		return nil, errors.New("docker: bad filter")
 	}
@@ -166,22 +189,59 @@ func (a *Actions) serviceContainers(ctx context.Context, project, service string
 	}
 	defer done()
 	defer resp.Body.Close()
-	var items []struct{ Names []string }
+	var items []struct {
+		Names  []string
+		Labels map[string]string
+	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxListBody)).Decode(&items); err != nil {
 		return nil, errors.New("docker: malformed list response")
 	}
-	var names []string
+	var out []listed
 	for _, it := range items {
 		for _, n := range it.Names {
 			if name, ok := strings.CutPrefix(n, "/"); ok && !strings.Contains(name, "/") {
 				// Keep names Latch would refuse to address too: the
 				// caller must see every container the command touches.
-				names = append(names, name)
+				out = append(out, listed{name: name, labels: it.Labels})
 				break
 			}
 		}
 	}
-	return names, nil
+	return out, nil
+}
+
+// ProjectTarget validates the folder and compose file (see
+// CheckProjectFiles) and lists the containers that already belong to the
+// project. It fails with ErrProjectConflict when a container has the
+// project's name but another folder, or the folder but another project:
+// compose would take those containers over.
+func (a *Actions) ProjectTarget(ctx context.Context, dir, file string) (ProjectTarget, error) {
+	name, err := ProjectName(dir)
+	if err != nil {
+		return ProjectTarget{}, err
+	}
+	t := ProjectTarget{Project: name, Dir: dir, File: file}
+	if err := CheckProjectFiles(t, osStat); err != nil {
+		return ProjectTarget{}, err
+	}
+	seen := map[string]bool{}
+	for _, label := range []string{labelProject + "=" + name, labelWorkingDir + "=" + dir} {
+		list, err := a.listByLabels(ctx, label)
+		if err != nil {
+			return ProjectTarget{}, err
+		}
+		for _, c := range list {
+			if c.labels[labelProject] != name || c.labels[labelWorkingDir] != dir {
+				return ProjectTarget{}, ErrProjectConflict
+			}
+			if !seen[c.name] {
+				seen[c.name] = true
+				t.Existing = append(t.Existing, c.name)
+			}
+		}
+	}
+	slices.Sort(t.Existing)
+	return t, nil
 }
 
 // ComposeUp runs "docker compose up -d --no-deps" for the target's service.
@@ -195,4 +255,14 @@ func (a *Actions) ComposeUp(ctx context.Context, t ComposeTarget, pull bool) (Co
 		return ComposeResult{}, err
 	}
 	return a.compose.run(ctx, t.WorkingDir, ComposeArgs(t, pull))
+}
+
+// ComposeProjectUp runs "docker compose up -d" for the whole project. A
+// non-zero exit status is returned as ErrComposeFailed together with the
+// result.
+func (a *Actions) ComposeProjectUp(ctx context.Context, t ProjectTarget, pull bool) (ComposeResult, error) {
+	if err := CheckProjectFiles(t, osStat); err != nil {
+		return ComposeResult{}, err
+	}
+	return a.compose.run(ctx, t.Dir, ProjectArgs(t, pull))
 }

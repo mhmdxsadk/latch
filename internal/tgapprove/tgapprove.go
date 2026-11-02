@@ -536,6 +536,8 @@ func (a *Approver) phrase(r approval.Request, past bool) string {
 		return verb("start ", "started ") + thing
 	case "docker_compose_up":
 		return verb("recreate ", "recreated ") + thing + " with docker compose"
+	case "docker_compose_project_up":
+		return verb("start the compose project in ", "started the compose project in ") + name
 	case "file_edit":
 		return verb("edit ", "edited ") + name
 	case "file_create":
