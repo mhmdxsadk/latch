@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/mhmdxsadk/latch/compare/v0.23.0...v0.24.0) (2026-11-02)
+
+
+### Features
+
+* **docker:** add docker_compose_project_up to start a project from a folder ([5d57480](https://github.com/mhmdxsadk/latch/commit/5d5748073bd2cc964667ed13ef6f270becd18755))
+
 ## [0.23.0](https://github.com/mhmdxsadk/latch/compare/v0.22.0...v0.23.0) (2026-11-02)
 
 
