@@ -43,7 +43,7 @@ agent:
   #   permissions:
   #     allow: [docker_restart, systemd_restart, docker_stop, docker_start,
   #             systemd_stop, systemd_start, docker_compose_up, file_edit,
-  #             file_create, file_restore, http_request]
+  #             file_create, file_restore, dir_create, http_request]
   # Allowed tools skip pre_tool_use hooks; put checks that must always run
   # under tool_guard instead.
   args: [--safety, restricted]

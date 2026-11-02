@@ -314,6 +314,59 @@ func TestCreate(t *testing.T) {
 	}
 }
 
+func TestMkdir(t *testing.T) {
+	f, e := newEditorFixture(t)
+	ctx := context.Background()
+	p := f.path("public/stack")
+	nf, err := e.ResolveNew(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Mkdir(ctx, p, nf, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(p)
+	if err != nil || !fi.IsDir() || fi.Mode().Perm() != 0o750 {
+		t.Fatalf("folder %v %v", fi, err)
+	}
+	parent, _ := os.Stat(f.path("public"))
+	ps, cs := parent.Sys().(*syscall.Stat_t), fi.Sys().(*syscall.Stat_t)
+	if ps.Uid != cs.Uid || ps.Gid != cs.Gid {
+		t.Errorf("owner %d:%d, parent %d:%d", cs.Uid, cs.Gid, ps.Uid, ps.Gid)
+	}
+	if err := e.Mkdir(ctx, p, nf, 0o750); !errors.Is(err, ErrExists) {
+		t.Errorf("second mkdir: %v", err)
+	}
+	// Something appearing at the name after the request is never replaced.
+	q := f.path("public/late")
+	nf, _ = e.ResolveNew(ctx, q)
+	f.symlink(f.blocked, "public/late")
+	if err := e.Mkdir(ctx, q, nf, 0o755); !errors.Is(err, ErrExists) {
+		t.Errorf("late: %v", err)
+	}
+	if err := e.Mkdir(ctx, f.path("public/s"), NewFile{}, 0o1755); !errors.Is(err, ErrSpecialBits) {
+		t.Errorf("sticky: %v", err)
+	}
+	if err := e.Mkdir(ctx, f.path("public/other"), NewFile{}, 0o755); !errors.Is(err, ErrChanged) {
+		t.Errorf("stale plan: %v", err)
+	}
+	if _, err := e.ResolveNew(ctx, f.path("missing/x")); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing parent: %v", err)
+	}
+	if _, err := e.ResolveNew(ctx, filepath.Join(f.blocked, "x")); !errors.Is(err, ErrBlocked) {
+		t.Errorf("blocked: %v", err)
+	}
+	e.beforeCommit = func() error { return errors.New("disk full") }
+	r := f.path("public/failed")
+	nf, _ = e.ResolveNew(ctx, r)
+	if err := e.Mkdir(ctx, r, nf, 0o755); err == nil {
+		t.Error("expected the hook error")
+	}
+	if _, err := os.Lstat(r); err == nil {
+		t.Error("folder left behind")
+	}
+}
+
 func TestIsUnitPath(t *testing.T) {
 	for p, want := range map[string]bool{
 		"/etc/systemd/system/web.service":                 true,

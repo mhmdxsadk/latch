@@ -360,6 +360,43 @@ func TestFileCreate(t *testing.T) {
 	}
 }
 
+func TestDirCreate(t *testing.T) {
+	f := newEditHarness(t)
+	p := f.path("stack")
+	out := f.act(t, "dir_create", map[string]any{"path": p})
+	if out.Status != "pending" {
+		t.Fatalf("got %+v", out)
+	}
+	if _, err := os.Stat(p); err == nil {
+		t.Fatal("created before approval")
+	}
+	f.approve(t, out.ID)
+	if fi, err := os.Stat(p); err != nil || !fi.IsDir() || fi.Mode().Perm() != 0o755 {
+		t.Errorf("folder %v %v", fi, err)
+	}
+	q := f.path("private")
+	f.approve(t, f.act(t, "dir_create", map[string]any{"path": q, "mode": "0700"}).ID)
+	if fi, err := os.Stat(q); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("folder %v %v", fi, err)
+	}
+	existing := f.write(t, "old.conf", "x\n")
+	for _, c := range []struct {
+		args map[string]any
+		want string
+	}{
+		{map[string]any{"path": p}, "already exists"},
+		{map[string]any{"path": existing}, "already exists"},
+		{map[string]any{"path": f.path("b"), "mode": "0777"}, "mode"},
+		{map[string]any{"path": f.path("b"), "mode": "1755"}, "mode"},
+		{map[string]any{"path": f.path("blocked/b")}, "does not exist or is not allowed"},
+		{map[string]any{"path": f.path("nofolder/b")}, "does not exist or is not allowed"},
+	} {
+		if got := f.refusal(t, "dir_create", c.args); !strings.Contains(got, c.want) {
+			t.Errorf("%v: %q", c.args, got)
+		}
+	}
+}
+
 func TestFileRestore(t *testing.T) {
 	f := newEditHarness(t)
 	p := f.write(t, "a.conf", "v=1\nSECRET="+planted+"\n")

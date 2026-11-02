@@ -362,6 +362,75 @@ func (e *Editor) Create(ctx context.Context, p string, want NewFile, content []b
 	return syncFD(dfd)
 }
 
+// Mkdir makes one new directory at p with permission bits perm, owned like
+// its parent directory. The parent must exist: Mkdir never makes parents. It
+// fails with ErrExists if anything exists at p when it is made.
+func (e *Editor) Mkdir(ctx context.Context, p string, want NewFile, perm fs.FileMode) error {
+	if perm&^fs.ModePerm != 0 {
+		return ErrSpecialBits
+	}
+	if err := ValidatePath(p); err != nil {
+		return err
+	}
+	c, err := e.guard.session(ctx)
+	if err != nil {
+		return err
+	}
+	nf, err := c.resolveNew(p)
+	if err != nil {
+		return err
+	}
+	if nf != want {
+		return ErrChanged
+	}
+	parent, _, err := c.open(filepath.Dir(nf.Path), kindDir)
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	pfd := int(parent.Fd()) //nolint:gosec // a valid descriptor
+	name := filepath.Base(nf.Path)
+	if e.beforeCommit != nil {
+		if err := e.beforeCommit(); err != nil {
+			return err
+		}
+	}
+	// Made 0700 and given its final owner and mode through the descriptor,
+	// so neither the umask nor the parent's setgid bit decides them.
+	if err := unix.Mkdirat(pfd, name, 0o700); err != nil {
+		if errors.Is(err, unix.EEXIST) {
+			return ErrExists
+		}
+		return err
+	}
+	fail := func(err error) error {
+		_ = unix.Unlinkat(pfd, name, unix.AT_REMOVEDIR)
+		return err
+	}
+	const flags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
+	var fd int
+	for {
+		fd, err = unix.Openat(pfd, name, flags, 0)
+		if !errors.Is(err, unix.EINTR) {
+			break
+		}
+	}
+	if err != nil {
+		return fail(err)
+	}
+	defer unix.Close(fd) //nolint:errcheck // nothing to do about it
+	if nf.UID >= 0 && nf.GID >= 0 {
+		if err := unix.Fchown(fd, nf.UID, nf.GID); err != nil {
+			return fail(err)
+		}
+	}
+	// After chown, which may clear mode bits.
+	if err := unix.Fchmod(fd, uint32(perm.Perm())); err != nil {
+		return fail(err)
+	}
+	return syncFD(pfd)
+}
+
 // unitDirs hold systemd unit files; a change below one needs a
 // daemon-reload.
 var unitDirs = []string{"/etc/systemd/system", "/run/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"}

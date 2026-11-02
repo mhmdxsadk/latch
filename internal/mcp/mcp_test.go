@@ -136,7 +136,7 @@ func TestToolSurfaceIsFixed(t *testing.T) {
 		"docker_restart": false, "docker_stop": false, "docker_start": false, "docker_compose_up": false,
 		"systemd_restart": false, "systemd_stop": false, "systemd_start": false,
 		"file_backups": true,
-		"file_edit":    false, "file_create": false, "file_restore": false, "http_request": false,
+		"file_edit":    false, "file_create": false, "file_restore": false, "dir_create": false, "http_request": false,
 	}
 	for _, tool := range res.Tools {
 		readOnly, ok := want[tool.Name]

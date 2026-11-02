@@ -96,7 +96,7 @@ Latch checks resolved addresses and redirects to prevent bypasses.
 
 Changes use `docker_restart`, `docker_stop`, `docker_start`,
 `docker_compose_up`, `systemd_restart`, `systemd_stop`, `systemd_start`,
-`file_edit`, `file_create`, `file_restore` and `http_request`.
+`file_edit`, `file_create`, `file_restore`, `dir_create` and `http_request`.
 
 `limits` bounds log output. File reads and searches have bounds too, and Latch
 refuses binary files. `net_http_get` sends a plain GET without agent-supplied

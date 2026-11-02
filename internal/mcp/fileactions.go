@@ -58,6 +58,7 @@ var (
 	errRestartTarget = userError{"restart must name exactly one of container or unit"}
 	errRestartSelf   = userError{"Latch cannot restart latch.service after a change; restart it yourself later"}
 	errBadMode       = userError{"mode must be an octal string such as 0644 or 0600: no setuid, setgid or sticky bits, and not writable by everyone"}
+	errDirExists     = userError{"a file or folder already exists at that path"}
 	errNoBackupID    = userError{"backup must be a backup id from file_backups, such as 20261025T143000Z"}
 
 	// errTargetDown, errStillDown and errReloadFailed end an execution
@@ -84,6 +85,11 @@ type fileCreateIn struct {
 	Path    string `json:"path" jsonschema:"absolute, clean path of the new file; its folder must exist"`
 	Content string `json:"content" jsonschema:"text content, up to 1 MiB"`
 	Mode    string `json:"mode,omitempty" jsonschema:"permission bits as an octal string; default 0644"`
+}
+
+type dirCreateIn struct {
+	Path string `json:"path" jsonschema:"absolute, clean path of the new folder; its parent folder must exist"`
+	Mode string `json:"mode,omitempty" jsonschema:"permission bits as an octal string; default 0755"`
 }
 
 type fileBackupsIn struct {
@@ -566,14 +572,54 @@ func (a *fileCreate) Execute(ctx context.Context) (approval.Result, error) {
 	return approval.Result{Summary: sum + note}, err
 }
 
+// dirCreate makes one new folder.
+type dirCreate struct {
+	d       *Deps
+	path    string
+	target  files.NewFile
+	mode    fs.FileMode
+	details []string
+}
+
+func (a *dirCreate) Kind() string { return "dir_create" }
+func (a *dirCreate) Resource() approval.Resource {
+	return approval.Resource{Type: "folder", Name: a.target.Path}
+}
+func (a *dirCreate) Mode() approval.Mode { return approval.Always }
+func (a *dirCreate) Describe() []string  { return a.details }
+func (a *dirCreate) Params() []approval.Param {
+	return []approval.Param{{Name: "path", Value: a.target.Path}, {Name: "mode", Value: modeText(a.mode)}}
+}
+
+func (a *dirCreate) Check(ctx context.Context) error {
+	nf, err := a.d.Editor.ResolveNew(ctx, a.path)
+	if err != nil {
+		return err
+	}
+	if nf != a.target {
+		return files.ErrChanged
+	}
+	return nil
+}
+
+func (a *dirCreate) Execute(ctx context.Context) (approval.Result, error) {
+	if err := a.d.Editor.Mkdir(ctx, a.path, a.target, a.mode); err != nil {
+		return approval.Result{}, err
+	}
+	return approval.Result{Summary: "created folder " + a.target.Path + " (mode " + modeText(a.mode) + ")"}, nil
+}
+
 func modeText(m fs.FileMode) string { return fmt.Sprintf("%04o", uint32(m.Perm())) }
 
 var modePattern = regexp.MustCompile(`^0?[0-7]{3}$`)
 
 // parseMode accepts permission bits only, not writable by everyone.
-func parseMode(s string) (fs.FileMode, error) {
+func parseMode(s string) (fs.FileMode, error) { return parseModeOr(s, 0o644) }
+
+// parseModeOr is parseMode with the mode used when s is empty.
+func parseModeOr(s string, def fs.FileMode) (fs.FileMode, error) {
 	if s == "" {
-		return 0o644, nil
+		return def, nil
 	}
 	if !modePattern.MatchString(s) {
 		return 0, errBadMode
@@ -677,6 +723,33 @@ func registerFileActions(s *sdk.Server, d *Deps) {
 			details = append(details, "then run systemd daemon-reload")
 		}
 		out, err := d.submit(ctx, &fileCreate{d: d, path: in.Path, target: nf, content: []byte(in.Content), mode: mode, details: details})
+		return out, in.Path, err
+	}))
+
+	sdk.AddTool(s, &sdk.Tool{
+		Name: "dir_create",
+		Description: "Create one new folder on the host. It fails if anything exists at the path. The parent folder must exist, " +
+			"so create each missing level in turn. The folder gets its parent's owner and group and the given mode " +
+			"(default 0755; no setuid, setgid or sticky bits, and never writable by everyone)." + alwaysNote + approvalNote,
+		Annotations: changeAnnotations(false, false),
+	}, wrap(d, "dir_create", func(ctx context.Context, in dirCreateIn) (actionOut, string, error) {
+		if err := files.ValidatePath(in.Path); err != nil {
+			return actionOut{}, "", err
+		}
+		mode, err := parseModeOr(in.Mode, 0o755)
+		if err != nil {
+			return actionOut{}, in.Path, err
+		}
+		nf, err := d.Editor.ResolveNew(ctx, in.Path)
+		if errors.Is(err, files.ErrExists) {
+			return actionOut{}, in.Path, errDirExists
+		}
+		if err != nil {
+			return actionOut{}, in.Path, err
+		}
+		details := append([]string{fmt.Sprintf("create folder %s (mode %s, owner uid %d gid %d)", nf.Path, modeText(mode), nf.UID, nf.GID)},
+			requestedAs(in.Path, nf.Path)...)
+		out, err := d.submit(ctx, &dirCreate{d: d, path: in.Path, target: nf, mode: mode, details: details})
 		return out, in.Path, err
 	}))
 

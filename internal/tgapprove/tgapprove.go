@@ -540,6 +540,8 @@ func (a *Approver) phrase(r approval.Request, past bool) string {
 		return verb("edit ", "edited ") + name
 	case "file_create":
 		return verb("create ", "created ") + name
+	case "dir_create":
+		return verb("create folder ", "created folder ") + name
 	case "file_restore":
 		if r.RunsOnTimeout {
 			return verb("undo the change to ", "undid the change to ") + name
