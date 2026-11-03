@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.28.0](https://github.com/mhmdxsadk/latch/compare/v0.27.0...v0.28.0) (2026-11-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **telegram:** agent.checks is no longer accepted in telegram.yaml, and /sessions is replaced by /threads.
+
+### Features
+
+* **telegram:** remove /check, rename sessions to threads ([4a6deb0](https://github.com/mhmdxsadk/latch/commit/4a6deb0ca336fea6230b5e935e2d2791ddf2f294))
+
 ## [0.27.0](https://github.com/mhmdxsadk/latch/compare/v0.26.0...v0.27.0) (2026-11-03)
 
 
