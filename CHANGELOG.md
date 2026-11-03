@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/mhmdxsadk/latch/compare/v0.25.0...v0.26.0) (2026-11-03)
+
+
+### Features
+
+* **telegram:** answer a burst of messages together, each as a reply ([48ed135](https://github.com/mhmdxsadk/latch/commit/48ed135177953384a37ad7bd433327d0246774c9))
+
 ## [0.25.0](https://github.com/mhmdxsadk/latch/compare/v0.24.0...v0.25.0) (2026-11-03)
 
 
