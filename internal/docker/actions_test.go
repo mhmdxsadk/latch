@@ -31,8 +31,8 @@ func (f *fakeRunner) run(_ context.Context, dir string, args []string) (ComposeR
 }
 
 // newActionsFake serves h and fails the test on any request outside the
-// endpoints Actions may use: exact-name inspect, the three POSTs on the full
-// ID, and the label-filtered container list.
+// endpoints Actions may use: exact-name inspect, the three POSTs and the DELETE on the
+// full ID, and the label-filtered container list.
 func newActionsFake(t *testing.T, h http.HandlerFunc) (*Actions, *recorder, *fakeRunner) {
 	t.Helper()
 	rec := &recorder{}
@@ -47,6 +47,8 @@ func newActionsFake(t *testing.T, h http.HandlerFunc) (*Actions, *recorder, *fak
 			ok = r.URL.Path == "/containers/"+testID+"/restart" ||
 				r.URL.Path == "/containers/"+testID+"/stop" ||
 				r.URL.Path == "/containers/"+testID+"/start"
+		case http.MethodDelete:
+			ok = r.URL.Path == "/containers/"+testID
 		}
 		if !ok {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL)
@@ -101,6 +103,82 @@ func TestActionsPostByFullID(t *testing.T) {
 				t.Error("POST must have no body")
 			}
 		})
+	}
+}
+
+func TestActionsRemove(t *testing.T) {
+	stoppedFixture := strings.Replace(fixture(false), `"Running": true`, `"Running": false`, 1)
+	for _, tc := range []struct {
+		name        string
+		body        string
+		wantStopped bool
+		wantPaths   []string
+	}{
+		{"running", fixture(false), true, []string{"GET /containers/web/json", "POST /containers/" + testID + "/stop", "DELETE /containers/" + testID}},
+		{"stopped", stoppedFixture, false, []string{"GET /containers/web/json", "DELETE /containers/" + testID}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, rec, _ := newActionsFake(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodDelete {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				answerInspect(w, r, tc.body, http.StatusNoContent)
+			})
+			stopped, err := a.Remove(context.Background(), "web")
+			if err != nil || stopped != tc.wantStopped {
+				t.Fatalf("stopped=%v err=%v", stopped, err)
+			}
+			var got []string
+			for _, r := range rec.reqs {
+				got = append(got, r.Method+" "+r.URL.Path)
+			}
+			if !slices.Equal(got, tc.wantPaths) {
+				t.Fatalf("requests %v, want %v", got, tc.wantPaths)
+			}
+			del := rec.reqs[len(rec.reqs)-1]
+			q := del.URL.Query()
+			if q.Get("v") != "0" || q.Get("force") != "0" || q.Get("link") != "0" {
+				t.Errorf("DELETE query %q must keep volumes and not force", del.URL.RawQuery)
+			}
+			if del.ContentLength > 0 {
+				t.Error("DELETE must have no body")
+			}
+		})
+	}
+}
+
+func TestActionsRemoveErrors(t *testing.T) {
+	for _, tc := range []struct {
+		status   int
+		notFound bool
+	}{{404, true}, {409, false}, {500, false}} {
+		a, _, _ := newActionsFake(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodDelete {
+				w.WriteHeader(tc.status)
+				return
+			}
+			answerInspect(w, r, fixture(false), http.StatusNoContent)
+		})
+		_, err := a.Remove(context.Background(), "web")
+		if err == nil || errors.Is(err, ErrNotFound) != tc.notFound {
+			t.Errorf("status %d: %v", tc.status, err)
+		}
+	}
+}
+
+// A failed stop must not be followed by a DELETE.
+func TestActionsRemoveStopFailure(t *testing.T) {
+	a, rec, _ := newActionsFake(t, func(w http.ResponseWriter, r *http.Request) {
+		answerInspect(w, r, fixture(false), http.StatusInternalServerError)
+	})
+	if _, err := a.Remove(context.Background(), "web"); err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, r := range rec.reqs {
+		if r.Method == http.MethodDelete {
+			t.Error("DELETE sent after the stop failed")
+		}
 	}
 }
 
@@ -179,6 +257,9 @@ func TestActionsInvalidNamesRejectedBeforeRequest(t *testing.T) {
 		}
 		if _, err := a.Start(context.Background(), n); err == nil {
 			t.Errorf("Start(%q) accepted", n)
+		}
+		if _, err := a.Remove(context.Background(), n); err == nil {
+			t.Errorf("Remove(%q) accepted", n)
 		}
 		if _, err := a.ComposeTarget(context.Background(), n); err == nil {
 			t.Errorf("ComposeTarget(%q) accepted", n)

@@ -534,6 +534,8 @@ func (a *Approver) phrase(r approval.Request, past bool) string {
 		return verb("stop ", "stopped ") + thing
 	case "docker_start", "systemd_start":
 		return verb("start ", "started ") + thing
+	case "docker_remove":
+		return verb("remove ", "removed ") + thing
 	case "docker_compose_up":
 		return verb("recreate ", "recreated ") + thing + " with docker compose"
 	case "docker_compose_project_up":

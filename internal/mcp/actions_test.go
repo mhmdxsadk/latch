@@ -106,6 +106,10 @@ func (f *fakeDockerActions) Start(_ context.Context, n string) (bool, error) {
 	f.record("start " + n)
 	return false, nil
 }
+func (f *fakeDockerActions) Remove(_ context.Context, n string) (bool, error) {
+	f.record("remove " + n)
+	return true, nil
+}
 func (f *fakeDockerActions) ComposeTarget(_ context.Context, n string) (docker.ComposeTarget, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -394,6 +398,7 @@ func TestStopAndStartAlwaysNeedApproval(t *testing.T) {
 	for _, tc := range []struct{ tool, key, name string }{
 		{"docker_stop", "name", "my-web"},
 		{"docker_start", "name", "my-web"},
+		{"docker_remove", "name", "my-web"},
 		{"systemd_stop", "unit", "nginx.service"},
 		{"systemd_start", "unit", "nginx.service"},
 	} {
@@ -409,7 +414,7 @@ func TestStopAndStartAlwaysNeedApproval(t *testing.T) {
 	for _, id := range ids {
 		a.approve(t, id)
 	}
-	if got := a.da.Calls(); !slices.Equal(got, []string{"stop my-web", "start my-web"}) {
+	if got := a.da.Calls(); !slices.Equal(got, []string{"stop my-web", "start my-web", "remove my-web"}) {
 		t.Errorf("docker calls %v", got)
 	}
 	if got := a.sa.Calls(); !slices.Equal(got, []string{"stop nginx.service", "start nginx.service"}) {
@@ -419,7 +424,7 @@ func TestStopAndStartAlwaysNeedApproval(t *testing.T) {
 		t.Errorf("got %+v", got.Result)
 	}
 	list := structured[actionsListOut](t, a.harness, "request_list", map[string]any{})
-	if len(list.Requests) != 4 || list.Requests[0].ID != ids[0] {
+	if len(list.Requests) != 5 || list.Requests[0].ID != ids[0] {
 		t.Errorf("list %+v", list)
 	}
 }
@@ -434,6 +439,7 @@ func TestExcludedRefusedLikeMissing(t *testing.T) {
 		{"docker_restart", "name", "secret-vault", "gone"},
 		{"docker_stop", "name", "secret-vault", "gone"},
 		{"docker_start", "name", "secret-vault", "gone"},
+		{"docker_remove", "name", "secret-vault", "gone"},
 		{"docker_compose_up", "name", "secret-vault", "gone"},
 		{"systemd_restart", "unit", "vault.service", "gone.service"},
 		{"systemd_stop", "unit", "vault.service", "gone.service"},
@@ -458,7 +464,7 @@ func TestExcludedRefusedLikeMissing(t *testing.T) {
 func TestInvalidInputRejectedBeforeIntegration(t *testing.T) {
 	a := newActHarness(t, 5*time.Second)
 	bad := []any{"", "../web", "web;id", "-v", "web name", "my-web\n", strings.Repeat("a", 300), 5, nil}
-	for _, tool := range []string{"docker_restart", "docker_stop", "docker_start", "docker_compose_up"} {
+	for _, tool := range []string{"docker_restart", "docker_stop", "docker_start", "docker_remove", "docker_compose_up"} {
 		for _, n := range bad {
 			a.refusal(t, tool, map[string]any{"name": n})
 		}

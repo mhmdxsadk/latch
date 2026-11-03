@@ -16,11 +16,11 @@ import (
 // Actions changes containers. It is separate from Engine so the read client
 // stays GET-only: Actions sends exactly three POST requests,
 // /containers/{id}/restart, /containers/{id}/stop and /containers/{id}/start,
-// plus the GETs it needs to find the container (exact-name inspect) and its
-// compose siblings (/containers/json filtered by compose labels). It always
-// acts on the full ID it resolved from the exact name, so a container cannot
-// be reached through an ID prefix, and runs "docker compose up" only through
-// ComposeUp's fixed argument list.
+// one DELETE, /containers/{id}, plus the GETs it needs to find the container
+// (exact-name inspect) and its compose siblings (/containers/json filtered by
+// compose labels). It always acts on the full ID it resolved from the exact
+// name, so a container cannot be reached through an ID prefix, and runs
+// "docker compose up" only through ComposeUp's fixed argument list.
 type Actions struct {
 	// read is used only for its exact-name inspect and list GETs.
 	read *Engine
@@ -36,6 +36,9 @@ type Mutator interface {
 	Restart(ctx context.Context, name string) error
 	Stop(ctx context.Context, name string) (changed bool, err error)
 	Start(ctx context.Context, name string) (changed bool, err error)
+	// Remove stops the container if it runs, then removes it. Volumes and
+	// bind-mounted folders are never touched.
+	Remove(ctx context.Context, name string) (stopped bool, err error)
 	// ComposeTarget reads and validates the compose labels of the container.
 	ComposeTarget(ctx context.Context, name string) (ComposeTarget, error)
 	// ComposeUp runs "docker compose up -d" for exactly one service.
@@ -70,13 +73,18 @@ func newActions(base string, rt http.RoundTripper, r composeRunner) *Actions {
 // post sends a bodiless POST and accepts 204, or 304 when notModified is
 // allowed. It reports whether the answer was 204.
 func (a *Actions) post(ctx context.Context, path, query string, notModified bool) (bool, error) {
+	return a.send(ctx, http.MethodPost, path, query, notModified)
+}
+
+// send sends a bodiless request with the given method; see post.
+func (a *Actions) send(ctx context.Context, method, path, query string, notModified bool) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, actionTimeout)
 	defer cancel()
 	u := a.read.base + path
 	if query != "" {
 		u += "?" + query
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
+	req, err := http.NewRequestWithContext(ctx, method, u, nil)
 	if err != nil {
 		return false, errors.New("docker: bad request")
 	}
@@ -129,6 +137,32 @@ func (a *Actions) Stop(ctx context.Context, name string) (bool, error) {
 // Start starts the container.
 func (a *Actions) Start(ctx context.Context, name string) (bool, error) {
 	return a.act(ctx, name, "start", "", true)
+}
+
+// removeQuery keeps volumes (v=0), refuses to kill a running container
+// (force=0) and does not remove links (link=0).
+const removeQuery = "v=0&force=0&link=0"
+
+// Remove removes the container. A running container is stopped first, with
+// the same StopTimeout as Stop, so Docker never kills it just to remove it.
+// Volumes are kept and bind-mounted folders are never touched. It reports
+// whether it had to stop the container.
+func (a *Actions) Remove(ctx context.Context, name string) (bool, error) {
+	in, err := a.resolve(ctx, name)
+	if err != nil {
+		return false, err
+	}
+	stopped := false
+	if in.State.Running || in.State.Restarting || in.State.Paused {
+		if _, err := a.post(ctx, "/containers/"+in.ID+"/stop", stopQuery, true); err != nil {
+			return false, err
+		}
+		stopped = true
+	}
+	if _, err := a.send(ctx, http.MethodDelete, "/containers/"+in.ID, removeQuery, false); err != nil {
+		return stopped, err
+	}
+	return stopped, nil
 }
 
 // ComposeTarget reads the compose labels of the container and validates them

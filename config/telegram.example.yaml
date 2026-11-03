@@ -42,7 +42,7 @@ agent:
   # stays the gate:
   #   permissions:
   #     allow: [docker_restart, systemd_restart, docker_stop, docker_start,
-  #             systemd_stop, systemd_start, docker_compose_up,
+  #             docker_remove, systemd_stop, systemd_start, docker_compose_up,
   #             docker_compose_project_up, file_edit, file_create,
   #             file_restore, dir_create, http_request]
   # Allowed tools skip pre_tool_use hooks; put checks that must always run

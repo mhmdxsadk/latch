@@ -208,10 +208,10 @@ func (d *Deps) submit(ctx context.Context, a approval.Action) (actionOut, error)
 	return toActionOut(r), nil
 }
 
-// containerAction restarts, stops or starts one container.
+// containerAction restarts, stops, starts or removes one container.
 type containerAction struct {
 	d    *Deps
-	verb string // restart, stop, start
+	verb string // restart, stop, start, remove
 	name string
 	mode approval.Mode
 }
@@ -230,6 +230,11 @@ func (a containerAction) Describe() []string {
 		return []string{"restart container " + a.name + " (" + wait + ")"}
 	case "stop":
 		return []string{"stop container " + a.name + " (" + wait + ")"}
+	case "remove":
+		return []string{
+			"remove container " + a.name + " (a running container is stopped first; " + wait + ")",
+			"volumes and mounted folders are kept",
+		}
 	}
 	return []string{a.verb + " container " + a.name}
 }
@@ -248,6 +253,16 @@ func (a containerAction) Execute(ctx context.Context) (approval.Result, error) {
 		err     error
 	)
 	switch a.verb {
+	case "remove":
+		stopped, err := a.d.DockerActions.Remove(ctx, a.name)
+		if err != nil {
+			return approval.Result{}, err
+		}
+		sum := "container " + a.name + " removed; volumes and mounted folders kept"
+		if stopped {
+			sum = "container " + a.name + " stopped and removed; volumes and mounted folders kept"
+		}
+		return approval.Result{Summary: sum}, nil
 	case "restart":
 		err = a.d.DockerActions.Restart(ctx, a.name)
 	case "stop":
@@ -505,6 +520,9 @@ func registerActions(s *sdk.Server, d *Deps) {
 		{"restart", "Restart a Docker container (Docker stops it, waiting up to 30 seconds, then starts it)." + restartNote, true, false},
 		{"stop", "Stop a Docker container (Docker waits up to 30 seconds, then kills it)." + alwaysNote, true, true},
 		{"start", "Start a stopped Docker container." + alwaysNote, false, true},
+		{"remove", "Remove a Docker container (a running one is stopped first, waiting up to 30 seconds). Volumes and " +
+			"mounted folders are kept, so data survives. Use it to replace a container that docker_compose_up or " +
+			"docker_compose_project_up cannot take over, then start the project again." + alwaysNote, true, false},
 	} {
 		tool := "docker_" + v.verb
 		sdk.AddTool(s, &sdk.Tool{
