@@ -1,12 +1,12 @@
 // Package tgchat lets the owner talk to the agent team from Telegram.
 //
-// Each Telegram message becomes one agent turn in the active conversation.
-// A conversation lives in Docker Agent's session database, one file per
-// conversation; this package keeps an index (id, title, times, the messages
-// on screen) and a transcript per conversation, so the owner can switch
+// Each Telegram message becomes one agent turn in the active thread.
+// A thread lives in Docker Agent's session database, one file per
+// thread; this package keeps an index (id, title, times, the messages
+// on screen) and a transcript per thread, so the owner can switch
 // between them without ever seeing an id: /new clears the screen and starts
-// over, /sessions goes back to an earlier conversation and shows its messages
-// again. At most MaxSessions conversations are kept, and a conversation
+// over, /threads goes back to an earlier thread and shows its messages
+// again. At most MaxThreads threads are kept, and a thread
 // quiet for IdleAfter is left behind by the next message. Turns run one at a
 // time, in order. Agent answers are untrusted text: they are cleaned of
 // control characters and their Markdown becomes formatting this package
@@ -63,11 +63,10 @@ const (
 
 // Commands is the bot's command menu.
 var Commands = []tgapi.Command{
-	{Command: "new", Description: "Clears the chat and starts a new conversation"},
-	{Command: "sessions", Description: "Shows earlier conversations to go back to"},
-	{Command: "settle", Description: "Closes this conversation and clears the chat"},
+	{Command: "new", Description: "Clears the chat and starts a new thread"},
+	{Command: "threads", Description: "Shows earlier threads to go back to"},
+	{Command: "settle", Description: "Closes this thread and clears the chat"},
 	{Command: "stop", Description: "Stop the running answer and drop waiting messages"},
-	{Command: "check", Description: "Checks the server's current state"},
 	{Command: "help", Description: "Shows this message"},
 }
 
@@ -86,21 +85,18 @@ type Options struct {
 	// Name labels the agent's answers, for example "keeper".
 	Name    string
 	Timeout time.Duration
-	// Location is the owner's time zone for conversation names.
+	// Location is the owner's time zone for thread names.
 	Location *time.Location
 	// Host names the server in the welcome text.
 	Host string
 	// Intro opens the welcome text; empty means a one-line default.
 	Intro string
-	// CheckRunner runs the checks /check asks for (nil: no /check). It must
-	// not be able to change anything.
-	CheckRunner Runner
-	// SessionDir is where each conversation's Docker Agent database lives
+	// ThreadDir is where each thread's Docker Agent database lives
 	// ("" uses the agent's shared database and never deletes anything).
-	SessionDir string
+	ThreadDir string
 	// HistoryDir holds the transcripts, root-only ("" shows no history).
 	HistoryDir string
-	// Remove deletes files in SessionDir, as the agent's account.
+	// Remove deletes files in ThreadDir, as the agent's account.
 	Remove func(ctx context.Context, paths []string) error
 	// SaveImage writes a photo where the agent can read it and returns its
 	// path (nil: photos are refused). The chat removes it with Remove.
@@ -136,40 +132,36 @@ type Chat struct {
 }
 
 type job struct {
-	session string
-	text    string
-	note    string // shown to the owner for a message the bridge sends
-	images  []string
+	thread string
+	text   string
+	note   string // shown to the owner for a message the bridge sends
+	images []string
 	// messageID is the message the answer replies to: the request's message
 	// for the outcome of a decision, 0 otherwise.
 	messageID int64
 	// source is the owner's message this job answers (0: none), the one a
 	// reply goes under when several messages are answered together.
 	source int64
-	// check is a check the owner asked for with /check.
-	check bool
 }
 
 // held is a finished answer (or note) kept until every message of the burst
 // has one, so they go out together.
 type held struct {
-	session string
-	source  int64  // the owner's message it answers
-	fixed   int64  // the decided request's message; the reply always goes there
-	out     string // the agent's answer, Markdown
-	note    string // a note from the bridge instead of an answer
-	settle  bool   // the agent offered to settle
+	thread string
+	source int64  // the owner's message it answers
+	fixed  int64  // the decided request's message; the reply always goes there
+	out    string // the agent's answer, Markdown
+	note   string // a note from the bridge instead of an answer
+	settle bool   // the agent offered to settle
 }
 
 type index struct {
-	// Active is the current conversation ("" until the first message after
+	// Active is the current thread ("" until the first message after
 	// /new).
-	Active   string    `json:"active,omitempty"`
-	Sessions []session `json:"sessions,omitempty"`
-	// Loose are screen messages sent while no conversation was active.
+	Active  string   `json:"active,omitempty"`
+	Threads []thread `json:"sessions,omitempty"` // key kept: renaming it would orphan saved indexes
+	// Loose are screen messages sent while no thread was active.
 	Loose []int64 `json:"loose,omitempty"`
-	// Reported are the problems recent checks told the owner about.
-	Reported []report `json:"reported,omitempty"`
 }
 
 // New loads the chat state (a missing file is an empty state).
@@ -216,12 +208,7 @@ func (c *Chat) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case j := <-c.queue:
-			if j.check {
-				c.flush(ctx) // a check can take minutes: show what is done first
-				c.check(ctx)
-			} else {
-				c.turn(ctx, j)
-			}
+			c.turn(ctx, j)
 			if len(c.queue) == 0 {
 				c.flush(ctx)
 			}
@@ -244,12 +231,12 @@ func (c *Chat) HandleText(ctx context.Context, text string, messageID int64) {
 		return
 	}
 	id, victims := c.begin(text)
-	c.dropSessions(ctx, victims)
+	c.dropThreads(ctx, victims)
 	c.appendHistory(id, "owner", text)
-	c.enqueue(ctx, job{session: id, text: text, source: messageID})
+	c.enqueue(ctx, job{thread: id, text: text, source: messageID})
 }
 
-// Notify sends text to the agent in the current conversation as an automatic
+// Notify sends text to the agent in the current thread as an automatic
 // message, for example the outcome of a request the owner decided, and shows
 // the owner note instead of the whole text. The agent's answer replies to
 // message replyTo (the request's message; 0 for none). It never blocks;
@@ -259,10 +246,10 @@ func (c *Chat) Notify(text, note string, replyTo int64) {
 	id := c.index.Active
 	c.mu.Unlock()
 	if id == "" {
-		return // no conversation: nobody to tell
+		return // no thread: nobody to tell
 	}
 	select {
-	case c.queue <- job{session: id, text: text, note: note, messageID: replyTo}:
+	case c.queue <- job{thread: id, text: text, note: note, messageID: replyTo}:
 	default:
 		c.o.Logger.Warn("queue full; dropped an automatic message")
 	}
@@ -275,7 +262,7 @@ func (c *Chat) HandleImages(ctx context.Context, caption string, images [][]byte
 	c.rollOver()
 	c.track(messageIDs...)
 	if c.o.SaveImage == nil {
-		c.say(ctx, "Photos are not available; the agent's conversation folder is not set up.")
+		c.say(ctx, "Photos are not available; the agent's thread folder is not set up.")
 		return
 	}
 	if len(caption) > maxMessage {
@@ -314,10 +301,10 @@ func (c *Chat) HandleImages(ctx context.Context, caption string, images [][]byte
 		caption, titleText, shown = imageText, "Photo", "[photo]"
 	}
 	id, victims := c.begin(titleText)
-	c.dropSessions(ctx, victims)
+	c.dropThreads(ctx, victims)
 	c.appendHistory(id, "owner", shown)
 	select {
-	case c.queue <- job{session: id, text: caption, images: paths, source: source}:
+	case c.queue <- job{thread: id, text: caption, images: paths, source: source}:
 	default:
 		c.discard(paths)
 		c.say(ctx, "Too many messages waiting. Wait for an answer or use /stop.")
@@ -347,18 +334,8 @@ func (c *Chat) handleCommand(ctx context.Context, cmd string, messageID int64) {
 		c.leave(ctx, messageID, false)
 	case "settle":
 		c.leave(ctx, messageID, true)
-	case "sessions":
-		c.sessionList(ctx)
-	case "check":
-		if c.o.CheckRunner == nil {
-			c.say(ctx, "Checks are not set up (agent.checks in telegram.yaml).")
-			return
-		}
-		select {
-		case c.queue <- job{check: true}:
-		default:
-			c.say(ctx, "Too many messages waiting. Wait for an answer or use /stop.")
-		}
+	case "threads":
+		c.threadList(ctx)
 	case "stop":
 		dropped, running := c.stopRunning()
 		if running {
@@ -394,8 +371,8 @@ func (c *Chat) StopDraft(id int64) bool {
 // turn runs one agent turn, shows it live and sends the answer.
 func (c *Chat) turn(parent context.Context, j job) {
 	defer c.discard(j.images)
-	if !c.isActive(j.session) {
-		return // the owner moved to another conversation while this waited
+	if !c.isActive(j.thread) {
+		return // the owner moved to another thread while this waited
 	}
 	ctx, cancel := context.WithTimeout(parent, c.o.Timeout)
 	defer cancel()
@@ -419,7 +396,7 @@ func (c *Chat) turn(parent context.Context, j job) {
 	// The answer to a decision is added to the request's message, so it has
 	// no live preview (one would stay on screen next to it).
 	lv := c.startLive(parent, draftID, j.messageID != 0)
-	out, err := c.o.Runner.Run(ctx, Turn{Session: j.session, Message: j.text, Images: j.images, DB: c.dbFor(j.session)}, lv.update)
+	out, err := c.o.Runner.Run(ctx, Turn{Thread: j.thread, Message: j.text, Images: j.images, DB: c.dbFor(j.thread)}, lv.update)
 	lv.stop()
 	c.mu.Lock()
 	c.cancel, c.draft = nil, 0 // idle again before any message goes out
@@ -428,15 +405,15 @@ func (c *Chat) turn(parent context.Context, j job) {
 	if parent.Err() != nil {
 		return
 	}
-	if !c.isActive(j.session) {
-		// The owner moved to another conversation meanwhile: nothing goes to
+	if !c.isActive(j.thread) {
+		// The owner moved to another thread meanwhile: nothing goes to
 		// the screen, but the answer is kept for when they come back. A
-		// conversation deleted meanwhile loses the database the run wrote.
+		// thread deleted meanwhile loses the database the run wrote.
 		switch {
-		case !c.exists(j.session):
-			c.removeDB(parent, c.dbFor(j.session))
+		case !c.exists(j.thread):
+			c.removeDB(parent, c.dbFor(j.thread))
 		case err == nil:
-			c.appendHistory(j.session, "agent", out)
+			c.appendHistory(j.thread, "agent", out)
 		}
 		return
 	}
@@ -476,25 +453,25 @@ func (c *Chat) deliver(ctx context.Context, out string, j job, started time.Time
 		return
 	}
 	out, done := splitSettle(out)
-	c.appendHistory(j.session, "agent", out)
+	c.appendHistory(j.thread, "agent", out)
 	c.hold(j, held{out: out, settle: done})
 }
 
 // hold keeps what a job produced until the burst it belongs to is done.
 func (c *Chat) hold(j job, h held) {
-	h.session, h.source, h.fixed = j.session, j.source, j.messageID
+	h.thread, h.source, h.fixed = j.thread, j.source, j.messageID
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.held = append(slices.DeleteFunc(c.held, func(o held) bool { return o.session != c.index.Active }), h)
+	c.held = append(slices.DeleteFunc(c.held, func(o held) bool { return o.thread != c.index.Active }), h)
 }
 
 // flush sends everything held. One answer is a plain message. Several, from a
 // burst of messages, are each a reply to the message they answer. An answer to
-// a decision goes under the decided request instead. Answers of a conversation
+// a decision goes under the decided request instead. Answers of a thread
 // the owner left meanwhile are dropped (the transcript has them).
 func (c *Chat) flush(ctx context.Context) {
 	c.mu.Lock()
-	items := slices.DeleteFunc(c.held, func(h held) bool { return h.session != c.index.Active })
+	items := slices.DeleteFunc(c.held, func(h held) bool { return h.thread != c.index.Active })
 	c.held = nil
 	c.mu.Unlock()
 	var settle string
@@ -516,7 +493,7 @@ func (c *Chat) flush(ctx context.Context) {
 			c.answer(ctx, h.out, replyTo)
 		}
 		if h.settle {
-			settle = h.session
+			settle = h.thread
 		}
 	}
 	if settle != "" {
@@ -526,7 +503,7 @@ func (c *Chat) flush(ctx context.Context) {
 
 // settleMarker is the whole last line of an answer in which the agent says
 // the issue is solved and nothing is left to do. The bridge removes it and
-// asks the owner, with a button, whether to settle the conversation.
+// asks the owner, with a button, whether to settle the thread.
 const settleMarker = "READY_TO_SETTLE"
 
 // splitSettle removes the settle marker from the end of an answer and

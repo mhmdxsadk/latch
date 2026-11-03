@@ -67,7 +67,7 @@ func isLoginCommand(text string) bool {
 
 // looksLikeCallback reports whether text is (or contains) the address the
 // browser shows after approving. Those always stay out of the agent's
-// conversation: the code in them is a credential.
+// thread: the code in them is a credential.
 func looksLikeCallback(text string) bool {
 	t := strings.ToLower(text)
 	if strings.Contains(t, "localhost:1455") || strings.Contains(t, "127.0.0.1:1455") {

@@ -15,7 +15,7 @@ import (
 	"github.com/mhmdxsadk/latch/internal/tgapi/tgtest"
 )
 
-const sessionDir = "/data/latch-sessions"
+const threadDir = "/data/latch-sessions"
 
 // store is a fake agent home: it records the files the chat asked to delete.
 type store struct {
@@ -60,7 +60,7 @@ func (c *clock) Advance(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
-// convHarness is a chat with per-conversation databases, transcripts and a
+// convHarness is a chat with per-thread databases, transcripts and a
 // clock of its own.
 type convHarness struct {
 	*harness
@@ -75,7 +75,7 @@ func newConvHarness(t *testing.T) *convHarness {
 	hist := t.TempDir()
 	clk := &clock{t: time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)}
 	h := newHarnessWith(t, time.Minute, func(o *Options) {
-		o.SessionDir, o.HistoryDir, o.Remove, o.Now = sessionDir, hist, files.remove, clk.Now
+		o.ThreadDir, o.HistoryDir, o.Remove, o.Now = threadDir, hist, files.remove, clk.Now
 	})
 	return &convHarness{harness: h, files: files, hist: hist, clock: clk}
 }
@@ -117,8 +117,8 @@ func (h *convHarness) waitAllNoted() {
 	})
 }
 
-// newConversation sends /new once everything on screen has been noted.
-func (h *convHarness) newConversation() {
+// newThread sends /new once everything on screen has been noted.
+func (h *convHarness) newThread() {
 	h.t.Helper()
 	h.waitAllNoted()
 	n := len(h.tg.Sent())
@@ -127,10 +127,10 @@ func (h *convHarness) newConversation() {
 	h.waitAllNoted()
 }
 
-func (h *convHarness) sessions() []session {
+func (h *convHarness) threads() []thread {
 	h.chat.mu.Lock()
 	defer h.chat.mu.Unlock()
-	return append([]session(nil), h.chat.index.Sessions...)
+	return append([]thread(nil), h.chat.index.Threads...)
 }
 
 func (h *convHarness) visibleTexts() []string {
@@ -144,7 +144,7 @@ func (h *convHarness) visibleTexts() []string {
 func (h *convHarness) picker() tgtest.Sent {
 	h.t.Helper()
 	n := len(h.tg.Sent())
-	h.say("/sessions")
+	h.say("/threads")
 	tgtest.WaitFor(h.t, "the list", func() bool { return len(h.tg.Sent()) > n })
 	sent := h.tg.Sent()
 	return sent[len(sent)-1]
@@ -158,50 +158,50 @@ func (h *convHarness) press(list tgtest.Sent, row int) {
 	}
 }
 
-func TestNewClearsTheScreenAndKeepsTheConversation(t *testing.T) {
+func TestNewClearsTheScreenAndKeepsTheThread(t *testing.T) {
 	h := newConvHarness(t)
 	id1 := h.ask("is caddy up?")
 	id2 := h.ask("and jellyfin?")
-	first := h.sessions()[0]
+	first := h.threads()[0]
 	if first.Title != "is caddy up?" || len(first.ID) != 36 || first.Started.IsZero() {
-		t.Fatalf("first conversation %+v", first)
+		t.Fatalf("first thread %+v", first)
 	}
-	if c := h.run.Calls(); c[0].db != filepath.Join(sessionDir, first.ID+".db") || c[1].db != c[0].db {
+	if c := h.run.Calls(); c[0].db != filepath.Join(threadDir, first.ID+".db") || c[1].db != c[0].db {
 		t.Fatalf("turns used databases %q, %q", c[0].db, c[1].db)
 	}
 
 	cmd := h.say("/new")
-	h.waitText("New conversation.")
+	h.waitText("New thread.")
 	for _, id := range []int64{id1, id2, cmd} {
 		if !h.tg.Deleted(id) {
 			t.Errorf("the owner's message %d is still on screen", id)
 		}
 	}
-	if got := h.visibleTexts(); len(got) != 1 || got[0] != "New conversation." {
+	if got := h.visibleTexts(); len(got) != 1 || got[0] != "New thread." {
 		t.Fatalf("screen after /new: %q", got)
 	}
 	if got := h.files.removed; len(got) != 0 {
 		t.Errorf("/new deleted %v", got)
 	}
 
-	// The next message starts a fresh conversation with its own database.
+	// The next message starts a fresh thread with its own database.
 	h.ask("disk space?")
 	second := h.run.Calls()[2]
-	if second.session == first.ID || second.db != filepath.Join(sessionDir, second.session+".db") {
+	if second.thread == first.ID || second.db != filepath.Join(threadDir, second.thread+".db") {
 		t.Errorf("turn after /new ran in %+v", second)
 	}
-	if got := h.sessions(); len(got) != 2 || got[1].Title != "disk space?" {
-		t.Errorf("sessions %+v", got)
+	if got := h.threads(); len(got) != 2 || got[1].Title != "disk space?" {
+		t.Errorf("threads %+v", got)
 	}
 }
 
-func TestSessionsListsAndResumesWithTheHistory(t *testing.T) {
+func TestThreadsListsAndResumesWithTheHistory(t *testing.T) {
 	h := newConvHarness(t)
 	h.ask("is caddy up?")
 	h.ask("and jellyfin?")
-	first := h.sessions()[0]
+	first := h.threads()[0]
 	h.clock.Advance(time.Hour)
-	h.newConversation()
+	h.newThread()
 	h.ask("disk space?")
 
 	list := h.picker()
@@ -213,7 +213,7 @@ func TestSessionsListsAndResumesWithTheHistory(t *testing.T) {
 		v := h.visibleTexts()
 		return len(v) > 0 && strings.HasPrefix(v[len(v)-1], "Back in: is caddy up?")
 	})
-	// The screen shows the first conversation again, nothing of the second.
+	// The screen shows the first thread again, nothing of the second.
 	var shown strings.Builder
 	for _, m := range h.tg.Visible() {
 		shown.WriteString(m.Text + "\n")
@@ -223,9 +223,9 @@ func TestSessionsListsAndResumesWithTheHistory(t *testing.T) {
 			t.Errorf("history lacks %q:\n%s", want, shown.String())
 		}
 	}
-	for _, gone := range []string{"disk space?", "answer to disk space?", "Pick a conversation"} {
+	for _, gone := range []string{"disk space?", "answer to disk space?", "Pick a thread"} {
 		if strings.Contains(shown.String(), gone) {
-			t.Errorf("the other conversation still shows %q", gone)
+			t.Errorf("the other thread still shows %q", gone)
 		}
 	}
 	// The owner's own messages come back as quotes, the answers as they were.
@@ -241,51 +241,51 @@ func TestSessionsListsAndResumesWithTheHistory(t *testing.T) {
 	if len(quotes) < 2 {
 		t.Errorf("the owner's messages are not quotes: %q", quotes)
 	}
-	// The conversation continues where it was: same session, same database.
+	// The thread continues where it was: same thread, same database.
 	h.ask("any news?")
 	last := h.run.Calls()[len(h.run.Calls())-1]
-	if last.session != first.ID || last.db != filepath.Join(sessionDir, first.ID+".db") {
-		t.Errorf("resumed turn ran in %+v, want session %s", last, first.ID)
+	if last.thread != first.ID || last.db != filepath.Join(threadDir, first.ID+".db") {
+		t.Errorf("resumed turn ran in %+v, want thread %s", last, first.ID)
 	}
 	if h.files.removed != nil {
 		t.Errorf("deleted %v", h.files.removed)
 	}
 }
 
-func TestSessionsWithNoConversation(t *testing.T) {
+func TestThreadsListWithNoThreads(t *testing.T) {
 	h := newConvHarness(t)
-	h.say("/sessions")
-	h.waitText("No conversations yet.")
+	h.say("/threads")
+	h.waitText("No threads yet.")
 	h.say("/new")
-	h.waitText("New conversation.")
-	if n := len(h.sessions()); n != 0 || len(h.files.removed) != 0 {
-		t.Errorf("%d conversations, deleted %v", n, h.files.removed)
+	h.waitText("New thread.")
+	if n := len(h.threads()); n != 0 || len(h.files.removed) != 0 {
+		t.Errorf("%d threads, deleted %v", n, h.files.removed)
 	}
 }
 
-func TestOnlyTenConversationsAreKept(t *testing.T) {
+func TestOnlyTenThreadsAreKept(t *testing.T) {
 	h := newConvHarness(t)
 	var ids []string
-	for i := range MaxSessions + 2 {
+	for i := range MaxThreads + 2 {
 		q := fmt.Sprintf("question %d", i)
 		h.ask(q)
 		h.clock.Advance(time.Minute)
-		ids = append(ids, h.sessions()[len(h.sessions())-1].ID)
-		h.newConversation()
+		ids = append(ids, h.threads()[len(h.threads())-1].ID)
+		h.newThread()
 	}
 	h.ask("last question")
-	got := h.sessions()
-	if len(got) != MaxSessions || got[0].Title != "question 3" || got[len(got)-1].Title != "last question" {
+	got := h.threads()
+	if len(got) != MaxThreads || got[0].Title != "question 3" || got[len(got)-1].Title != "last question" {
 		t.Fatalf("kept %d: %+v", len(got), got)
 	}
-	// 13 conversations began, so the three oldest are gone.
+	// 13 threads began, so the three oldest are gone.
 	removed := h.files.removedDBs()
 	if len(removed) != 3 || removed[0] != ids[0]+".db" || removed[1] != ids[1]+".db" || removed[2] != ids[2]+".db" {
 		t.Errorf("removed databases %v, want the oldest three (%v)", removed, ids[:3])
 	}
 	for _, p := range h.files.removed {
-		if !strings.HasPrefix(p, sessionDir+"/") {
-			t.Errorf("deleted outside the session folder: %s", p)
+		if !strings.HasPrefix(p, threadDir+"/") {
+			t.Errorf("deleted outside the thread folder: %s", p)
 		}
 	}
 	for _, id := range ids[:3] {
@@ -299,24 +299,24 @@ func TestOnlyTenConversationsAreKept(t *testing.T) {
 		}
 	}
 	list := h.picker()
-	if len(list.Keyboard) != MaxSessions {
+	if len(list.Keyboard) != MaxThreads {
 		t.Errorf("list has %d buttons", len(list.Keyboard))
 	}
 }
 
-func TestPruningSparesTheActiveConversation(t *testing.T) {
+func TestPruningSparesTheActiveThread(t *testing.T) {
 	h := newConvHarness(t)
 	h.ask("the old one")
-	old := h.sessions()[0].ID
-	for i := range MaxSessions {
+	old := h.threads()[0].ID
+	for i := range MaxThreads {
 		h.clock.Advance(time.Hour)
-		h.newConversation()
+		h.newThread()
 		h.ask(fmt.Sprintf("later %d", i))
 	}
-	// The oldest conversation was the first to go.
-	for _, s := range h.sessions() {
+	// The oldest thread was the first to go.
+	for _, s := range h.threads() {
 		if s.ID == old {
-			t.Fatalf("the oldest conversation is still kept: %+v", h.sessions())
+			t.Fatalf("the oldest thread is still kept: %+v", h.threads())
 		}
 	}
 	// Resuming the oldest kept one makes it the newest, so it outlives the next.
@@ -328,26 +328,26 @@ func TestPruningSparesTheActiveConversation(t *testing.T) {
 	})
 	resumed := h.chat.index.Active
 	h.clock.Advance(time.Hour)
-	h.newConversation()
+	h.newThread()
 	h.ask("one more")
 	found := false
-	for _, s := range h.sessions() {
+	for _, s := range h.threads() {
 		found = found || s.ID == resumed
 	}
-	if !found || len(h.sessions()) != MaxSessions {
-		t.Errorf("the resumed conversation was pruned or the count is off: %+v", h.sessions())
+	if !found || len(h.threads()) != MaxThreads {
+		t.Errorf("the resumed thread was pruned or the count is off: %+v", h.threads())
 	}
 }
 
-func TestAQuietConversationIsLeftAfterThreeDays(t *testing.T) {
+func TestAQuietThreadIsLeftAfterThreeDays(t *testing.T) {
 	h := newConvHarness(t)
 	h.ask("first")
-	first := h.sessions()[0].ID
+	first := h.threads()[0].ID
 
-	// Just under three days: still the same conversation.
+	// Just under three days: still the same thread.
 	h.clock.Advance(IdleAfter - time.Minute)
 	h.ask("still there?")
-	if got := h.run.Calls()[1].session; got != first {
+	if got := h.run.Calls()[1].thread; got != first {
 		t.Fatalf("a message after almost three days started %s", got)
 	}
 
@@ -355,18 +355,18 @@ func TestAQuietConversationIsLeftAfterThreeDays(t *testing.T) {
 	h.clock.Advance(IdleAfter)
 	h.ask("hello again")
 	second := h.run.Calls()[2]
-	if second.session == first || second.db != filepath.Join(sessionDir, second.session+".db") {
+	if second.thread == first || second.db != filepath.Join(threadDir, second.thread+".db") {
 		t.Fatalf("the message after three days ran in %+v", second)
 	}
-	got := h.sessions()
+	got := h.threads()
 	if len(got) != 2 || got[0].ID != first || got[1].Title != "hello again" || len(h.files.removed) != 0 {
-		t.Errorf("sessions %+v, deleted %v", got, h.files.removed)
+		t.Errorf("threads %+v, deleted %v", got, h.files.removed)
 	}
 	// The old messages were too old to delete anyway: they are not tracked.
 	if len(got[0].Messages) != 0 {
-		t.Errorf("the old conversation still tracks %v", got[0].Messages)
+		t.Errorf("the old thread still tracks %v", got[0].Messages)
 	}
-	// The old conversation can be resumed, and resuming restarts its clock.
+	// The old thread can be resumed, and resuming restarts its clock.
 	list := h.picker()
 	h.press(list, 1)
 	tgtest.WaitFor(t, "the resume note", func() bool {
@@ -375,26 +375,26 @@ func TestAQuietConversationIsLeftAfterThreeDays(t *testing.T) {
 	})
 	h.clock.Advance(IdleAfter - time.Minute)
 	h.ask("back")
-	if got := h.run.Calls()[3].session; got != first {
+	if got := h.run.Calls()[3].thread; got != first {
 		t.Errorf("a message after resuming ran in %s, not the resumed %s", got, first)
 	}
 }
 
-func TestAnswerToAnOldConversationIsKeptNotShown(t *testing.T) {
+func TestAnswerToAnOldThreadIsKeptNotShown(t *testing.T) {
 	h := newConvHarness(t)
 	h.run.gate = make(chan struct{})
 	h.say("slow question")
 	tgtest.WaitFor(t, "the run to start", func() bool { return len(h.run.Calls()) == 1 })
-	old := h.sessions()[0].ID
+	old := h.threads()[0].ID
 
 	h.say("/new")
-	h.waitText("New conversation.")
+	h.waitText("New thread.")
 	close(h.run.gate) // the old turn finishes after the owner moved on
 	tgtest.WaitFor(t, "the answer to be kept", func() bool {
 		return len(h.chat.loadHistory(old)) == 2
 	})
 	tgtest.WaitFor(t, "the turn to end", func() bool { return !h.chat.busy() })
-	if got := h.visibleTexts(); len(got) != 1 || got[0] != "New conversation." {
+	if got := h.visibleTexts(); len(got) != 1 || got[0] != "New thread." {
 		t.Errorf("a late answer reached the new screen: %q", got)
 	}
 	if h := h.chat.loadHistory(old); h[1].From != "agent" || h[1].Text != "answer to slow question" {
@@ -402,14 +402,14 @@ func TestAnswerToAnOldConversationIsKeptNotShown(t *testing.T) {
 	}
 }
 
-func TestMessagesWaitingForAnOldConversationAreDropped(t *testing.T) {
+func TestMessagesWaitingForAnOldThreadAreDropped(t *testing.T) {
 	h := newConvHarness(t)
 	h.run.gate = make(chan struct{})
 	h.say("first")
 	tgtest.WaitFor(t, "the run to start", func() bool { return len(h.run.Calls()) == 1 })
 	h.say("second") // waits behind the first
 	h.say("/new")
-	h.waitText("New conversation.")
+	h.waitText("New thread.")
 	close(h.run.gate)
 	tgtest.WaitFor(t, "the turn to end", func() bool { return !h.chat.busy() })
 	if n := len(h.run.Calls()); n != 1 {
@@ -423,7 +423,7 @@ func TestClearingGoesOnWhenTelegramRefusesOldMessages(t *testing.T) {
 	recent := h.ask("recent question")
 	h.tg.MarkTooOld(old) // more than 48 hours ago
 	h.say("/new")
-	note := h.waitText("New conversation.")
+	note := h.waitText("New thread.")
 	if !h.tg.Deleted(recent) {
 		t.Error("the recent message was not deleted")
 	}
@@ -443,65 +443,16 @@ func TestFinishedRequestsAreClearedWaitingOnesStay(t *testing.T) {
 		o.Finished = func() []int64 { asked++; return []int64{900} }
 	})
 	h.chat.HandleText(context.Background(), "/new", h.tg.MessageID(owner, "/new"))
-	h.waitText("New conversation.")
+	h.waitText("New thread.")
 	if asked != 1 || !h.tg.Deleted(900) || h.tg.Deleted(901) {
 		t.Errorf("asked %d, 900 deleted %v, 901 deleted %v", asked, h.tg.Deleted(900), h.tg.Deleted(901))
 	}
 }
 
-func TestChecksLeaveNothingBehindWhenAllClear(t *testing.T) {
-	h := newConvHarness(t)
-	checks := &fakeRunner{reply: func(string) (string, error) { return "ALL_CLEAR", nil }}
-	h.chat.o.CheckRunner = checks
-	h.say("/check")
-	h.waitText("All clear.")
-	if n := len(h.sessions()); n != 0 {
-		t.Fatalf("%d conversations after an all-clear check", n)
-	}
-	call := checks.Calls()[0]
-	if !strings.HasPrefix(call.db, sessionDir+"/") {
-		t.Fatalf("the check had no database of its own: %q", call.db)
-	}
-	if got := h.files.removedDBs(); len(got) != 1 || got[0] != filepath.Base(call.db) {
-		t.Errorf("the check's database was not deleted: %v", got)
-	}
-}
-
-func TestAFindingBecomesAConversationAndKeepsTheScreen(t *testing.T) {
-	h := newConvHarness(t)
-	h.ask("hello")
-	before := len(h.chat.screen())
-	chatID := h.sessions()[0].ID
-	checks := &fakeRunner{reply: func(string) (string, error) { return "Jellyfin is down. It crashed at 09:12.", nil }}
-	h.chat.o.CheckRunner = checks
-	h.say("/check")
-	h.waitText("Jellyfin is down.")
-	found := filepath.Base(checks.Calls()[0].db)
-	got := h.sessions()
-	if len(got) != 2 || got[0].ID != chatID || got[1].ID+".db" != found || h.chat.index.Active != got[1].ID {
-		t.Fatalf("sessions %+v, the check's database %s", got, found)
-	}
-	if got[1].Title != "Check: Jellyfin is down. It crashed at 09:12." || len(h.files.removed) != 0 {
-		t.Errorf("title %q, deleted %v", got[1].Title, h.files.removed)
-	}
-	if len(h.chat.screen()) < before {
-		t.Error("the screen was forgotten")
-	}
-	if hist := h.chat.loadHistory(got[1].ID); len(hist) != 1 || hist[0].From != "agent" {
-		t.Errorf("history %+v", hist)
-	}
-	// /new clears everything on screen: the first chat and the finding. The
-	// finding is on the server a moment before the chat has noted it.
-	h.waitAllNoted()
-	h.say("/new")
-	h.waitText("New conversation.")
-	tgtest.WaitFor(t, "only the new conversation on screen", func() bool { return len(h.visibleTexts()) == 1 })
-}
-
 func TestHistoryIsBounded(t *testing.T) {
 	h := newConvHarness(t)
 	h.ask("start")
-	id := h.sessions()[0].ID
+	id := h.threads()[0].ID
 	for i := range 100 {
 		h.chat.appendHistory(id, "owner", strings.Repeat("x", 3000)+string(rune('a'+i%26)))
 	}
@@ -514,7 +465,7 @@ func TestHistoryIsBounded(t *testing.T) {
 		t.Errorf("an entry of %d bytes was kept", n)
 	}
 	// Resuming shows the end of it and says that earlier messages are not shown.
-	h.newConversation()
+	h.newThread()
 	h.chat.replay(context.Background(), id)
 	var shown strings.Builder
 	for _, m := range h.tg.Visible() {
@@ -528,7 +479,7 @@ func TestHistoryIsBounded(t *testing.T) {
 	}
 }
 
-func TestConversationIDsBecomeFileNames(t *testing.T) {
+func TestThreadIDsBecomeFileNames(t *testing.T) {
 	h := newConvHarness(t)
 	for _, bad := range []string{"", "../../etc/passwd", "x", "00000000-0000-0000-0000-00000000000g", strings.Repeat("a", 36)} {
 		if p := h.chat.historyPath(bad); p != "" {
@@ -541,7 +492,7 @@ func TestConversationIDsBecomeFileNames(t *testing.T) {
 }
 
 // screen, loose and busy read the chat's state for the tests. The screen is
-// the active conversation's messages and the loose ones.
+// the active thread's messages and the loose ones.
 func (c *Chat) screen() []int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -566,9 +517,9 @@ func newPhotoHarness(t *testing.T) (*convHarness, *[]string) {
 	var saved []string
 	files := &store{}
 	h := newHarnessWith(t, time.Minute, func(o *Options) {
-		o.SessionDir, o.Remove = sessionDir, files.remove
+		o.ThreadDir, o.Remove = threadDir, files.remove
 		o.SaveImage = func(_ context.Context, data []byte, ext string) (string, error) {
-			p := sessionDir + "/photo-" + string(rune('a'+len(saved))) + ext
+			p := threadDir + "/photo-" + string(rune('a'+len(saved))) + ext
 			saved = append(saved, p)
 			return p, nil
 		}
@@ -641,13 +592,13 @@ func TestStopDeletesWaitingPhotos(t *testing.T) {
 	}
 }
 
-func TestPhotoStartsAConversationTitledPhoto(t *testing.T) {
+func TestPhotoStartsAThreadTitledPhoto(t *testing.T) {
 	h, _ := newPhotoHarness(t)
 	h.chat.HandleImages(context.Background(), "", [][]byte{jpeg}, []int64{7})
 	h.waitText("answer to [User attached one or more files")
-	got := h.chat.index.Sessions
+	got := h.chat.index.Threads
 	if len(got) != 1 || got[0].Title != "Photo" {
-		t.Fatalf("sessions %+v", got)
+		t.Fatalf("threads %+v", got)
 	}
 	tgtest.WaitFor(t, "the photo turn to end", func() bool { return !h.chat.busy() })
 }
@@ -662,10 +613,10 @@ func (h *convHarness) pressData(data string, message int64) string {
 	return got
 }
 
-func TestSettleClearsTheScreenAndKeepsTheConversation(t *testing.T) {
+func TestSettleClearsTheScreenAndKeepsTheThread(t *testing.T) {
 	h := newConvHarness(t)
 	id1 := h.ask("is caddy up?")
-	first := h.sessions()[0]
+	first := h.threads()[0]
 	h.waitAllNoted()
 	cmd := h.say("/settle")
 	note := h.waitText("Settled: is caddy up?")
@@ -677,11 +628,11 @@ func TestSettleClearsTheScreenAndKeepsTheConversation(t *testing.T) {
 	if got := h.visibleTexts(); len(got) != 1 || got[0] != note.Text {
 		t.Fatalf("screen after /settle: %q", got)
 	}
-	got := h.sessions()
+	got := h.threads()
 	if len(got) != 1 || got[0].Settled.IsZero() || h.chat.index.Active != "" || len(h.files.removed) != 0 {
-		t.Fatalf("sessions %+v, active %q, deleted %v", got, h.chat.index.Active, h.files.removed)
+		t.Fatalf("threads %+v, active %q, deleted %v", got, h.chat.index.Active, h.files.removed)
 	}
-	// The next message starts another conversation; the settled one is listed
+	// The next message starts another thread; the settled one is listed
 	// after the open one and can be opened again.
 	h.clock.Advance(time.Hour)
 	h.ask("disk space?")
@@ -695,29 +646,29 @@ func TestSettleClearsTheScreenAndKeepsTheConversation(t *testing.T) {
 		v := h.visibleTexts()
 		return len(v) > 0 && strings.HasPrefix(v[len(v)-1], "Back in: is caddy up?")
 	})
-	if s := h.sessions()[0]; !s.Settled.IsZero() || h.chat.index.Active != first.ID {
+	if s := h.threads()[0]; !s.Settled.IsZero() || h.chat.index.Active != first.ID {
 		t.Errorf("reopening left %+v active %q", s, h.chat.index.Active)
 	}
 	h.ask("one more thing")
-	if last := h.run.Calls()[len(h.run.Calls())-1]; last.session != first.ID {
-		t.Errorf("a message after reopening ran in %s", last.session)
+	if last := h.run.Calls()[len(h.run.Calls())-1]; last.thread != first.ID {
+		t.Errorf("a message after reopening ran in %s", last.thread)
 	}
 }
 
 func TestSettleWithNothingOpen(t *testing.T) {
 	h := newConvHarness(t)
 	h.say("/settle")
-	h.waitText("No open conversation to settle.")
-	if len(h.sessions()) != 0 || len(h.files.removed) != 0 {
-		t.Errorf("sessions %+v, deleted %v", h.sessions(), h.files.removed)
+	h.waitText("No open thread to settle.")
+	if len(h.threads()) != 0 || len(h.files.removed) != 0 {
+		t.Errorf("threads %+v, deleted %v", h.threads(), h.files.removed)
 	}
 }
 
-func TestQuietConversationsCountAsSettled(t *testing.T) {
+func TestQuietThreadsCountAsSettled(t *testing.T) {
 	h := newConvHarness(t)
 	h.ask("first")
 	h.clock.Advance(time.Hour)
-	h.newConversation()
+	h.newThread()
 	h.ask("second")
 	h.clock.Advance(IdleAfter - time.Hour/2) // first: quiet for IdleAfter and more; second: not yet
 	list := h.picker()
@@ -742,22 +693,22 @@ func TestAgentOffersToSettle(t *testing.T) {
 	if strings.Contains(answer.Text, "READY_TO_SETTLE") || len(answer.Keyboard) != 0 {
 		t.Fatalf("the agent's words show the marker or carry buttons: %+v", answer)
 	}
-	offer := h.waitText("Settle this conversation?")
+	offer := h.waitText("Settle this thread?")
 	if len(offer.Keyboard) != 1 || offer.Keyboard[0][0].Text != "Settle" {
 		t.Fatalf("offer %+v", offer)
 	}
-	if hist := h.chat.loadHistory(h.sessions()[0].ID); len(hist) != 2 || strings.Contains(hist[1].Text, "READY_TO_SETTLE") {
+	if hist := h.chat.loadHistory(h.threads()[0].ID); len(hist) != 2 || strings.Contains(hist[1].Text, "READY_TO_SETTLE") {
 		t.Errorf("history %+v", hist)
 	}
 	h.waitAllNoted()
 	h.pressData(offer.Keyboard[0][0].Data, offer.ID)
 	h.waitText("Settled: fix caddy")
 	tgtest.WaitFor(t, "the screen to hold only the note", func() bool { return len(h.visibleTexts()) == 1 })
-	if s := h.sessions()[0]; s.Settled.IsZero() {
+	if s := h.threads()[0]; s.Settled.IsZero() {
 		t.Errorf("not settled: %+v", s)
 	}
 	// The old button does nothing any more.
-	if got := h.pressData(offer.Keyboard[0][0].Data, offer.ID); got != "That conversation is no longer open." {
+	if got := h.pressData(offer.Keyboard[0][0].Data, offer.ID); got != "That thread is no longer open." {
 		t.Errorf("stale button answered %q", got)
 	}
 }
@@ -766,7 +717,7 @@ func TestAgentOfferWithoutWords(t *testing.T) {
 	h := newConvHarness(t)
 	h.run.reply = func(string) (string, error) { return "READY_TO_SETTLE", nil }
 	h.say("anything else?")
-	h.waitText("Settle this conversation?")
+	h.waitText("Settle this thread?")
 	for _, m := range h.tg.Sent() {
 		if strings.Contains(m.Text, "no answer") || strings.Contains(m.Text, "READY_TO_SETTLE") {
 			t.Errorf("unexpected message %q", m.Text)

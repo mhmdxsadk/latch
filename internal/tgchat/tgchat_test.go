@@ -18,8 +18,8 @@ import (
 const owner = 4242
 
 type call struct {
-	session, message, db string
-	images               []string
+	thread, message, db string
+	images              []string
 }
 
 // fakeRunner answers with reply(message), or blocks until ctx ends when
@@ -36,7 +36,7 @@ type fakeRunner struct {
 
 func (f *fakeRunner) Run(ctx context.Context, t Turn, progress func(Progress)) (string, error) {
 	f.mu.Lock()
-	f.calls = append(f.calls, call{t.Session, t.Message, t.DB, t.Images})
+	f.calls = append(f.calls, call{t.Thread, t.Message, t.DB, t.Images})
 	message := t.Message
 	block, reply, steps := f.block, f.reply, f.steps
 	f.mu.Unlock()
@@ -122,7 +122,7 @@ func (h *harness) waitText(want string) tgtest.Sent {
 	return got
 }
 
-func TestMessagesRunInTheActiveSession(t *testing.T) {
+func TestMessagesRunInTheActiveThread(t *testing.T) {
 	h := newHarness(t, time.Minute)
 	h.send("is caddy healthy?")
 	m := h.waitText("answer to is caddy healthy?")
@@ -132,21 +132,21 @@ func TestMessagesRunInTheActiveSession(t *testing.T) {
 	h.send("and jellyfin?")
 	h.waitText("answer to and jellyfin?")
 	calls := h.run.Calls()
-	if len(calls) != 2 || calls[0].session != calls[1].session || len(calls[0].session) != 36 {
+	if len(calls) != 2 || calls[0].thread != calls[1].thread || len(calls[0].thread) != 36 {
 		t.Fatalf("calls %+v", calls)
 	}
 
 	h.send("/new")
-	h.waitText("New conversation.")
+	h.waitText("New thread.")
 	h.send("how full is /srv?")
 	h.waitText("answer to how full is /srv?")
-	if c := h.run.Calls(); c[2].session == c[0].session {
-		t.Fatal("/new kept the old session")
+	if c := h.run.Calls(); c[2].thread == c[0].thread {
+		t.Fatal("/new kept the old thread")
 	}
 
-	// The conversation survives a bridge restart.
+	// The thread survives a bridge restart.
 	c := h.newChat(time.Minute)
-	if c.index.Active != h.run.Calls()[2].session {
+	if c.index.Active != h.run.Calls()[2].thread {
 		t.Fatalf("index %+v", c.index)
 	}
 	if st, err := os.Stat(h.index); err != nil || st.Mode().Perm() != 0o600 {
@@ -247,7 +247,7 @@ func TestAnswersAreCleanedAndSplit(t *testing.T) {
 
 func TestNotify(t *testing.T) {
 	h := newHarness(t, time.Minute)
-	h.chat.Notify("ignored: no conversation yet", "note", 0)
+	h.chat.Notify("ignored: no thread yet", "note", 0)
 	h.send("restart caddy please")
 	h.waitText("answer to restart caddy please")
 	h.chat.Notify("Latch: request 3 was approved and finished: done.", "Sent keeper the result of request 3.", 77)
@@ -256,7 +256,7 @@ func TestNotify(t *testing.T) {
 		t.Errorf("follow-up does not reply to the request message: %+v", m)
 	}
 	c := h.run.Calls()
-	if len(c) != 2 || c[1].session != c[0].session {
+	if len(c) != 2 || c[1].thread != c[0].thread {
 		t.Fatalf("calls %+v", c)
 	}
 }
@@ -307,7 +307,7 @@ END
 	t.Setenv("BOT_TOKEN", "must-not-leak")
 	r := &ExecRunner{Command: script, Config: "/home/keeper/keeper.yaml", ExtraArgs: []string{"--safety", "restricted"}}
 	var steps []Progress
-	out, err := r.Run(context.Background(), Turn{Session: "sess-1", DB: "/data/sess-1.db", Message: "--yolo is just text"}, func(p Progress) { steps = append(steps, p) })
+	out, err := r.Run(context.Background(), Turn{Thread: "sess-1", DB: "/data/sess-1.db", Message: "--yolo is just text"}, func(p Progress) { steps = append(steps, p) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,13 +337,13 @@ END
 	}
 
 	write("echo '{\"type\":\"error\",\"error\":\"model refused: quota\"}'\necho 'bad config' >&2\nexit 3\n")
-	_, err = r.Run(context.Background(), Turn{Session: "s", Message: "m"}, nil)
+	_, err = r.Run(context.Background(), Turn{Thread: "s", Message: "m"}, nil)
 	var re *RunError
 	if !errors.As(err, &re) || re.Code != 3 || re.Stderr != "model refused: quota" {
 		t.Fatalf("err = %v", err)
 	}
 	write("echo 'bad config' >&2\nexit 3\n")
-	if _, err = r.Run(context.Background(), Turn{Session: "s", Message: "m"}, nil); !errors.As(err, &re) || re.Stderr != "bad config" {
+	if _, err = r.Run(context.Background(), Turn{Thread: "s", Message: "m"}, nil); !errors.As(err, &re) || re.Stderr != "bad config" {
 		t.Fatalf("err = %v", err)
 	}
 
@@ -352,7 +352,7 @@ END
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if _, err := r.Run(ctx, Turn{Session: "s", Message: "m"}, nil); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := r.Run(ctx, Turn{Thread: "s", Message: "m"}, nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v", err)
 	}
 	if time.Since(start) > 3*time.Second {
@@ -446,11 +446,10 @@ func TestWelcome(t *testing.T) {
 	h.send("/start")
 	m := h.waitText("On-call engineer for the Lisbon server. Monitors containers.")
 	want := "On-call engineer for the Lisbon server. Monitors containers.\n\nCommands:\n\n" +
-		"/new - Clears the chat and starts a new conversation\n\n" +
-		"/sessions - Shows earlier conversations to go back to\n\n" +
-		"/settle - Closes this conversation and clears the chat\n\n" +
+		"/new - Clears the chat and starts a new thread\n\n" +
+		"/threads - Shows earlier threads to go back to\n\n" +
+		"/settle - Closes this thread and clears the chat\n\n" +
 		"/stop - Stop the running answer and drop waiting messages\n\n" +
-		"/check - Checks the server's current state\n\n" +
 		"/help - Shows this message"
 	if len(m.Entities) != 0 || m.Text != want {
 		t.Errorf("%q %+v", m.Text, m.Entities)
@@ -461,46 +460,12 @@ func TestWelcome(t *testing.T) {
 	}
 }
 
-func TestChecks(t *testing.T) {
+func TestCheckIsAnUnknownCommand(t *testing.T) {
 	h := newHarness(t, time.Minute)
-	checks := &fakeRunner{reply: func(string) (string, error) { return "ALL_CLEAR", nil }}
-	h.chat.o.CheckRunner = checks
-
 	h.send("/check")
-	h.waitText("All clear.")
-	if id := h.chat.index.Active; id != "" {
-		t.Fatalf("an all-clear check left a conversation: %s", id)
-	}
-
-	checks.mu.Lock()
-	checks.reply = func(string) (string, error) {
-		return "**Jellyfin keeps restarting.** Its health check fails since 09:12.\n\nI would restart it if you ask.", nil
-	}
-	checks.mu.Unlock()
-	h.send("/check")
-	h.waitText("Jellyfin keeps restarting.")
-	h.chat.mu.Lock()
-	active, reported := h.chat.index.Active, h.chat.index.Reported
-	h.chat.mu.Unlock()
-	if active == "" {
-		t.Fatal("the finding is not the current conversation")
-	}
-	if len(reported) != 1 || reported[0].Headline != "Jellyfin keeps restarting. Its health check fails since 09:12." {
-		t.Errorf("reported %+v", reported)
-	}
-	// The owner's reply continues the check's conversation.
-	h.send("fix it")
-	h.waitText("answer to fix it")
-	if c := h.run.Calls(); c[len(c)-1].session != active {
-		t.Errorf("reply went to %s, not the check's conversation", c[len(c)-1].session)
-	}
-	// The next check is told what was already reported.
-	h.send("/check")
-	tgtest.WaitFor(t, "a third check", func() bool { return len(checks.Calls()) == 3 })
-	last := checks.Calls()[2]
-	if !strings.Contains(last.message, "Already reported") || !strings.Contains(last.message, "Jellyfin keeps restarting") ||
-		!strings.Contains(last.message, "Do not file") {
-		t.Errorf("prompt:\n%s", last.message)
+	h.waitText("Unknown command. Try /help.")
+	if n := len(h.run.Calls()); n != 0 {
+		t.Errorf("/check started %d agent turns", n)
 	}
 }
 

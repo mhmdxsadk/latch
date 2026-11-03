@@ -18,10 +18,11 @@ import (
 	"github.com/mhmdxsadk/latch/internal/textsafe"
 )
 
-// Turn is one agent turn: a message for a session. DB is the session's own
-// database file, or "" for the agent's shared default database.
+// Turn is one agent turn: a message for a thread, which Docker Agent calls a
+// session (--session). DB is the thread's own database file, or "" for the
+// agent's shared default database.
 type Turn struct {
-	Session string
+	Thread  string
 	DB      string
 	Message string
 	// Images are files attached to the message.
@@ -163,7 +164,7 @@ const maxEventLine = 16 << 20
 
 // Run runs one turn, calling progress (when not nil) as the answer grows.
 func (r *ExecRunner) Run(ctx context.Context, t Turn, progress func(Progress)) (string, error) {
-	args := []string{"run", r.Config, "--exec", "--json", "--session", t.Session}
+	args := []string{"run", r.Config, "--exec", "--json", "--session", t.Thread}
 	if t.DB != "" {
 		args = append(args, "--session-db", t.DB)
 	}

@@ -207,37 +207,21 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 		}
 		agentUID = &acct.UID
 		b.images = a.Images
-		var checks tgchat.Runner
-		if ch := a.Checks; ch != nil {
-			verify := func() error { return checkReadOnly(ch.Config, acct.Home) }
-			if err := verify(); err != nil {
-				log.Error("/check is off", "err", err)
-			} else {
-				// Always restricted: read-only tools run, everything
-				// else is refused without asking. The config is
-				// verified again before every run, so editing it later
-				// cannot add a change tool.
-				checks = guardedRunner{
-					Runner: &tgchat.ExecRunner{Command: a.Command, Config: ch.Config, ExtraArgs: []string{"--safety", "restricted"}, Account: &acct},
-					verify: verify,
-				}
-			}
-		}
-		// Each conversation gets its own Docker Agent database in the
-		// agent's home, so deleting a conversation deletes a file. The
+		// Each thread gets its own Docker Agent database in the
+		// agent's home, so deleting a thread deletes a file. The
 		// bridge creates the folder and deletes files as the agent's own
 		// account, so it needs no extra rights. If the folder cannot be
 		// made, everything shares the agent's default database and nothing
 		// is ever deleted.
-		sessionDir := filepath.Join(acct.Home, ".cagent", "latch-sessions")
+		threadDir := filepath.Join(acct.Home, ".cagent", "latch-sessions")
 		mctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := acct.MakeDir(mctx, sessionDir); err != nil {
-			log.Warn("conversations share the agent's default database; their folder could not be made", "err", err)
-			sessionDir = ""
+		if err := acct.MakeDir(mctx, threadDir); err != nil {
+			log.Warn("threads share the agent's default database; their folder could not be made", "err", err)
+			threadDir = ""
 		}
-		if sessionDir != "" {
+		if threadDir != "" {
 			// Photos left by a turn that never finished.
-			if err := sweepPhotos(mctx, sessionDir, acct.Remove); err != nil {
+			if err := sweepPhotos(mctx, threadDir, acct.Remove); err != nil {
 				log.Warn("removing old photos failed", "err", err)
 			}
 		}
@@ -252,25 +236,25 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			return nil, err
 		}
 		b.chat, err = tgchat.New(tgchat.Options{
-			SessionDir: sessionDir,
+			ThreadDir:  threadDir,
 			HistoryDir: historyDir,
 			Remove: func(ctx context.Context, paths []string) error {
 				for _, p := range paths {
-					if filepath.Dir(p) != sessionDir || strings.Contains(p, "..") {
-						return fmt.Errorf("refusing to delete %q: not in %s", p, sessionDir)
+					if filepath.Dir(p) != threadDir || strings.Contains(p, "..") {
+						return fmt.Errorf("refusing to delete %q: not in %s", p, threadDir)
 					}
 				}
 				return acct.Remove(ctx, paths...)
 			},
 			SaveImage: func(ctx context.Context, data []byte, ext string) (string, error) {
-				if sessionDir == "" {
-					return "", errors.New("no session folder")
+				if threadDir == "" {
+					return "", errors.New("no thread folder")
 				}
 				var r [12]byte
 				if _, err := rand.Read(r[:]); err != nil {
 					return "", err
 				}
-				p := filepath.Join(sessionDir, "photo-"+hex.EncodeToString(r[:])+ext)
+				p := filepath.Join(threadDir, "photo-"+hex.EncodeToString(r[:])+ext)
 				// The bridge cannot write in the agent's private home, so
 				// the agent's own account creates the file.
 				wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -289,7 +273,6 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			},
 			LoginCommand:  a.Login != "",
 			ExtraCommands: extra,
-			CheckRunner:   checks,
 			Bot:           bot,
 			Chat:          cfg.OwnerID,
 			Runner: &tgchat.ExecRunner{
@@ -351,19 +334,6 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 		return nil, err
 	}
 	return b, nil
-}
-
-// guardedRunner runs a check only when verify passes, every time.
-type guardedRunner struct {
-	tgchat.Runner
-	verify func() error
-}
-
-func (g guardedRunner) Run(ctx context.Context, t tgchat.Turn, progress func(tgchat.Progress)) (string, error) {
-	if err := g.verify(); err != nil {
-		return "", fmt.Errorf("check refused: %w", err)
-	}
-	return g.Runner.Run(ctx, t, progress)
 }
 
 // hostname is the server's short name, for the chat's welcome text.

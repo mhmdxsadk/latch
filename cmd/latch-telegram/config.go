@@ -7,16 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
-
-	"github.com/mhmdxsadk/latch/internal/approval"
 )
 
 const (
@@ -67,16 +63,6 @@ type AgentConfig struct {
 	// Images turns on photos: the agent's model must read images, or Docker
 	// Agent drops them without a word.
 	Images bool `yaml:"images"`
-	// Checks, when set, turns on /check, which has the agent check the server.
-	Checks *ChecksConfig `yaml:"checks"`
-}
-
-// ChecksConfig is the /check command. Config is an agent config that
-// cannot change anything: like the main one, but without an allow list for
-// Latch's change tools. Check runs always use --safety restricted, so those
-// tools are refused.
-type ChecksConfig struct {
-	Config string `yaml:"config"`
 }
 
 // Duration is a time.Duration written like "10m".
@@ -200,12 +186,6 @@ func (c *Config) validate() error {
 		if d := time.Duration(a.Timeout); d < 10*time.Second || d > maxTimeout {
 			add("agent.timeout: %s must be between 10s and 1h", d)
 		}
-		if ch := a.Checks; ch != nil {
-			absPath("agent.checks.config", ch.Config)
-			if ch.Config == a.Config {
-				add("agent.checks.config: must be a separate agent config without the change tools, not agent.config")
-			}
-		}
 	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "\n"))
@@ -286,46 +266,4 @@ func envValue(text, key string) (string, bool) {
 func fileExists(p string) bool {
 	_, err := os.Stat(p) //nolint:gosec // path from the service's own environment
 	return err == nil
-}
-
-// checkReadOnly verifies that an agent config cannot use Latch's change
-// tools: no permissions allow rule in it may match one (a matching rule
-// would beat restricted mode). It does the same for the agent account's
-// own Docker Agent settings, which apply to every config it runs.
-func checkReadOnly(config, home string) error {
-	files := []string{config}
-	if home != "" {
-		files = append(files, filepath.Join(home, ".config", "cagent", "config.yaml"))
-	}
-	for i, f := range files {
-		b, err := os.ReadFile(f) //nolint:gosec // owner-supplied agent config paths
-		if errors.Is(err, os.ErrNotExist) && i > 0 {
-			continue // no personal settings
-		}
-		if err != nil {
-			return err
-		}
-		var doc struct {
-			Permissions struct {
-				Allow []string `yaml:"allow"`
-			} `yaml:"permissions"`
-			Settings struct {
-				Permissions struct {
-					Allow []string `yaml:"allow"`
-				} `yaml:"permissions"`
-			} `yaml:"settings"`
-		}
-		if err := yaml.Unmarshal(b, &doc); err != nil {
-			return fmt.Errorf("%s: %w", f, cleanYAMLError(err))
-		}
-		for _, rule := range slices.Concat(doc.Permissions.Allow, doc.Settings.Permissions.Allow) {
-			pattern, _, _ := strings.Cut(rule, ":")
-			for _, tool := range approval.ChangeTools {
-				if ok, _ := path.Match(pattern, tool); ok {
-					return fmt.Errorf("%s allows %s (rule %q); checks must not be able to change anything", f, tool, rule)
-				}
-			}
-		}
-	}
-	return nil
 }

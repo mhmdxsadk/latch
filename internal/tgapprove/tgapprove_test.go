@@ -162,7 +162,7 @@ func TestAnnounceApproveAndUpdate(t *testing.T) {
 	}
 	m := sent[0]
 	// What the head says is not said again, and there is no deadline line.
-	if want := "uid 1000 wants to stop container jellyfin\npull: false"; m.Text != want {
+	if want := "Stop container jellyfin?\npull: false"; m.Text != want {
 		t.Errorf("message %q, want %q", m.Text, want)
 	}
 	if len(m.Keyboard) != 1 || len(m.Keyboard[0]) != 2 || m.Keyboard[0][0].Text != "Approve" || m.Keyboard[0][1].Text != "Deny" ||
@@ -390,7 +390,7 @@ func TestFileRequestsAreFormatted(t *testing.T) {
 			t.Fatalf("Telegram would refuse %q: %s", m.Text, msg)
 		}
 	}
-	wantCreate := "keeper wants to create /root/hello.txt\nContent: hello"
+	wantCreate := "Create /root/hello.txt?\nContent: hello"
 	if sent[0].Text != wantCreate {
 		t.Errorf("create:\n%s\nwant:\n%s", sent[0].Text, wantCreate)
 	}
@@ -495,7 +495,7 @@ func TestFiledRequestIsTheWholeReply(t *testing.T) {
 	}
 	// It is shown right away, once, and never changes before the decision.
 	sent := h.tg.Sent()
-	if len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "uid 1000 wants to stop container jellyfin") {
+	if len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "Stop container jellyfin?") {
 		t.Fatalf("%+v", sent)
 	}
 	h.poll()
@@ -639,10 +639,10 @@ func TestOrdinaryFileDetailsAreHiddenButAnUnusualModeShows(t *testing.T) {
 	if len(sent) != 2 {
 		t.Fatalf("%+v", sent)
 	}
-	if want := "keeper wants to create /home/a\nContent: test"; sent[0].Text != want {
+	if want := "Create /home/a?\nContent: test"; sent[0].Text != want {
 		t.Errorf("ordinary file: %q, want %q", sent[0].Text, want)
 	}
-	if want := "keeper wants to create /home/b\nContent: test\nmode: 0777"; sent[1].Text != want {
+	if want := "Create /home/b?\nContent: test\nmode: 0777"; sent[1].Text != want {
 		t.Errorf("unusual mode: %q, want %q", sent[1].Text, want)
 	}
 }

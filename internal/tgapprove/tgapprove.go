@@ -26,6 +26,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/mhmdxsadk/latch/internal/admin"
 	"github.com/mhmdxsadk/latch/internal/approval"
@@ -360,7 +362,7 @@ func (a *Approver) decide(ctx context.Context, approve bool, id int64, fp string
 // the request in one message.
 //
 // Messages read like a colleague asking for a sign-off: one line saying
-// who wants to do what, the deadline, and the exact details folded away
+// what is to be done, the deadline, and the exact details folded away
 // until tapped.
 func (a *Approver) render(r approval.Request, s *shown) (tgapi.Text, tgapi.Keyboard) {
 	if r.Status != approval.StatusPending {
@@ -498,7 +500,7 @@ func (a *Approver) shortened(r approval.Request, head tgapi.Text, body []tgapi.T
 	return b.Done()
 }
 
-// pendingText is the head (who wants to do what, and until when) and the
+// pendingText is the head (what is to be done, and until when) and the
 // detail blocks of a waiting request.
 func (a *Approver) pendingText(r approval.Request) (tgapi.Text, []tgapi.Text) {
 	var b tgapi.Builder
@@ -508,7 +510,8 @@ func (a *Approver) pendingText(r approval.Request) (tgapi.Text, []tgapi.Text) {
 		b.Text(a.timeText(r.ExpiresAt))
 		b.Plain(" unless you deny it.")
 	} else {
-		b.Plain(a.who(r.RequestedBy.UID) + " wants to " + a.phrase(r, false))
+		// The owner knows who asks, so the request leads with the action.
+		b.Plain(upperFirst(a.phrase(r, false)) + "?")
 	}
 	return b.Done(), a.details(r)
 }
@@ -580,6 +583,15 @@ func (a *Approver) voice() string {
 		return a.o.AgentName
 	}
 	return "Latch"
+}
+
+// upperFirst capitalizes the first letter of s.
+func upperFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r, n := utf8.DecodeRuneInString(s)
+	return string(unicode.ToUpper(r)) + s[n:]
 }
 
 func (a *Approver) who(uid uint32) string {

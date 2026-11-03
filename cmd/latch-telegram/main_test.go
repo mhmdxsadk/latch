@@ -495,73 +495,10 @@ func TestStopPressOnlyFromOwner(t *testing.T) {
 	}
 }
 
-func TestCheckReadOnly(t *testing.T) {
-	dir := t.TempDir()
-	cfg := filepath.Join(dir, "check.yaml")
-	home := filepath.Join(dir, "home")
-	write := func(p, body string) {
-		t.Helper()
-		os.MkdirAll(filepath.Dir(p), 0o700)
-		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(cfg, "agents:\n  inspector:\n    model: x\n")
-	if err := checkReadOnly(cfg, home); err != nil {
-		t.Fatalf("plain config: %v", err)
-	}
-	for _, rule := range []string{"file_edit", "docker_*", "*", "http_request:url=*"} {
-		write(cfg, "permissions:\n  allow:\n    - fetch\n    - \""+rule+"\"\n")
-		if err := checkReadOnly(cfg, home); err == nil || !strings.Contains(err.Error(), "must not be able to change") {
-			t.Errorf("rule %q: %v", rule, err)
-		}
-	}
-	write(cfg, "permissions:\n  allow: [fetch, docker_status]\n")
-	if err := checkReadOnly(cfg, home); err != nil {
-		t.Errorf("read-only rules: %v", err)
-	}
-	// The account's own settings apply to every config it runs.
-	write(filepath.Join(home, ".config", "cagent", "config.yaml"), "settings:\n  permissions:\n    allow: [systemd_restart]\n")
-	if err := checkReadOnly(cfg, home); err == nil || !strings.Contains(err.Error(), "systemd_restart") {
-		t.Errorf("personal settings: %v", err)
-	}
-}
-
-func TestChecksConfig(t *testing.T) {
+func TestChecksConfigIsRefused(t *testing.T) {
 	base := "owner_id: 1\nagent:\n  user: keeper\n  config: /home/keeper/keeper.yaml\n"
-	c, err := loadConfig(writeConfig(t, base+"  checks:\n    config: /home/keeper/keeper-check.yaml\n"))
-	if err != nil || c.Agent.Checks == nil {
-		t.Fatalf("%v %+v", err, c)
-	}
-	for _, tc := range []struct{ body, want string }{
-		{"  checks:\n    every: 6h\n    config: /home/keeper/keeper-check.yaml\n", "field every not found"},
-		{"  checks:\n    config: /home/keeper/keeper.yaml\n", "separate agent config"},
-		{"  checks: {}\n", "agent.checks.config"},
-	} {
-		if _, err := loadConfig(writeConfig(t, base+tc.body)); err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("%q: %v", tc.body, err)
-		}
-	}
-}
-
-type countRunner struct{ calls int }
-
-func (c *countRunner) Run(context.Context, tgchat.Turn, func(tgchat.Progress)) (string, error) {
-	c.calls++
-	return "ALL_CLEAR", nil
-}
-
-func TestGuardedRunnerVerifiesEveryRun(t *testing.T) {
-	inner := &countRunner{}
-	var verr error
-	g := guardedRunner{Runner: inner, verify: func() error { return verr }}
-	if _, err := g.Run(context.Background(), tgchat.Turn{Session: "s", Message: "m"}, nil); err != nil || inner.calls != 1 {
-		t.Fatalf("%v %d", err, inner.calls)
-	}
-	// The config is edited after startup to allow a change tool: the next
-	// run is refused before the agent starts.
-	verr = errors.New("allows docker_restart")
-	if _, err := g.Run(context.Background(), tgchat.Turn{Session: "s", Message: "m"}, nil); err == nil || !strings.Contains(err.Error(), "check refused") || inner.calls != 1 {
-		t.Fatalf("%v %d", err, inner.calls)
+	_, err := loadConfig(writeConfig(t, base+"  checks:\n    config: /home/keeper/keeper-check.yaml\n"))
+	if err == nil || !strings.Contains(err.Error(), "field checks not found") {
+		t.Errorf("an agent.checks section loaded: %v", err)
 	}
 }

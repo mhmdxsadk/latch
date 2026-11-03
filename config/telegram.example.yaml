@@ -59,10 +59,3 @@ agent:
   # message. Turn this on only if the agent's model reads images; otherwise
   # Docker Agent quietly ignores them.
   # images: true
-  # /check: the agent sweeps the server when you ask and reports what it
-  # finds. Checks never change anything: they run with --safety restricted
-  # and this config, a copy of the agent config WITHOUT the permissions
-  # allow list for Latch's change tools (latch-telegram refuses one that
-  # allows them). Nothing runs on a timer.
-  # checks:
-  #   config: /home/keeper/keeper-check.yaml
