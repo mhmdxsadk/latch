@@ -131,6 +131,7 @@ type Chat struct {
 	index  index
 	cancel context.CancelFunc // of the running turn, nil when idle
 	draft  int64              // live preview id of the running turn
+	held   []held             // finished answers waiting for the rest of a burst
 
 	drafts atomic.Int64 // last draft id handed out
 }
@@ -143,8 +144,22 @@ type job struct {
 	// messageID is the message the answer replies to: the request's message
 	// for the outcome of a decision, 0 otherwise.
 	messageID int64
+	// source is the owner's message this job answers (0: none), the one a
+	// reply goes under when several messages are answered together.
+	source int64
 	// check is a scheduled check; manual when the owner asked for it.
 	check, manual bool
+}
+
+// held is a finished answer (or note) kept until every message of the burst
+// has one, so they go out together.
+type held struct {
+	session string
+	source  int64  // the owner's message it answers
+	fixed   int64  // the decided request's message; the reply always goes there
+	out     string // the agent's answer, Markdown
+	note    string // a note from the bridge instead of an answer
+	settle  bool   // the agent offered to settle
 }
 
 type index struct {
@@ -212,9 +227,13 @@ func (c *Chat) Run(ctx context.Context) {
 			return
 		case j := <-c.queue:
 			if j.check {
+				c.flush(ctx) // a check can take minutes: show what is done first
 				c.check(ctx, j.manual)
 			} else {
 				c.turn(ctx, j)
+			}
+			if len(c.queue) == 0 {
+				c.flush(ctx)
 			}
 		}
 	}
@@ -237,7 +256,7 @@ func (c *Chat) HandleText(ctx context.Context, text string, messageID int64) {
 	id, victims := c.begin(text)
 	c.dropSessions(ctx, victims)
 	c.appendHistory(id, "owner", text)
-	c.enqueue(ctx, job{session: id, text: text})
+	c.enqueue(ctx, job{session: id, text: text, source: messageID})
 }
 
 // Notify sends text to the agent in the current conversation as an automatic
@@ -296,6 +315,10 @@ func (c *Chat) HandleImages(ctx context.Context, caption string, images [][]byte
 		}
 		paths = append(paths, path)
 	}
+	var source int64
+	if len(messageIDs) > 0 {
+		source = messageIDs[0]
+	}
 	titleText, shown := caption, caption+" [photo]"
 	if strings.TrimSpace(caption) == "" {
 		caption, titleText, shown = imageText, "Photo", "[photo]"
@@ -304,7 +327,7 @@ func (c *Chat) HandleImages(ctx context.Context, caption string, images [][]byte
 	c.dropSessions(ctx, victims)
 	c.appendHistory(id, "owner", shown)
 	select {
-	case c.queue <- job{session: id, text: caption, images: paths}:
+	case c.queue <- job{session: id, text: caption, images: paths, source: source}:
 	default:
 		c.discard(paths)
 		c.say(ctx, "Too many messages waiting. Wait for an answer or use /stop.")
@@ -429,36 +452,34 @@ func (c *Chat) turn(parent context.Context, j job) {
 	}
 	select {
 	case <-stopped:
-		c.sayTo(parent, j.messageID, "Stopped.")
+		c.hold(j, held{note: "Stopped."})
 		return
 	default:
 	}
 	var re *RunError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		c.sayTo(parent, j.messageID, fmt.Sprintf("Stopped after %s without an answer.", c.o.Timeout))
+		c.hold(j, held{note: fmt.Sprintf("Stopped after %s without an answer.", c.o.Timeout)})
 		return
 	case errors.As(err, &re) && re.UsageLimit():
-		c.sayTo(parent, j.messageID, usageLimitText)
+		c.hold(j, held{note: usageLimitText})
 		return
 	case errors.As(err, &re) && re.LoginExpired() && c.o.LoginCommand:
-		c.sayTo(parent, j.messageID, loginExpiredText)
+		c.hold(j, held{note: loginExpiredText})
 		return
 	case errors.As(err, &re):
-		c.sayTo(parent, j.messageID, fmt.Sprintf("Error: %s.", re.Error()))
+		c.hold(j, held{note: fmt.Sprintf("Error: %s.", re.Error())})
 		return
 	case err != nil:
 		c.o.Logger.Warn("agent run failed", "err", err)
-		c.sayTo(parent, j.messageID, "Could not start; see the latch-telegram log.")
+		c.hold(j, held{note: "Could not start; see the latch-telegram log."})
 		return
 	}
 	c.deliver(parent, out, j, started)
 }
 
-// deliver shows the agent's answer. When the turn filed a request, the
-// request is the reply and the answer is dropped; the answer to a decision
-// goes under the outcome in the decided request's message; only otherwise is
-// it a message of its own.
+// deliver keeps the agent's answer for flush. When the turn filed a request,
+// the request is the reply and the answer is dropped.
 func (c *Chat) deliver(ctx context.Context, out string, j job, started time.Time) {
 	if c.o.Filed != nil && c.o.Filed(ctx, started) {
 		c.o.Logger.Debug("dropped the answer of a turn that filed a request")
@@ -466,16 +487,50 @@ func (c *Chat) deliver(ctx context.Context, out string, j job, started time.Time
 	}
 	out, done := splitSettle(out)
 	c.appendHistory(j.session, "agent", out)
-	body := Markdown(out)
-	switch {
-	case strings.TrimSpace(body.S) == "" && done:
-		// Only the offer: nothing to show but the question.
-	case j.messageID != 0 && c.o.Follow != nil && strings.TrimSpace(body.S) != "" && c.o.Follow(ctx, j.messageID, body):
-	default:
-		c.answer(ctx, out, j.messageID)
+	c.hold(j, held{out: out, settle: done})
+}
+
+// hold keeps what a job produced until the burst it belongs to is done.
+func (c *Chat) hold(j job, h held) {
+	h.session, h.source, h.fixed = j.session, j.source, j.messageID
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.held = append(slices.DeleteFunc(c.held, func(o held) bool { return o.session != c.index.Active }), h)
+}
+
+// flush sends everything held. One answer is a plain message. Several, from a
+// burst of messages, are each a reply to the message they answer. An answer to
+// a decision goes under the decided request instead. Answers of a conversation
+// the owner left meanwhile are dropped (the transcript has them).
+func (c *Chat) flush(ctx context.Context) {
+	c.mu.Lock()
+	items := slices.DeleteFunc(c.held, func(h held) bool { return h.session != c.index.Active })
+	c.held = nil
+	c.mu.Unlock()
+	var settle string
+	for _, h := range items {
+		replyTo := h.fixed
+		if replyTo == 0 && len(items) > 1 {
+			replyTo = h.source
+		}
+		if h.note != "" {
+			c.sayTo(ctx, replyTo, h.note)
+			continue
+		}
+		body := Markdown(h.out)
+		switch {
+		case strings.TrimSpace(body.S) == "" && h.settle:
+			// Only the offer: nothing to show but the question.
+		case h.fixed != 0 && c.o.Follow != nil && strings.TrimSpace(body.S) != "" && c.o.Follow(ctx, h.fixed, body):
+		default:
+			c.answer(ctx, h.out, replyTo)
+		}
+		if h.settle {
+			settle = h.session
+		}
 	}
-	if done {
-		c.offerSettle(ctx, j.session)
+	if settle != "" {
+		c.offerSettle(ctx, settle)
 	}
 }
 

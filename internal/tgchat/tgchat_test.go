@@ -575,3 +575,46 @@ func TestBusyWhileATurnRuns(t *testing.T) {
 	h.waitText("answer to hello")
 	tgtest.WaitFor(t, "the turn to end", func() bool { return !h.chat.Busy() })
 }
+
+func TestSingleMessageAnswerIsNotAReply(t *testing.T) {
+	h := newHarness(t, time.Minute)
+	h.chat.HandleText(context.Background(), "is caddy up?", 501)
+	m := h.waitText("answer to is caddy up?")
+	if m.ReplyTo != 0 {
+		t.Errorf("a single answer replied to message %d", m.ReplyTo)
+	}
+}
+
+func TestBurstAnswersWaitForAllAndReplyToEach(t *testing.T) {
+	release, queued := make(chan struct{}), make(chan struct{})
+	h := newHarness(t, time.Minute)
+	h.run.reply = func(message string) (string, error) {
+		if message == "first" {
+			<-queued // the whole burst is queued before the first run ends
+		}
+		if message == "second" {
+			<-release // the second answer is slow
+		}
+		return "answer to " + message, nil
+	}
+	h.chat.HandleText(context.Background(), "first", 601)
+	h.chat.HandleText(context.Background(), "second", 602)
+	h.chat.HandleText(context.Background(), "third", 603)
+	close(queued)
+	tgtest.WaitFor(t, "the first run to finish and the second to start", func() bool { return len(h.run.Calls()) >= 2 })
+	time.Sleep(300 * time.Millisecond)
+	for _, m := range h.tg.Sent() {
+		if strings.Contains(m.Text, "answer to") {
+			t.Fatalf("an answer went out before the whole burst was done: %q", m.Text)
+		}
+	}
+	close(release)
+	for _, want := range []struct {
+		text string
+		to   int64
+	}{{"answer to first", 601}, {"answer to second", 602}, {"answer to third", 603}} {
+		if m := h.waitText(want.text); m.ReplyTo != want.to {
+			t.Errorf("%q replied to %d, want %d", want.text, m.ReplyTo, want.to)
+		}
+	}
+}
