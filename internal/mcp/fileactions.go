@@ -64,6 +64,8 @@ var (
 	errMoveSymlink   = userError{"the path is a symlink; name the file or folder it points to"}
 	errMoveDevice    = userError{"file_move only renames: both paths must be on one filesystem, and a mount point cannot be moved"}
 	errMoveInside    = userError{"the new path is inside the folder being moved"}
+	errNotEmpty      = userError{"the folder is not empty; file_delete removes only empty folders"}
+	errMountPoint    = userError{"the path is a mount point and cannot be deleted"}
 
 	// errTargetDown, errStillDown and errReloadFailed end an execution
 	// whose summary already says what happened.
@@ -99,6 +101,10 @@ type dirCreateIn struct {
 type fileMoveIn struct {
 	From string `json:"from" jsonschema:"absolute, clean path of an existing file or folder"`
 	To   string `json:"to" jsonschema:"absolute, clean new path; nothing may exist there and its parent folder must exist"`
+}
+
+type fileDeleteIn struct {
+	Path string `json:"path" jsonschema:"absolute, clean path of a text file (at most 1 MiB) or an empty folder"`
 }
 
 type fileBackupsIn struct {
@@ -664,6 +670,54 @@ func (a *fileMove) Execute(ctx context.Context) (approval.Result, error) {
 	return approval.Result{Summary: sum + note}, err
 }
 
+// fileDelete deletes one text file or empty folder.
+type fileDelete struct {
+	d       *Deps
+	path    string
+	removal files.Removal
+	details []string
+}
+
+func (a *fileDelete) Kind() string { return "file_delete" }
+func (a *fileDelete) Resource() approval.Resource {
+	t := "file"
+	if a.removal.IsDir {
+		t = "folder"
+	}
+	return approval.Resource{Type: t, Name: a.removal.Path}
+}
+func (a *fileDelete) Mode() approval.Mode { return approval.Always }
+func (a *fileDelete) Describe() []string  { return a.details }
+func (a *fileDelete) Params() []approval.Param {
+	return []approval.Param{{Name: "path", Value: a.removal.Path}}
+}
+
+func (a *fileDelete) Check(ctx context.Context) error {
+	r, err := a.d.Editor.ResolveDelete(ctx, a.path)
+	if err != nil {
+		return err
+	}
+	if r != a.removal {
+		return files.ErrChanged
+	}
+	return nil
+}
+
+func (a *fileDelete) Execute(ctx context.Context) (approval.Result, error) {
+	backup, err := a.d.Editor.Delete(ctx, a.path, a.removal)
+	if err != nil {
+		return approval.Result{}, err
+	}
+	sum := "deleted " + a.removal.Path
+	if a.removal.IsDir {
+		sum = "deleted empty folder " + a.removal.Path
+	} else {
+		sum += ", backup " + backup
+	}
+	note, err := a.d.reloadFor(ctx, a.removal.Path)
+	return approval.Result{Summary: sum + note}, err
+}
+
 func modeText(m fs.FileMode) string { return fmt.Sprintf("%04o", uint32(m.Perm())) }
 
 var modePattern = regexp.MustCompile(`^0?[0-7]{3}$`)
@@ -844,6 +898,41 @@ func registerFileActions(s *sdk.Server, d *Deps) {
 		}
 		out, err := d.submit(ctx, &fileMove{d: d, from: in.From, to: in.To, move: m, details: details})
 		return out, in.From, err
+	}))
+
+	sdk.AddTool(s, &sdk.Tool{
+		Name: "file_delete",
+		Description: "Delete one text file (at most 1 MiB, the kind file_edit can change) or one empty folder. It never deletes a " +
+			"folder's contents, a symlink or a mount point; empty a folder first by moving or deleting what is in it. Latch keeps a " +
+			"backup of a deleted file (the owner can recover it with 'latch backups'; file_restore cannot bring back a deleted file). " +
+			"Runs a systemd daemon-reload when a unit file is deleted." + alwaysNote + approvalNote,
+		Annotations: changeAnnotations(true, false),
+	}, wrap(d, "file_delete", func(ctx context.Context, in fileDeleteIn) (actionOut, string, error) {
+		if err := files.ValidatePath(in.Path); err != nil {
+			return actionOut{}, "", err
+		}
+		r, err := d.Editor.ResolveDelete(ctx, in.Path)
+		switch {
+		case errors.Is(err, files.ErrSymlink):
+			return actionOut{}, in.Path, errMoveSymlink
+		case errors.Is(err, files.ErrNotEmpty):
+			return actionOut{}, in.Path, errNotEmpty
+		case errors.Is(err, files.ErrMountPoint):
+			return actionOut{}, in.Path, errMountPoint
+		case err != nil:
+			return actionOut{}, in.Path, err
+		}
+		details := append([]string{"delete " + r.Path}, requestedAs(in.Path, r.Path)...)
+		if r.IsDir {
+			details = append(details, "an empty folder")
+		} else {
+			details = append(details, "Latch keeps a backup of the file")
+		}
+		if files.IsUnitPath(r.Path) {
+			details = append(details, "then run systemd daemon-reload")
+		}
+		out, err := d.submit(ctx, &fileDelete{d: d, path: in.Path, removal: r, details: details})
+		return out, in.Path, err
 	}))
 
 	sdk.AddTool(s, &sdk.Tool{

@@ -142,7 +142,7 @@ type Request struct {
 var ChangeTools = []string{
 	"docker_restart", "docker_stop", "docker_start", "docker_remove", "docker_compose_up", "docker_compose_project_up",
 	"systemd_restart", "systemd_stop", "systemd_start",
-	"file_edit", "file_create", "file_restore", "file_move", "dir_create", "http_request",
+	"file_edit", "file_create", "file_restore", "file_move", "file_delete", "dir_create", "http_request",
 }
 
 // Where an owner's decision came from.

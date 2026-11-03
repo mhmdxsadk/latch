@@ -464,6 +464,65 @@ func TestFileMove(t *testing.T) {
 	}
 }
 
+func TestFileDelete(t *testing.T) {
+	f := newEditHarness(t)
+	p := f.write(t, "old.yaml", "services: {}\n")
+	out := f.act(t, "file_delete", map[string]any{"path": p})
+	if out.Status != "pending" {
+		t.Fatalf("got %+v", out)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatal("deleted before approval")
+	}
+	f.approve(t, out.ID)
+	done := f.act(t, "request_status", map[string]any{"id": out.ID})
+	if done.Status != "done" || !strings.Contains(done.Result.Summary, "backup") {
+		t.Errorf("got %+v", done)
+	}
+	if _, err := os.Stat(p); err == nil {
+		t.Error("file still there")
+	}
+
+	dir := f.path("empty")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.approve(t, f.act(t, "file_delete", map[string]any{"path": dir}).ID)
+	if _, err := os.Stat(dir); err == nil {
+		t.Error("folder still there")
+	}
+
+	// A file that changes after the request is kept.
+	q := f.write(t, "q.conf", "a\n")
+	out = f.act(t, "file_delete", map[string]any{"path": q})
+	f.write(t, "q.conf", "b\n")
+	f.approve(t, out.ID)
+	if done := f.act(t, "request_status", map[string]any{"id": out.ID}); done.Status != "failed" || read(t, q) != "b\n" {
+		t.Errorf("deleted a changed file: %+v", done)
+	}
+
+	if err := os.MkdirAll(f.path("full/x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(q, f.path("link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		args map[string]any
+		want string
+	}{
+		{map[string]any{"path": f.path("full")}, "not empty"},
+		{map[string]any{"path": f.path("link")}, "symlink"},
+		{map[string]any{"path": f.path("nothing")}, "does not exist or is not allowed"},
+		{map[string]any{"path": f.path("blocked")}, "does not exist or is not allowed"},
+		{map[string]any{"path": "relative"}, "invalid path"},
+	} {
+		if got := f.refusal(t, "file_delete", c.args); !strings.Contains(got, c.want) {
+			t.Errorf("%v: %q", c.args, got)
+		}
+	}
+}
+
 func TestFileRestore(t *testing.T) {
 	f := newEditHarness(t)
 	p := f.write(t, "a.conf", "v=1\nSECRET="+planted+"\n")

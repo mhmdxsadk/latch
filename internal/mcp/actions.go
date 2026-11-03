@@ -173,6 +173,8 @@ func ExplainActionError(err error) (summary, reason string) {
 		return "the file exists now; nothing was written", "exists"
 	case errors.Is(err, files.ErrCrossDevice), errors.Is(err, files.ErrSymlink), errors.Is(err, files.ErrMoveInside):
 		return "the paths cannot be renamed now (another filesystem, a symlink or a mount point); nothing was moved", "bad_move"
+	case errors.Is(err, files.ErrNotEmpty), errors.Is(err, files.ErrMountPoint):
+		return "the folder is not empty or is a mount point now; nothing was deleted", "bad_delete"
 	case errors.Is(err, files.ErrBlocked), errors.Is(err, files.ErrNotFound), errors.Is(err, files.ErrPermission):
 		return "the file no longer exists or is not allowed", "not_found"
 	case errors.Is(err, files.ErrBackupUnsafe):

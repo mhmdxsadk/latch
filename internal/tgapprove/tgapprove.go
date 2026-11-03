@@ -546,6 +546,8 @@ func (a *Approver) phrase(r approval.Request, past bool) string {
 		return verb("create ", "created ") + name
 	case "dir_create":
 		return verb("create folder ", "created folder ") + name
+	case "file_delete":
+		return verb("delete ", "deleted ") + name
 	case "file_move":
 		dest := ""
 		for _, p := range r.Params {

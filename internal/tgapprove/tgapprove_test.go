@@ -661,3 +661,14 @@ func TestPhraseForFileMove(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+func TestPhraseForFileDelete(t *testing.T) {
+	r := approval.Request{Action: "file_delete", Resource: approval.Resource{Type: "file", Name: "/srv/a/compose.yaml"}}
+	a := &Approver{}
+	if got, want := a.phrase(r, false), "delete /srv/a/compose.yaml"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got, want := a.phrase(r, true), "deleted /srv/a/compose.yaml"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
