@@ -117,8 +117,9 @@ func TestMoveRechecksThePlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A different file at the name after the request is not moved.
-	if err := os.Remove(src); err != nil {
+	// A different file at the name after the request is not moved. The old
+	// file is renamed, not deleted: a deleted inode number can be reused at once.
+	if err := os.Rename(src, f.path("public/a.old")); err != nil {
 		t.Fatal(err)
 	}
 	f.write("public/a.txt", "other")
