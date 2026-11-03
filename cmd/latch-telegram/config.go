@@ -67,17 +67,16 @@ type AgentConfig struct {
 	// Images turns on photos: the agent's model must read images, or Docker
 	// Agent drops them without a word.
 	Images bool `yaml:"images"`
-	// Checks, when set, has the agent check the server on its own.
+	// Checks, when set, turns on /check, which has the agent check the server.
 	Checks *ChecksConfig `yaml:"checks"`
 }
 
-// ChecksConfig is the scheduled check. Config is an agent config that
+// ChecksConfig is the /check command. Config is an agent config that
 // cannot change anything: like the main one, but without an allow list for
 // Latch's change tools. Check runs always use --safety restricted, so those
 // tools are refused.
 type ChecksConfig struct {
-	Every  Duration `yaml:"every"`
-	Config string   `yaml:"config"`
+	Config string `yaml:"config"`
 }
 
 // Duration is a time.Duration written like "10m".
@@ -153,9 +152,6 @@ func (c *Config) defaults() {
 		if a.Timeout == 0 {
 			a.Timeout = Duration(10 * time.Minute)
 		}
-		if a.Checks != nil && a.Checks.Every == 0 {
-			a.Checks.Every = Duration(6 * time.Hour)
-		}
 	}
 }
 
@@ -205,9 +201,6 @@ func (c *Config) validate() error {
 			add("agent.timeout: %s must be between 10s and 1h", d)
 		}
 		if ch := a.Checks; ch != nil {
-			if d := time.Duration(ch.Every); d < 30*time.Minute || d > 7*24*time.Hour {
-				add("agent.checks.every: %s must be between 30m and 168h", d)
-			}
 			absPath("agent.checks.config", ch.Config)
 			if ch.Config == a.Config {
 				add("agent.checks.config: must be a separate agent config without the change tools, not agent.config")
@@ -329,7 +322,7 @@ func checkReadOnly(config, home string) error {
 			pattern, _, _ := strings.Cut(rule, ":")
 			for _, tool := range approval.ChangeTools {
 				if ok, _ := path.Match(pattern, tool); ok {
-					return fmt.Errorf("%s allows %s (rule %q); scheduled checks must not be able to change anything", f, tool, rule)
+					return fmt.Errorf("%s allows %s (rule %q); checks must not be able to change anything", f, tool, rule)
 				}
 			}
 		}

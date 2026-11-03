@@ -208,11 +208,10 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 		agentUID = &acct.UID
 		b.images = a.Images
 		var checks tgchat.Runner
-		var every time.Duration
 		if ch := a.Checks; ch != nil {
 			verify := func() error { return checkReadOnly(ch.Config, acct.Home) }
 			if err := verify(); err != nil {
-				log.Error("scheduled checks are off", "err", err)
+				log.Error("/check is off", "err", err)
 			} else {
 				// Always restricted: read-only tools run, everything
 				// else is refused without asking. The config is
@@ -222,7 +221,6 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 					Runner: &tgchat.ExecRunner{Command: a.Command, Config: ch.Config, ExtraArgs: []string{"--safety", "restricted"}, Account: &acct},
 					verify: verify,
 				}
-				every = time.Duration(ch.Every)
 			}
 		}
 		// Each conversation gets its own Docker Agent database in the
@@ -292,7 +290,6 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			LoginCommand:  a.Login != "",
 			ExtraCommands: extra,
 			CheckRunner:   checks,
-			CheckEvery:    every,
 			Bot:           bot,
 			Chat:          cfg.OwnerID,
 			Runner: &tgchat.ExecRunner{

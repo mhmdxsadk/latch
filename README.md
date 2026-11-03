@@ -231,8 +231,9 @@ supports images. Albums arrive as one turn. Images go to the model provider
 and remain in the conversation database until Latch deletes the conversation;
 text redaction does not apply to them.
 
-Optional `agent.checks` runs scheduled inspections, every 6 hours by default,
-and reports new findings. Checks cannot change anything, including restarts.
+Optional `agent.checks` turns on `/check`, which inspects the server on request
+and reports new findings. Nothing runs on a timer. Checks cannot change
+anything, including restarts.
 They use a separate restricted config without Latch change-tool permissions,
 which the bridge verifies before each run.
 

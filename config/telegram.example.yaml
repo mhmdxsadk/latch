@@ -44,7 +44,7 @@ agent:
   #     allow: [docker_restart, systemd_restart, docker_stop, docker_start,
   #             docker_remove, systemd_stop, systemd_start, docker_compose_up,
   #             docker_compose_project_up, file_edit, file_create,
-  #             file_restore, dir_create, http_request]
+  #             file_restore, file_move, dir_create, http_request]
   # Allowed tools skip pre_tool_use hooks; put checks that must always run
   # under tool_guard instead.
   args: [--safety, restricted]
@@ -59,11 +59,10 @@ agent:
   # message. Turn this on only if the agent's model reads images; otherwise
   # Docker Agent quietly ignores them.
   # images: true
-  # Scheduled checks: the agent sweeps the server on its own and messages
-  # you, only when it finds something new. Checks never change anything:
-  # they run with --safety restricted and this config, a copy of the agent
-  # config WITHOUT the permissions allow list for Latch's change tools
-  # (latch-telegram refuses one that allows them). /check runs one now.
+  # /check: the agent sweeps the server when you ask and reports what it
+  # finds. Checks never change anything: they run with --safety restricted
+  # and this config, a copy of the agent config WITHOUT the permissions
+  # allow list for Latch's change tools (latch-telegram refuses one that
+  # allows them). Nothing runs on a timer.
   # checks:
-  #   every: 6h
   #   config: /home/keeper/keeper-check.yaml

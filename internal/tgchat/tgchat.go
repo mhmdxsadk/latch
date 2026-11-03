@@ -92,10 +92,9 @@ type Options struct {
 	Host string
 	// Intro opens the welcome text; empty means a one-line default.
 	Intro string
-	// CheckRunner runs scheduled checks every CheckEvery (0: none). It must
+	// CheckRunner runs the checks /check asks for (nil: no /check). It must
 	// not be able to change anything.
 	CheckRunner Runner
-	CheckEvery  time.Duration
 	// SessionDir is where each conversation's Docker Agent database lives
 	// ("" uses the agent's shared database and never deletes anything).
 	SessionDir string
@@ -147,8 +146,8 @@ type job struct {
 	// source is the owner's message this job answers (0: none), the one a
 	// reply goes under when several messages are answered together.
 	source int64
-	// check is a scheduled check; manual when the owner asked for it.
-	check, manual bool
+	// check is a check the owner asked for with /check.
+	check bool
 }
 
 // held is a finished answer (or note) kept until every message of the burst
@@ -169,9 +168,8 @@ type index struct {
 	Sessions []session `json:"sessions,omitempty"`
 	// Loose are screen messages sent while no conversation was active.
 	Loose []int64 `json:"loose,omitempty"`
-	// LastCheck and Reported belong to the scheduled checks.
-	LastCheck time.Time `json:"last_check,omitzero"`
-	Reported  []report  `json:"reported,omitempty"`
+	// Reported are the problems recent checks told the owner about.
+	Reported []report `json:"reported,omitempty"`
 }
 
 // New loads the chat state (a missing file is an empty state).
@@ -213,14 +211,6 @@ func New(o Options) (*Chat, error) {
 
 // Run runs queued turns until ctx ends.
 func (c *Chat) Run(ctx context.Context) {
-	if c.o.CheckEvery > 0 && c.o.CheckRunner != nil {
-		c.mu.Lock()
-		if c.index.LastCheck.IsZero() {
-			c.index.LastCheck = c.o.Now().UTC() // the first check comes one interval after setup
-		}
-		c.mu.Unlock()
-		go c.checkLoop(ctx)
-	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -228,7 +218,7 @@ func (c *Chat) Run(ctx context.Context) {
 		case j := <-c.queue:
 			if j.check {
 				c.flush(ctx) // a check can take minutes: show what is done first
-				c.check(ctx, j.manual)
+				c.check(ctx)
 			} else {
 				c.turn(ctx, j)
 			}
@@ -365,7 +355,7 @@ func (c *Chat) handleCommand(ctx context.Context, cmd string, messageID int64) {
 			return
 		}
 		select {
-		case c.queue <- job{check: true, manual: true}:
+		case c.queue <- job{check: true}:
 		default:
 			c.say(ctx, "Too many messages waiting. Wait for an answer or use /stop.")
 		}

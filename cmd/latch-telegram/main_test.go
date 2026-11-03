@@ -530,13 +530,13 @@ func TestCheckReadOnly(t *testing.T) {
 func TestChecksConfig(t *testing.T) {
 	base := "owner_id: 1\nagent:\n  user: keeper\n  config: /home/keeper/keeper.yaml\n"
 	c, err := loadConfig(writeConfig(t, base+"  checks:\n    config: /home/keeper/keeper-check.yaml\n"))
-	if err != nil || time.Duration(c.Agent.Checks.Every) != 6*time.Hour {
+	if err != nil || c.Agent.Checks == nil {
 		t.Fatalf("%v %+v", err, c)
 	}
 	for _, tc := range []struct{ body, want string }{
-		{"  checks:\n    every: 5m\n    config: /home/keeper/keeper-check.yaml\n", "agent.checks.every"},
+		{"  checks:\n    every: 6h\n    config: /home/keeper/keeper-check.yaml\n", "field every not found"},
 		{"  checks:\n    config: /home/keeper/keeper.yaml\n", "separate agent config"},
-		{"  checks:\n    every: 1h\n", "agent.checks.config"},
+		{"  checks: {}\n", "agent.checks.config"},
 	} {
 		if _, err := loadConfig(writeConfig(t, base+tc.body)); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%q: %v", tc.body, err)

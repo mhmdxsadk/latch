@@ -477,7 +477,7 @@ func TestChecks(t *testing.T) {
 		return "**Jellyfin keeps restarting.** Its health check fails since 09:12.\n\nI would restart it if you ask.", nil
 	}
 	checks.mu.Unlock()
-	h.chat.queue <- job{check: true} // a scheduled one: silent unless it finds something
+	h.send("/check")
 	h.waitText("Jellyfin keeps restarting.")
 	h.chat.mu.Lock()
 	active, reported := h.chat.index.Active, h.chat.index.Reported

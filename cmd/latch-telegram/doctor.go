@@ -125,10 +125,10 @@ func doctor(ctx context.Context, cfg *Config, in checks, out io.Writer) bool {
 			if acct, err := in.account(a.User); err == nil {
 				home = acct.Home
 			}
-			check(fmt.Sprintf("scheduled checks every %s, read-only (%s)", time.Duration(ch.Every), ch.Config), in.readOnly(ch.Config, home),
+			check(fmt.Sprintf("/check config is read-only (%s)", ch.Config), in.readOnly(ch.Config, home),
 				"use a copy of the agent config without the permissions allow list for Latch's change tools")
 		} else {
-			fmt.Fprintln(out, "OK    scheduled checks are off (no agent.checks)")
+			fmt.Fprintln(out, "OK    /check is off (no agent.checks)")
 		}
 	}
 

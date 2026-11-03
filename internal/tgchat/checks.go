@@ -7,13 +7,13 @@ import (
 	"time"
 )
 
-// Scheduled checks: every CheckEvery the agent sweeps the server on its own,
-// with CheckRunner, which must not be able to change anything (an agent
-// config without the change tools, run in restricted safety mode). When it
-// finds nothing new it answers allClear and the owner hears nothing. When it
+// Checks: when the owner sends /check, the agent sweeps the server with
+// CheckRunner, which must not be able to change anything (an agent config
+// without the change tools, run in restricted safety mode). When it finds
+// nothing new it answers allClear and the bridge says "All clear.". When it
 // finds a problem, its report opens a new conversation, which becomes the
 // active one so the owner's reply ("fix it") continues there. Fixes are only
-// ever made when the owner asks.
+// ever made when the owner asks. Nothing runs on a timer.
 
 // allClear is the whole answer of a check that found nothing new.
 const allClear = "ALL_CLEAR"
@@ -28,38 +28,8 @@ type report struct {
 	Headline string    `json:"headline"`
 }
 
-// checkLoop queues a check every CheckEvery, counting from the last one so a
-// bridge restart does not start the clock again.
-func (c *Chat) checkLoop(ctx context.Context) {
-	for {
-		c.mu.Lock()
-		next := c.index.LastCheck.Add(c.o.CheckEvery)
-		c.mu.Unlock()
-		if wait := time.Until(next); wait > 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(wait):
-			}
-		}
-		c.mu.Lock()
-		c.index.LastCheck = c.o.Now().UTC()
-		err := c.saveLocked()
-		c.mu.Unlock()
-		if err != nil {
-			c.o.Logger.Warn("saving the chat state failed", "err", err)
-		}
-		select {
-		case c.queue <- job{check: true}:
-		default:
-			c.o.Logger.Warn("queue full; skipped a scheduled check")
-		}
-	}
-}
-
-// check runs one check; manual when the owner asked with /check, which
-// also answers when there is nothing new.
-func (c *Chat) check(ctx context.Context, manual bool) {
+// check runs one check, which the owner asked for with /check.
+func (c *Chat) check(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, c.o.Timeout)
 	defer cancel()
 	now := c.o.Now().UTC()
@@ -77,16 +47,13 @@ func (c *Chat) check(ctx context.Context, manual bool) {
 	// one that finds nothing can be deleted without a trace.
 	id := newID()
 	t := Turn{Session: id, Message: checkPrompt(recent), DB: c.dbFor(id)}
-	if manual {
-		_ = c.o.Bot.Typing(ctx, c.o.Chat)
-	}
+	_ = c.o.Bot.Typing(ctx, c.o.Chat)
 	out, err := c.o.CheckRunner.Run(ctx, t, nil)
 	if err != nil {
 		c.removeDB(ctx, t.DB)
 		c.o.Logger.Warn("check failed", "err", err)
 		var re *RunError
 		switch {
-		case !manual:
 		case errors.As(err, &re) && re.UsageLimit():
 			c.say(ctx, usageLimitText)
 		default:
@@ -98,9 +65,7 @@ func (c *Chat) check(ctx context.Context, manual bool) {
 	if answer == "" || strings.EqualFold(strings.Trim(answer, "`*. \n"), allClear) {
 		c.removeDB(ctx, t.DB)
 		c.o.Logger.Info("check found nothing new")
-		if manual {
-			c.plain(ctx, "All clear.")
-		}
+		c.plain(ctx, "All clear.")
 		return
 	}
 	// A finding becomes a conversation of its own and the active one, so the
@@ -129,7 +94,7 @@ func (c *Chat) check(ctx context.Context, manual bool) {
 // checkPrompt asks for a read-only sweep and says what was already reported.
 func checkPrompt(recent []report) string {
 	var b strings.Builder
-	b.WriteString("This is a scheduled check; nobody asked a question. Sweep the server for problems: " +
+	b.WriteString("The owner asked for a check of the server. Sweep the server for problems: " +
 		"containers that are unhealthy, restarting, exited or failed; failed systemd units; disks over 90% full; " +
 		"memory or load far above normal; errors in the recent logs of anything unhealthy.\n\n" +
 		"You cannot change anything in this run. Do not file or suggest that you filed any change.\n\n")
