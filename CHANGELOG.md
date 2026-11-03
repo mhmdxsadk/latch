@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.27.0](https://github.com/mhmdxsadk/latch/compare/v0.26.0...v0.27.0) (2026-11-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **telegram:** remove the scheduled check, keep /check
+
+### Features
+
+* **files:** add file_delete for one text file or empty folder ([268e559](https://github.com/mhmdxsadk/latch/commit/268e559fc6a5beddf63e3c1041f139fdc146376a))
+* **files:** add file_move to rename a file or folder ([27071eb](https://github.com/mhmdxsadk/latch/commit/27071ebf67e1265cb4fd35eb2418be0dfc457100))
+* **telegram:** remove the scheduled check, keep /check ([1845848](https://github.com/mhmdxsadk/latch/commit/184584870e2b6562393e48341ce3b5439f22f780))
+
 ## [0.26.0](https://github.com/mhmdxsadk/latch/compare/v0.25.0...v0.26.0) (2026-11-03)
 
 
