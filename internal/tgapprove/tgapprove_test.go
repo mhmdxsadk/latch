@@ -646,3 +646,18 @@ func TestOrdinaryFileDetailsAreHiddenButAnUnusualModeShows(t *testing.T) {
 		t.Errorf("unusual mode: %q, want %q", sent[1].Text, want)
 	}
 }
+
+func TestPhraseForFileMove(t *testing.T) {
+	r := approval.Request{
+		Action:   "file_move",
+		Resource: approval.Resource{Type: "folder", Name: "/srv/a/data"},
+		Params:   []approval.Param{{Name: "from", Value: "/srv/a/data"}, {Name: "to", Value: "/srv/b/data"}},
+	}
+	a := &Approver{}
+	if got, want := a.phrase(r, false), "move /srv/a/data to /srv/b/data"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got, want := a.phrase(r, true), "moved /srv/a/data to /srv/b/data"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}

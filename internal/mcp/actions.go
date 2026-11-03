@@ -171,6 +171,8 @@ func ExplainActionError(err error) (summary, reason string) {
 		return "the file changed after the request; nothing was written; ask again", "changed"
 	case errors.Is(err, files.ErrExists):
 		return "the file exists now; nothing was written", "exists"
+	case errors.Is(err, files.ErrCrossDevice), errors.Is(err, files.ErrSymlink), errors.Is(err, files.ErrMoveInside):
+		return "the paths cannot be renamed now (another filesystem, a symlink or a mount point); nothing was moved", "bad_move"
 	case errors.Is(err, files.ErrBlocked), errors.Is(err, files.ErrNotFound), errors.Is(err, files.ErrPermission):
 		return "the file no longer exists or is not allowed", "not_found"
 	case errors.Is(err, files.ErrBackupUnsafe):

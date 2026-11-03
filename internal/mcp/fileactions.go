@@ -60,6 +60,10 @@ var (
 	errBadMode       = userError{"mode must be an octal string such as 0644 or 0600: no setuid, setgid or sticky bits, and not writable by everyone"}
 	errDirExists     = userError{"a file or folder already exists at that path"}
 	errNoBackupID    = userError{"backup must be a backup id from file_backups, such as 20261025T143000Z"}
+	errMoveExists    = userError{"something already exists at the new path; file_move never replaces anything"}
+	errMoveSymlink   = userError{"the path is a symlink; name the file or folder it points to"}
+	errMoveDevice    = userError{"file_move only renames: both paths must be on one filesystem, and a mount point cannot be moved"}
+	errMoveInside    = userError{"the new path is inside the folder being moved"}
 
 	// errTargetDown, errStillDown and errReloadFailed end an execution
 	// whose summary already says what happened.
@@ -90,6 +94,11 @@ type fileCreateIn struct {
 type dirCreateIn struct {
 	Path string `json:"path" jsonschema:"absolute, clean path of the new folder; its parent folder must exist"`
 	Mode string `json:"mode,omitempty" jsonschema:"permission bits as an octal string; default 0755"`
+}
+
+type fileMoveIn struct {
+	From string `json:"from" jsonschema:"absolute, clean path of an existing file or folder"`
+	To   string `json:"to" jsonschema:"absolute, clean new path; nothing may exist there and its parent folder must exist"`
 }
 
 type fileBackupsIn struct {
@@ -609,6 +618,52 @@ func (a *dirCreate) Execute(ctx context.Context) (approval.Result, error) {
 	return approval.Result{Summary: "created folder " + a.target.Path + " (mode " + modeText(a.mode) + ")"}, nil
 }
 
+// fileMove renames one file or folder.
+type fileMove struct {
+	d       *Deps
+	from    string
+	to      string
+	move    files.Move
+	details []string
+}
+
+func (a *fileMove) Kind() string { return "file_move" }
+func (a *fileMove) Resource() approval.Resource {
+	t := "file"
+	if a.move.IsDir {
+		t = "folder"
+	}
+	return approval.Resource{Type: t, Name: a.move.From}
+}
+func (a *fileMove) Mode() approval.Mode { return approval.Always }
+func (a *fileMove) Describe() []string  { return a.details }
+func (a *fileMove) Params() []approval.Param {
+	return []approval.Param{{Name: "from", Value: a.move.From}, {Name: "to", Value: a.move.To}}
+}
+
+func (a *fileMove) Check(ctx context.Context) error {
+	m, err := a.d.Editor.ResolveMove(ctx, a.from, a.to)
+	if err != nil {
+		return err
+	}
+	if m != a.move {
+		return files.ErrChanged
+	}
+	return nil
+}
+
+func (a *fileMove) Execute(ctx context.Context) (approval.Result, error) {
+	if err := a.d.Editor.Move(ctx, a.from, a.to, a.move); err != nil {
+		return approval.Result{}, err
+	}
+	sum := "moved " + a.move.From + " to " + a.move.To
+	note, err := a.d.reloadFor(ctx, a.move.To)
+	if note == "" {
+		note, err = a.d.reloadFor(ctx, a.move.From)
+	}
+	return approval.Result{Summary: sum + note}, err
+}
+
 func modeText(m fs.FileMode) string { return fmt.Sprintf("%04o", uint32(m.Perm())) }
 
 var modePattern = regexp.MustCompile(`^0?[0-7]{3}$`)
@@ -751,6 +806,44 @@ func registerFileActions(s *sdk.Server, d *Deps) {
 			requestedAs(in.Path, nf.Path)...)
 		out, err := d.submit(ctx, &dirCreate{d: d, path: in.Path, target: nf, mode: mode, details: details})
 		return out, in.Path, err
+	}))
+
+	sdk.AddTool(s, &sdk.Tool{
+		Name: "file_move",
+		Description: "Move or rename one file or folder on the host, with everything inside it. It is a rename on one filesystem: " +
+			"nothing is copied, the data keeps its owner, permissions and inode, and a folder moves whole, SQLite files and " +
+			"all. It fails if anything exists at the new path, if the new path is on another filesystem, and for a symlink " +
+			"or a mount point. The new path's parent folder must exist; use dir_create first. Stop containers that use the " +
+			"data before moving it, and update the compose file afterwards. Latch makes no backup, and a move is undone by " +
+			"moving back. Runs a systemd daemon-reload when a unit file moves." + alwaysNote + approvalNote,
+		Annotations: changeAnnotations(true, false),
+	}, wrap(d, "file_move", func(ctx context.Context, in fileMoveIn) (actionOut, string, error) {
+		if err := files.ValidatePath(in.From); err != nil {
+			return actionOut{}, "", err
+		}
+		if err := files.ValidatePath(in.To); err != nil {
+			return actionOut{}, in.From, err
+		}
+		m, err := d.Editor.ResolveMove(ctx, in.From, in.To)
+		switch {
+		case errors.Is(err, files.ErrExists):
+			return actionOut{}, in.From, errMoveExists
+		case errors.Is(err, files.ErrSymlink):
+			return actionOut{}, in.From, errMoveSymlink
+		case errors.Is(err, files.ErrCrossDevice):
+			return actionOut{}, in.From, errMoveDevice
+		case errors.Is(err, files.ErrMoveInside):
+			return actionOut{}, in.From, errMoveInside
+		case err != nil:
+			return actionOut{}, in.From, err
+		}
+		details := append([]string{"move " + m.From + " to " + m.To}, requestedAs(in.From, m.From)...)
+		details = append(details, requestedAs(in.To, m.To)...)
+		if files.IsUnitPath(m.From) || files.IsUnitPath(m.To) {
+			details = append(details, "then run systemd daemon-reload")
+		}
+		out, err := d.submit(ctx, &fileMove{d: d, from: in.From, to: in.To, move: m, details: details})
+		return out, in.From, err
 	}))
 
 	sdk.AddTool(s, &sdk.Tool{

@@ -397,6 +397,73 @@ func TestDirCreate(t *testing.T) {
 	}
 }
 
+func TestFileMove(t *testing.T) {
+	f := newEditHarness(t)
+	data := f.path("old/data")
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "app.db-wal"), []byte("wal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(f.path("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	to := f.path("new/data")
+	out := f.act(t, "file_move", map[string]any{"from": data, "to": to})
+	if out.Status != "pending" {
+		t.Fatalf("got %+v", out)
+	}
+	if _, err := os.Stat(data); err != nil {
+		t.Fatal("moved before approval")
+	}
+	f.approve(t, out.ID)
+	if _, err := os.Stat(data); err == nil {
+		t.Error("old folder still there")
+	}
+	if got := read(t, filepath.Join(to, "app.db-wal")); got != "wal" {
+		t.Errorf("content %q", got)
+	}
+	if fi, err := os.Stat(filepath.Join(to, "app.db-wal")); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v %v", fi, err)
+	}
+
+	// A single file, and a request that goes stale before the decision.
+	a := f.write(t, "a.conf", "x\n")
+	out = f.act(t, "file_move", map[string]any{"from": a, "to": f.path("b.conf")})
+	f.write(t, "b.conf", "late\n")
+	f.approve(t, out.ID)
+	if done := f.act(t, "request_status", map[string]any{"id": out.ID}); done.Status != "failed" {
+		t.Errorf("moved over a file that appeared after the request: %+v", done)
+	}
+	if read(t, a) != "x\n" || read(t, f.path("b.conf")) != "late\n" {
+		t.Error("a refused move changed a file")
+	}
+
+	existing := f.write(t, "c.conf", "y\n")
+	if err := os.Symlink(existing, f.path("link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		args map[string]any
+		want string
+	}{
+		{map[string]any{"from": existing, "to": a}, "already exists"},
+		{map[string]any{"from": f.path("link"), "to": f.path("d.conf")}, "symlink"},
+		{map[string]any{"from": existing, "to": f.path("existing/inside")}, "does not exist or is not allowed"},
+		{map[string]any{"from": f.path("nothing"), "to": f.path("d.conf")}, "does not exist or is not allowed"},
+		{map[string]any{"from": f.path("blocked"), "to": f.path("d")}, "does not exist or is not allowed"},
+		{map[string]any{"from": existing, "to": f.path("blocked/d")}, "does not exist or is not allowed"},
+		{map[string]any{"from": f.path("new"), "to": f.path("new/inner")}, "inside the folder"},
+		{map[string]any{"from": "relative", "to": f.path("d")}, "invalid path"},
+		{map[string]any{"from": existing, "to": "relative"}, "invalid path"},
+	} {
+		if got := f.refusal(t, "file_move", c.args); !strings.Contains(got, c.want) {
+			t.Errorf("%v: %q", c.args, got)
+		}
+	}
+}
+
 func TestFileRestore(t *testing.T) {
 	f := newEditHarness(t)
 	p := f.write(t, "a.conf", "v=1\nSECRET="+planted+"\n")
