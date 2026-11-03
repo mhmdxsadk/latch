@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/mhmdxsadk/latch/compare/v0.24.0...v0.25.0) (2026-11-03)
+
+
+### Features
+
+* **docker:** add docker_remove to remove a container ([26ef2cf](https://github.com/mhmdxsadk/latch/commit/26ef2cf2cd98c4f296e4c13109cd11d6c4aec5a0))
+
 ## [0.24.0](https://github.com/mhmdxsadk/latch/compare/v0.23.0...v0.24.0) (2026-11-02)
 
 
