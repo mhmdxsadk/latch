@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.30.0](https://github.com/mhmdxsadk/latch/compare/v0.29.0...v0.30.0) (2026-11-04)
+
+
+### Features
+
+* **telegram:** list only the commands in /help ([53b5775](https://github.com/mhmdxsadk/latch/commit/53b5775e74fc6497a9a128e39a6faf7b618f8d10))
+* **telegram:** say only Nothing running when /stop has nothing to stop ([6cf2e82](https://github.com/mhmdxsadk/latch/commit/6cf2e82b2708668acb430b26904f2d0b18efc633))
+* **telegram:** shorten /start, reword /stop menu entry ([5289994](https://github.com/mhmdxsadk/latch/commit/5289994c36d601eae1d091cc0d2fa53220584ebe))
+
 ## [0.29.0](https://github.com/mhmdxsadk/latch/compare/v0.28.0...v0.29.0) (2026-11-04)
 
 
