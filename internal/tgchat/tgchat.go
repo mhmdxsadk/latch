@@ -66,7 +66,7 @@ var Commands = []tgapi.Command{
 	{Command: "new", Description: "Clears the chat and starts a new thread"},
 	{Command: "threads", Description: "Shows earlier threads to go back to"},
 	{Command: "settle", Description: "Closes this thread and clears the chat"},
-	{Command: "stop", Description: "Stop the running answer and drop waiting messages"},
+	{Command: "stop", Description: "Stops the running answer and drops waiting messages"},
 	{Command: "help", Description: "Shows this message"},
 }
 
@@ -327,7 +327,9 @@ func (c *Chat) handleCommand(ctx context.Context, cmd string, messageID int64) {
 		c.track(messageID) // /new and /settle delete their own message with the rest
 	}
 	switch cmd {
-	case "start", "help":
+	case "start":
+		c.plain(ctx, startText)
+	case "help":
 		c.plain(ctx, c.welcome())
 	case "new":
 		c.leave(ctx, messageID, false)
@@ -616,7 +618,11 @@ func (c *Chat) say(ctx context.Context, text string) {
 	}
 }
 
-// welcome is the /start and /help text: what the bot is, then each command
+// startText is the /start answer. The bot description already shows in the
+// empty chat, so it only points to /help.
+const startText = "Send /help to see the commands."
+
+// welcome is the /help text: what the bot is, then each command
 // on its own line with a blank line between.
 func (c *Chat) welcome() string {
 	intro := c.o.Intro

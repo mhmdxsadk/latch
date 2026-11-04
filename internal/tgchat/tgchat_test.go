@@ -444,12 +444,14 @@ func TestWelcome(t *testing.T) {
 	h.chat.o.Host = "lisbon"
 	h.chat.o.Intro = "On-call engineer for the Lisbon server. Monitors containers."
 	h.send("/start")
+	h.waitText(startText)
+	h.send("/help")
 	m := h.waitText("On-call engineer for the Lisbon server. Monitors containers.")
 	want := "On-call engineer for the Lisbon server. Monitors containers.\n\nCommands:\n\n" +
 		"/new - Clears the chat and starts a new thread\n\n" +
 		"/threads - Shows earlier threads to go back to\n\n" +
 		"/settle - Closes this thread and clears the chat\n\n" +
-		"/stop - Stop the running answer and drop waiting messages\n\n" +
+		"/stop - Stops the running answer and drops waiting messages\n\n" +
 		"/help - Shows this message"
 	if len(m.Entities) != 0 || m.Text != want {
 		t.Errorf("%q %+v", m.Text, m.Entities)
