@@ -226,7 +226,6 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			}
 		}
 		cancel()
-		intro, _ := describe(b.host, true)
 		var extra []tgapi.Command
 		if a.Login == loginChatGPT {
 			extra = []tgapi.Command{loginCommand}
@@ -282,8 +281,6 @@ func newBridge(cfg *Config, bot *tgapi.Client, log *slog.Logger) (*bridge, error
 			Name:      a.Name,
 			Timeout:   time.Duration(a.Timeout),
 			Location:  b.loc,
-			Host:      b.host,
-			Intro:     intro,
 			Logger:    log,
 		})
 		if err != nil {

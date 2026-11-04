@@ -87,10 +87,6 @@ type Options struct {
 	Timeout time.Duration
 	// Location is the owner's time zone for thread names.
 	Location *time.Location
-	// Host names the server in the welcome text.
-	Host string
-	// Intro opens the welcome text; empty means a one-line default.
-	Intro string
 	// ThreadDir is where each thread's Docker Agent database lives
 	// ("" uses the agent's shared database and never deletes anything).
 	ThreadDir string
@@ -624,23 +620,14 @@ func (c *Chat) say(ctx context.Context, text string) {
 // empty chat, so it only points to /help.
 const startText = "Send /help to see the commands."
 
-// welcome is the /help text: what the bot is, then each command
-// on its own line with a blank line between.
+// welcome is the /help text: each command with its menu description, one
+// per paragraph.
 func (c *Chat) welcome() string {
-	intro := c.o.Intro
-	if intro == "" {
-		where := "this server"
-		if h := c.o.Host; h != "" {
-			where = "the " + strings.ToUpper(h[:1]) + h[1:] + " server"
-		}
-		intro = "On-call engineer for " + where + "."
-	}
-	var b strings.Builder
-	b.WriteString(intro + "\n\nCommands:")
+	var lines []string
 	for _, cmd := range append(slices.Clone(Commands), c.o.ExtraCommands...) {
-		b.WriteString("\n\n/" + cmd.Command + " - " + cmd.Description)
+		lines = append(lines, "/"+cmd.Command+" - "+cmd.Description)
 	}
-	return b.String()
+	return strings.Join(lines, "\n\n")
 }
 
 // plain sends text without the italics of a note.
