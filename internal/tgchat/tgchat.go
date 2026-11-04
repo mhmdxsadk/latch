@@ -341,8 +341,10 @@ func (c *Chat) handleCommand(ctx context.Context, cmd string, messageID int64) {
 		dropped, running := c.stopRunning()
 		if running {
 			c.say(ctx, fmt.Sprintf("Stopping (dropped %d waiting).", dropped))
-		} else {
+		} else if dropped > 0 {
 			c.say(ctx, fmt.Sprintf("Nothing running (dropped %d waiting).", dropped))
+		} else {
+			c.say(ctx, "Nothing running.")
 		}
 	default:
 		c.say(ctx, "Unknown command. Try /help.")

@@ -165,7 +165,10 @@ func TestStop(t *testing.T) {
 	h.waitText("Stopping (dropped 1 waiting)")
 	h.waitText("Stopped.")
 	h.send("/stop")
-	h.waitText("Nothing running")
+	m := h.waitText("Nothing running")
+	if m.Text != "Nothing running." {
+		t.Errorf("%q", m.Text)
+	}
 	if n := len(h.run.Calls()); n != 1 {
 		t.Errorf("the dropped message ran: %d calls", n)
 	}
