@@ -21,8 +21,7 @@ import (
 // it: the messages on the owner's screen (so /new can clear them) and a
 // transcript (so resuming can show them again). The screen always belongs to
 // the active thread. A thread is meant to solve one issue and
-// then be settled: /settle (or the Settle button under the agent's offer)
-// closes it, clearing the screen like /new, and /threads lists it under the
+// then be settled: /settle closes it, clearing the screen like /new, and /threads lists it under the
 // settled ones, from where the owner can reopen it. A thread the owner
 // has not written to for IdleAfter counts as settled too, and the next
 // message starts a new one. At most MaxThreads threads are kept, open
@@ -54,7 +53,7 @@ type thread struct {
 	Title    string    `json:"title"`
 	Started  time.Time `json:"started"`
 	LastUsed time.Time `json:"last_used,omitzero"`
-	// Settled is when the owner (or the agent's offer) closed it. Reopening
+	// Settled is when the owner closed it. Reopening
 	// clears it.
 	Settled time.Time `json:"settled,omitzero"`
 	// Messages are the ids of the messages on the owner's screen.
@@ -464,15 +463,6 @@ func (c *Chat) leave(ctx context.Context, cmdMessage int64, settle bool) {
 	c.say(ctx, text)
 }
 
-// offerSettle asks the owner whether to settle thread id, with a
-// button. The words are the bridge's own: the agent only says it is done.
-func (c *Chat) offerSettle(ctx context.Context, id string) {
-	kb := tgapi.Keyboard{{{Text: "Settle", Data: "x:" + id}}}
-	if _, err := c.post(ctx, note("Settle this thread?"), kb); err != nil {
-		c.o.Logger.Warn("sending failed", "err", err)
-	}
-}
-
 // threadList sends the kept threads as buttons: the open ones, then
 // the settled ones, each newest first.
 func (c *Chat) threadList(ctx context.Context) {
@@ -509,23 +499,9 @@ func (c *Chat) threadList(ctx context.Context) {
 	}
 }
 
-// HandlePress handles a thread button and a Settle button. It reports
+// HandlePress handles a thread button. It reports
 // false for other buttons.
 func (c *Chat) HandlePress(ctx context.Context, cb tgapi.CallbackQuery) bool {
-	if id, ok := strings.CutPrefix(cb.Data, "x:"); ok {
-		c.rollOver()
-		if !c.isActive(id) {
-			if err := c.o.Bot.Answer(ctx, cb.ID, "That thread is no longer open."); err != nil {
-				c.o.Logger.Warn("answering a button failed", "err", err)
-			}
-			return true
-		}
-		if err := c.o.Bot.Answer(ctx, cb.ID, ""); err != nil {
-			c.o.Logger.Warn("answering a button failed", "err", err)
-		}
-		c.leave(ctx, 0, true)
-		return true
-	}
 	id, ok := strings.CutPrefix(cb.Data, "s:")
 	if !ok {
 		return false

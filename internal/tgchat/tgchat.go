@@ -152,7 +152,6 @@ type held struct {
 	fixed  int64  // the decided request's message; the reply always goes there
 	out    string // the agent's answer, Markdown
 	note   string // a note from the bridge instead of an answer
-	settle bool   // the agent offered to settle
 }
 
 type index struct {
@@ -452,9 +451,8 @@ func (c *Chat) deliver(ctx context.Context, out string, j job, started time.Time
 		c.o.Logger.Debug("dropped the answer of a turn that filed a request")
 		return
 	}
-	out, done := splitSettle(out)
 	c.appendHistory(j.thread, "agent", out)
-	c.hold(j, held{out: out, settle: done})
+	c.hold(j, held{out: out})
 }
 
 // hold keeps what a job produced until the burst it belongs to is done.
@@ -474,7 +472,6 @@ func (c *Chat) flush(ctx context.Context) {
 	items := slices.DeleteFunc(c.held, func(h held) bool { return h.thread != c.index.Active })
 	c.held = nil
 	c.mu.Unlock()
-	var settle string
 	for _, h := range items {
 		replyTo := h.fixed
 		if replyTo == 0 && len(items) > 1 {
@@ -486,38 +483,11 @@ func (c *Chat) flush(ctx context.Context) {
 		}
 		body := Markdown(h.out)
 		switch {
-		case strings.TrimSpace(body.S) == "" && h.settle:
-			// Only the offer: nothing to show but the question.
 		case h.fixed != 0 && c.o.Follow != nil && strings.TrimSpace(body.S) != "" && c.o.Follow(ctx, h.fixed, body):
 		default:
 			c.answer(ctx, h.out, replyTo)
 		}
-		if h.settle {
-			settle = h.thread
-		}
 	}
-	if settle != "" {
-		c.offerSettle(ctx, settle)
-	}
-}
-
-// settleMarker is the whole last line of an answer in which the agent says
-// the issue is solved and nothing is left to do. The bridge removes it and
-// asks the owner, with a button, whether to settle the thread.
-const settleMarker = "READY_TO_SETTLE"
-
-// splitSettle removes the settle marker from the end of an answer and
-// reports whether it was there.
-func splitSettle(out string) (string, bool) {
-	t := strings.TrimRight(out, " \t\r\n")
-	i := strings.LastIndex(t, "\n")
-	if !strings.EqualFold(strings.Trim(t[i+1:], "`*. "), settleMarker) {
-		return out, false
-	}
-	if i < 0 {
-		return "", true
-	}
-	return strings.TrimRight(t[:i], " \t\r\n"), true
 }
 
 // Busy reports whether an agent turn is running.
@@ -617,8 +587,7 @@ func (lv *live) loop() {
 // preview is the draft for p: the answer so far.
 func (c *Chat) preview(p Progress) tgapi.Text {
 	var b tgapi.Builder
-	text, _ := splitSettle(p.Text)
-	body := Markdown(text)
+	body := Markdown(p.Text)
 	if body.Len() > tgapi.MaxText-b.Len()-8 {
 		body = tgapi.SplitText(body, tgapi.MaxText-b.Len()-8)[0]
 	}

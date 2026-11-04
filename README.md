@@ -215,11 +215,6 @@ open and settled, each with its own Docker Agent database in the agent's home
 Past 10, Latch deletes the one you used least recently, with its database and
 transcript.
 
-When the agent is done, it can ask you to settle. If the last line of its
-answer is `READY_TO_SETTLE`, Latch drops that line and sends its own message,
-"Settle this thread?", with a Settle button. Tell the agent this in its
-instructions. It never settles anything itself.
-
 Answers stream with a Stop button. When the agent requests a change, the
 approval message replaces its answer. Latch writes that request from the
 action itself. After your decision, the agent can check the result.

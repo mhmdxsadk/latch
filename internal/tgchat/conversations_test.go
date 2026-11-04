@@ -603,16 +603,6 @@ func TestPhotoStartsAThreadTitledPhoto(t *testing.T) {
 	tgtest.WaitFor(t, "the photo turn to end", func() bool { return !h.chat.busy() })
 }
 
-func (h *convHarness) pressData(data string, message int64) string {
-	h.t.Helper()
-	cb := tgapi.CallbackQuery{ID: "cb-" + data, Data: data, Message: &tgapi.Message{MessageID: message}}
-	if !h.chat.HandlePress(context.Background(), cb) {
-		h.t.Fatal("not handled")
-	}
-	got, _ := h.tg.Answer(cb.ID)
-	return got
-}
-
 func TestSettleClearsTheScreenAndKeepsTheThread(t *testing.T) {
 	h := newConvHarness(t)
 	id1 := h.ask("is caddy up?")
@@ -680,67 +670,5 @@ func TestQuietThreadsCountAsSettled(t *testing.T) {
 	list = h.picker()
 	if !strings.HasSuffix(list.Keyboard[0][0].Text, " - settled") || !strings.HasSuffix(list.Keyboard[1][0].Text, " - settled") {
 		t.Errorf("list %+v", list.Keyboard)
-	}
-}
-
-func TestAgentOffersToSettle(t *testing.T) {
-	h := newConvHarness(t)
-	h.run.reply = func(string) (string, error) {
-		return "Caddy is back up. Nothing else is wrong.\n\nREADY_TO_SETTLE\n", nil
-	}
-	h.say("fix caddy")
-	answer := h.waitText("Caddy is back up.")
-	if strings.Contains(answer.Text, "READY_TO_SETTLE") || len(answer.Keyboard) != 0 {
-		t.Fatalf("the agent's words show the marker or carry buttons: %+v", answer)
-	}
-	offer := h.waitText("Settle this thread?")
-	if len(offer.Keyboard) != 1 || offer.Keyboard[0][0].Text != "Settle" {
-		t.Fatalf("offer %+v", offer)
-	}
-	if hist := h.chat.loadHistory(h.threads()[0].ID); len(hist) != 2 || strings.Contains(hist[1].Text, "READY_TO_SETTLE") {
-		t.Errorf("history %+v", hist)
-	}
-	h.waitAllNoted()
-	h.pressData(offer.Keyboard[0][0].Data, offer.ID)
-	h.waitText("Settled: fix caddy")
-	tgtest.WaitFor(t, "the screen to hold only the note", func() bool { return len(h.visibleTexts()) == 1 })
-	if s := h.threads()[0]; s.Settled.IsZero() {
-		t.Errorf("not settled: %+v", s)
-	}
-	// The old button does nothing any more.
-	if got := h.pressData(offer.Keyboard[0][0].Data, offer.ID); got != "That thread is no longer open." {
-		t.Errorf("stale button answered %q", got)
-	}
-}
-
-func TestAgentOfferWithoutWords(t *testing.T) {
-	h := newConvHarness(t)
-	h.run.reply = func(string) (string, error) { return "READY_TO_SETTLE", nil }
-	h.say("anything else?")
-	h.waitText("Settle this thread?")
-	for _, m := range h.tg.Sent() {
-		if strings.Contains(m.Text, "no answer") || strings.Contains(m.Text, "READY_TO_SETTLE") {
-			t.Errorf("unexpected message %q", m.Text)
-		}
-	}
-}
-
-func TestSplitSettle(t *testing.T) {
-	for _, tc := range []struct {
-		in, out string
-		done    bool
-	}{
-		{"Fixed.\n\nREADY_TO_SETTLE", "Fixed.", true},
-		{"Fixed.\nready_to_settle.\n\n", "Fixed.", true},
-		{"Fixed.\n**`READY_TO_SETTLE`**", "Fixed.", true},
-		{"READY_TO_SETTLE", "", true},
-		{"READY_TO_SETTLE\nFixed.", "READY_TO_SETTLE\nFixed.", false},
-		{"I could say READY_TO_SETTLE here", "I could say READY_TO_SETTLE here", false},
-		{"Fixed.", "Fixed.", false},
-		{"", "", false},
-	} {
-		if out, done := splitSettle(tc.in); out != tc.out || done != tc.done {
-			t.Errorf("splitSettle(%q) = %q, %v", tc.in, out, done)
-		}
 	}
 }
