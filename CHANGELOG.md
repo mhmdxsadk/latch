@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.29.0](https://github.com/mhmdxsadk/latch/compare/v0.28.0...v0.29.0) (2026-11-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **telegram:** remove the agent's settle offer
+
+### Features
+
+* **telegram:** remove the agent's settle offer ([280a1a3](https://github.com/mhmdxsadk/latch/commit/280a1a3f5784f56b2c4869374fe6389b84e422f3))
+
 ## [0.28.0](https://github.com/mhmdxsadk/latch/compare/v0.27.0...v0.28.0) (2026-11-03)
 
 
