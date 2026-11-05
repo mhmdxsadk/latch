@@ -431,6 +431,23 @@ func (c *Chat) screenLocked() []int64 {
 	return ids
 }
 
+// clear deletes everything on the screen and stays in the active thread: no
+// turn is stopped and the next message goes on in the same thread.
+func (c *Chat) clear(ctx context.Context, cmdMessage int64) {
+	c.mu.Lock()
+	screen := append(c.screenLocked(), cmdMessage)
+	if err := c.saveLocked(); err != nil {
+		c.o.Logger.Warn("saving the chat state failed", "err", err)
+	}
+	c.mu.Unlock()
+
+	text := "Cleared."
+	if c.clearScreen(ctx, screen) > 0 {
+		text += " Telegram only deletes messages from the last 48 hours, so some older ones stay."
+	}
+	c.say(ctx, text)
+}
+
 // leave clears the screen, which is everything the owner and the bot said in
 // the active thread, and leaves the thread: the next message
 // starts a new one. The thread stays and can be opened again with

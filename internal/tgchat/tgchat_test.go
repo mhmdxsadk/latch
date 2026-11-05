@@ -451,6 +451,7 @@ func TestStartAndHelp(t *testing.T) {
 	want := "/new - Clears the chat and starts a new thread\n\n" +
 		"/threads - Shows earlier threads to go back to\n\n" +
 		"/settle - Closes this thread and clears the chat\n\n" +
+		"/clear - Clears the chat and keeps this thread\n\n" +
 		"/stop - Stops the running answer and drops waiting messages\n\n" +
 		"/help - Shows this message"
 	if len(m.Entities) != 0 || m.Text != want {

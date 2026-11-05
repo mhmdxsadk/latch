@@ -66,6 +66,7 @@ var Commands = []tgapi.Command{
 	{Command: "new", Description: "Clears the chat and starts a new thread"},
 	{Command: "threads", Description: "Shows earlier threads to go back to"},
 	{Command: "settle", Description: "Closes this thread and clears the chat"},
+	{Command: "clear", Description: "Clears the chat and keeps this thread"},
 	{Command: "stop", Description: "Stops the running answer and drops waiting messages"},
 	{Command: "help", Description: "Shows this message"},
 }
@@ -319,8 +320,8 @@ func (c *Chat) discard(paths []string) {
 }
 
 func (c *Chat) handleCommand(ctx context.Context, cmd string, messageID int64) {
-	if cmd != "new" && cmd != "settle" {
-		c.track(messageID) // /new and /settle delete their own message with the rest
+	if cmd != "new" && cmd != "settle" && cmd != "clear" {
+		c.track(messageID) // /new, /settle and /clear delete their own message with the rest
 	}
 	switch cmd {
 	case "start":
@@ -331,6 +332,8 @@ func (c *Chat) handleCommand(ctx context.Context, cmd string, messageID int64) {
 		c.leave(ctx, messageID, false)
 	case "settle":
 		c.leave(ctx, messageID, true)
+	case "clear":
+		c.clear(ctx, messageID)
 	case "threads":
 		c.threadList(ctx)
 	case "stop":

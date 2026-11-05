@@ -195,6 +195,35 @@ func TestNewClearsTheScreenAndKeepsTheThread(t *testing.T) {
 	}
 }
 
+func TestClearClearsTheScreenAndStaysInTheThread(t *testing.T) {
+	h := newConvHarness(t)
+	id1 := h.ask("is caddy up?")
+	first := h.threads()[0]
+	h.waitAllNoted()
+	cmd := h.say("/clear")
+	note := h.waitText("Cleared.")
+	for _, id := range []int64{id1, cmd} {
+		if !h.tg.Deleted(id) {
+			t.Errorf("message %d is still on screen", id)
+		}
+	}
+	if got := h.visibleTexts(); len(got) != 1 || got[0] != note.Text {
+		t.Fatalf("screen after /clear: %q", got)
+	}
+	if len(note.Entities) != 1 || note.Entities[0].Type != "italic" {
+		t.Errorf("the note is not italic: %+v", note.Entities)
+	}
+	if h.chat.index.Active != first.ID || len(h.files.removed) != 0 {
+		t.Errorf("active %q, deleted %v", h.chat.index.Active, h.files.removed)
+	}
+	// The next message goes on in the same thread and database.
+	h.ask("and jellyfin?")
+	calls := h.run.Calls()
+	if got := h.threads(); len(got) != 1 || calls[1].thread != first.ID || calls[1].db != calls[0].db {
+		t.Errorf("threads %+v, turns %+v", got, calls)
+	}
+}
+
 func TestThreadsListsAndResumesWithTheHistory(t *testing.T) {
 	h := newConvHarness(t)
 	h.ask("is caddy up?")
