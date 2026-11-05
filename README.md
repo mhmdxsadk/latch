@@ -225,6 +225,8 @@ action itself. After your decision, the agent can check the result.
 - `/threads` lists open and settled threads. Tapping one clears the
   chat, shows its messages again and continues it.
 - `/settle` closes the current thread and clears the chat.
+- `/clear` clears the chat and stays in the current thread. A running turn
+  continues, and the thread's messages stay available through `/threads`.
 - `/stop` stops the current turn.
 - `/login` signs the model provider in. It exists when `agent.login` is set.
 - `/help` lists commands.
