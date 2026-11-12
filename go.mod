@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
