@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.0](https://github.com/mhmdxsadk/latch/compare/v0.30.0...v0.31.0) (2026-11-05)
+
+
+### Features
+
+* **telegram:** add /clear to clear the chat and keep the thread ([819432c](https://github.com/mhmdxsadk/latch/commit/819432c1b376043f0132cec11850b1c638679d42))
+
 ## [0.30.0](https://github.com/mhmdxsadk/latch/compare/v0.29.0...v0.30.0) (2026-11-04)
 
 
